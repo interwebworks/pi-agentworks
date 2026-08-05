@@ -82,7 +82,9 @@ SQLite is the machine source of truth.
 The controller is the only database writer and runs with WAL, foreign keys, schema migrations, integrity checks, and corruption quarantine.
 A single controller lease and fencing token prevent stale controllers from mutating state or external resources.
 Clients send commands with an expected run revision and idempotency key.
-Successful state changes increment the revision and append an event in the same transaction.
+Successful state changes replace one complete run aggregate, increment its revision, append one or more ordered events, and record the idempotency result in the same immediate transaction.
+Event consumers resume with a revision and within-revision event index so bounded pages cannot skip events.
+Persisted JSON is checked against strict versioned state schemas before it can re-enter controller policy.
 The management pane and Pi overlay subscribe to snapshots and events.
 Terminal output is never parsed to infer task completion.
 

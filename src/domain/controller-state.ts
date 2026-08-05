@@ -1,3 +1,5 @@
+import { Type } from "typebox";
+import { Check } from "typebox/value";
 import { getComplexityPolicy, type ComplexityMode } from "./complexity.ts";
 
 export const CONTROLLER_STATE_SCHEMA_VERSION = 1 as const;
@@ -97,6 +99,141 @@ export interface AgentState {
   readonly lastMeaningfulActivityAt: number;
   readonly createdAt: number;
   readonly updatedAt: number;
+}
+
+const NonEmptyStateString = Type.String({ minLength: 1 });
+const NullableStateString = Type.Union([Type.Null(), NonEmptyStateString]);
+const StateTimestamp = Type.Integer({ minimum: 0 });
+const RunStatusSchema = Type.Union([
+  Type.Literal("planning"),
+  Type.Literal("awaiting-approval"),
+  Type.Literal("ready"),
+  Type.Literal("active"),
+  Type.Literal("blocked"),
+  Type.Literal("completed"),
+  Type.Literal("failed"),
+  Type.Literal("cancelled"),
+]);
+const StoryStatusSchema = Type.Union([
+  Type.Literal("planned"),
+  Type.Literal("awaiting-approval"),
+  Type.Literal("ready"),
+  Type.Literal("assigned"),
+  Type.Literal("working"),
+  Type.Literal("awaiting-candidate"),
+  Type.Literal("awaiting-review"),
+  Type.Literal("changes-requested"),
+  Type.Literal("approved"),
+  Type.Literal("merging"),
+  Type.Literal("merged"),
+  Type.Literal("blocked"),
+  Type.Literal("failed"),
+]);
+const ResumableStoryStatusSchema = Type.Union([
+  Type.Literal("planned"),
+  Type.Literal("awaiting-approval"),
+  Type.Literal("ready"),
+  Type.Literal("assigned"),
+  Type.Literal("working"),
+  Type.Literal("awaiting-candidate"),
+  Type.Literal("awaiting-review"),
+  Type.Literal("changes-requested"),
+  Type.Literal("approved"),
+  Type.Literal("merging"),
+]);
+const AgentStatusSchema = Type.Union([
+  Type.Literal("planned"),
+  Type.Literal("launching"),
+  Type.Literal("idle"),
+  Type.Literal("working"),
+  Type.Literal("waiting"),
+  Type.Literal("blocked"),
+  Type.Literal("reviewing"),
+  Type.Literal("completed"),
+  Type.Literal("failed"),
+  Type.Literal("disconnected"),
+  Type.Literal("closed"),
+]);
+
+export const RunStateSchema = Type.Object(
+  {
+    schemaVersion: Type.Literal(CONTROLLER_STATE_SCHEMA_VERSION),
+    id: NonEmptyStateString,
+    title: NonEmptyStateString,
+    complexity: Type.Union([
+      Type.Literal("LOW"),
+      Type.Literal("NORMAL"),
+      Type.Literal("HIGH"),
+    ]),
+    status: RunStatusSchema,
+    repositoryRoot: NonEmptyStateString,
+    originalCheckout: NonEmptyStateString,
+    baseBranch: NonEmptyStateString,
+    integrationBranch: NonEmptyStateString,
+    integrationWorktree: NonEmptyStateString,
+    blockedReason: NullableStateString,
+    createdAt: StateTimestamp,
+    updatedAt: StateTimestamp,
+  },
+  { additionalProperties: false },
+);
+
+export const StoryStateSchema = Type.Object(
+  {
+    schemaVersion: Type.Literal(CONTROLLER_STATE_SCHEMA_VERSION),
+    id: NonEmptyStateString,
+    runId: NonEmptyStateString,
+    title: NonEmptyStateString,
+    status: StoryStatusSchema,
+    branchName: NonEmptyStateString,
+    worktreePath: NonEmptyStateString,
+    assignedAgentId: NullableStateString,
+    candidateStoryHead: NullableStateString,
+    reviewedIntegrationHead: NullableStateString,
+    reviewerAgentId: NullableStateString,
+    mergeHead: NullableStateString,
+    blockedReason: NullableStateString,
+    blockedFrom: Type.Union([Type.Null(), ResumableStoryStatusSchema]),
+    createdAt: StateTimestamp,
+    updatedAt: StateTimestamp,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentStateSchema = Type.Object(
+  {
+    schemaVersion: Type.Literal(CONTROLLER_STATE_SCHEMA_VERSION),
+    id: NonEmptyStateString,
+    runId: NonEmptyStateString,
+    roleRuntimeId: NonEmptyStateString,
+    status: AgentStatusSchema,
+    taskId: NullableStateString,
+    worktreePath: NonEmptyStateString,
+    paneId: NullableStateString,
+    piSessionPath: NullableStateString,
+    currentOperation: NullableStateString,
+    waitingReason: NullableStateString,
+    blockedReason: NullableStateString,
+    nudgeCount: Type.Integer({ minimum: 0 }),
+    lastNudgeAt: Type.Union([Type.Null(), StateTimestamp]),
+    lastHeartbeatAt: StateTimestamp,
+    lastMeaningfulActivityAt: StateTimestamp,
+    createdAt: StateTimestamp,
+    updatedAt: StateTimestamp,
+  },
+  { additionalProperties: false },
+);
+
+export function isRunState(value: unknown): value is RunState {
+  return Check(RunStateSchema, value);
+}
+
+export function isStoryState(value: unknown): value is StoryState {
+  return Check(StoryStateSchema, value);
+}
+
+export function isAgentState(value: unknown): value is AgentState {
+  return Check(AgentStateSchema, value);
 }
 
 export type RunTransition =
