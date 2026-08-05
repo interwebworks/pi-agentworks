@@ -316,13 +316,19 @@ export class SqliteControllerRepository implements ControllerRepository {
     chmodSync(directory, 0o700);
 
     this.#database = new DatabaseSync(this.#databasePath);
-    this.#database.exec("PRAGMA busy_timeout = 5000");
-    this.#database.exec("PRAGMA foreign_keys = ON");
-    this.#database.prepare("PRAGMA journal_mode = WAL").get();
-    this.#database.exec("PRAGMA synchronous = FULL");
-    this.#migrate();
-    this.#protectDatabaseFiles();
-    this.assertIntegrity();
+    try {
+      this.#database.exec("PRAGMA busy_timeout = 5000");
+      this.#database.exec("PRAGMA foreign_keys = ON");
+      this.#database.prepare("PRAGMA journal_mode = WAL").get();
+      this.#database.exec("PRAGMA synchronous = FULL");
+      this.#migrate();
+      this.#protectDatabaseFiles();
+      this.assertIntegrity();
+    } catch (error) {
+      this.#database.close();
+      this.#closed = true;
+      throw error;
+    }
   }
 
   acquireLease(ownerId: string, now: number, ttlMs: number): ControllerLease {

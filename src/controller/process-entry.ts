@@ -221,6 +221,7 @@ export async function runControllerProcess(
             revision:
               runtime.repository.loadSnapshot(configuration.runId)?.revision ??
               null,
+            recovery: runtime.descriptor?.recovery ?? null,
           });
         }
         case "snapshot.get": {

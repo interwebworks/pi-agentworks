@@ -84,6 +84,7 @@ test("runtime startup publishes private discovery metadata and serves clients", 
   const controller = runtime(root);
   try {
     const descriptor = await controller.start();
+    assert.doesNotThrow(() => controller.assertReadyForWork());
     const paths = controller.paths;
     assert.equal(descriptor.runId, "run-1");
     assert.equal(descriptor.ownerId, "controller-a");

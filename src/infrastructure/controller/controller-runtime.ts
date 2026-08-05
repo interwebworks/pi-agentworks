@@ -19,10 +19,19 @@ import { dirname, join, resolve } from "node:path";
 import { createConnection } from "node:net";
 import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
+import {
+  assessStartupRecovery,
+  type StartupRecoveryAssessment,
+} from "../../domain/recovery.ts";
 import type {
   ControllerLease,
   ControllerRepository,
 } from "../../application/ports/controller-repository.ts";
+import {
+  assertControllerDatabaseNotQuarantined,
+  isControllerDatabaseCorruption,
+  quarantineControllerDatabase,
+} from "./controller-database-quarantine.ts";
 import { SqliteControllerRepository } from "./sqlite-controller-repository.ts";
 import {
   UnixControllerServer,
@@ -48,6 +57,30 @@ export const ControllerRuntimeDescriptorSchema = Type.Object(
     startedAt: Type.Integer({ minimum: 0 }),
     leaseExpiresAt: Type.Integer({ minimum: 0 }),
     fencingToken: Type.Integer({ minimum: 1 }),
+    recovery: Type.Object(
+      {
+        status: Type.Union([
+          Type.Literal("ready"),
+          Type.Literal("reconciliation-required"),
+        ]),
+        reasons: Type.Array(
+          Type.Object(
+            {
+              code: Type.Union([
+                Type.Literal("agent-operation-interrupted"),
+                Type.Literal("candidate-commit-interrupted"),
+                Type.Literal("merge-interrupted"),
+                Type.Literal("terminal-run-has-active-agent"),
+              ]),
+              entityId: Type.String({ minLength: 1, maxLength: 128 }),
+            },
+            { additionalProperties: false },
+          ),
+          { maxItems: 1_000 },
+        ),
+      },
+      { additionalProperties: false },
+    ),
     runtimeDirectory: Type.String({ minLength: 1 }),
     databasePath: Type.String({ minLength: 1 }),
     socketPath: Type.String({ minLength: 1 }),
@@ -65,6 +98,7 @@ export interface ControllerRuntimeDescriptor {
   readonly startedAt: number;
   readonly leaseExpiresAt: number;
   readonly fencingToken: number;
+  readonly recovery: StartupRecoveryAssessment;
   readonly runtimeDirectory: string;
   readonly databasePath: string;
   readonly socketPath: string;
@@ -77,6 +111,7 @@ export interface ControllerRuntimePaths {
   readonly socketPath: string;
   readonly tokenPath: string;
   readonly descriptorPath: string;
+  readonly quarantineMarkerPath: string;
 }
 
 export interface DiscoveredControllerRuntime {
@@ -107,6 +142,18 @@ export class ControllerRuntimeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ControllerRuntimeError";
+  }
+}
+
+export class ControllerRecoveryRequiredError extends ControllerRuntimeError {
+  readonly assessment: StartupRecoveryAssessment;
+
+  constructor(assessment: StartupRecoveryAssessment) {
+    super(
+      "Controller recovery reconciliation is required before accepting work",
+    );
+    this.name = "ControllerRecoveryRequiredError";
+    this.assessment = assessment;
   }
 }
 
@@ -167,6 +214,7 @@ export function resolveControllerRuntimePaths(
     socketPath: join(runtimeDirectory, "controller.sock"),
     tokenPath: join(runtimeDirectory, "auth-token"),
     descriptorPath: join(runtimeDirectory, "controller.json"),
+    quarantineMarkerPath: join(runtimeDirectory, "quarantine.json"),
   });
 }
 
@@ -394,6 +442,7 @@ export function discoverControllerRuntime(
   runId: string,
 ): DiscoveredControllerRuntime | null {
   const paths = resolveControllerRuntimePaths(runtimeRoot, runId);
+  assertControllerDatabaseNotQuarantined(paths.quarantineMarkerPath);
   let descriptorFile: PrivateFileRead;
   try {
     descriptorFile = readPrivateRegularFile(
@@ -431,6 +480,7 @@ export class ControllerRuntime {
   readonly #processId: number;
   readonly #processStartIdentity: string | null;
   readonly #repositoryFactory: (databasePath: string) => ControllerRepository;
+  readonly #usesDefaultRepositoryFactory: boolean;
   readonly #serverFactory: (
     options: UnixControllerServerOptions,
   ) => UnixControllerServer;
@@ -442,6 +492,10 @@ export class ControllerRuntime {
   #lease: ControllerLease | null = null;
   #authToken: string | null = null;
   #startedAt: number | null = null;
+  #recoveryAssessment: StartupRecoveryAssessment = Object.freeze({
+    status: "ready",
+    reasons: Object.freeze([]),
+  });
   #renewalTimer: NodeJS.Timeout | null = null;
   #state: "new" | "starting" | "running" | "stopping" | "stopped" = "new";
 
@@ -473,6 +527,8 @@ export class ControllerRuntime {
     );
     this.#processStartIdentity =
       options.processStartIdentity ?? readProcessStartIdentity(this.#processId);
+    this.#usesDefaultRepositoryFactory =
+      options.repositoryFactory === undefined;
     this.#repositoryFactory =
       options.repositoryFactory ??
       ((databasePath) => new SqliteControllerRepository(databasePath));
@@ -513,6 +569,15 @@ export class ControllerRuntime {
     return this.#authToken;
   }
 
+  assertReadyForWork(): void {
+    if (this.#state !== "running") {
+      throw new ControllerRuntimeError("Controller runtime is not running");
+    }
+    if (this.#recoveryAssessment.status === "reconciliation-required") {
+      throw new ControllerRecoveryRequiredError(this.#recoveryAssessment);
+    }
+  }
+
   async start(): Promise<ControllerRuntimeDescriptor> {
     if (this.#state !== "new") {
       throw new ControllerRuntimeError(
@@ -521,12 +586,68 @@ export class ControllerRuntime {
     }
     this.#state = "starting";
     ensurePrivateDirectory(this.#paths.runtimeDirectory);
-    const repository = this.#repositoryFactory(this.#paths.databasePath);
+    assertControllerDatabaseNotQuarantined(this.#paths.quarantineMarkerPath);
+    const startupTime = safeTimestamp(this.#clock(), "controller start time");
+    let repository: ControllerRepository;
+    try {
+      repository = this.#repositoryFactory(this.#paths.databasePath);
+    } catch (error) {
+      if (
+        this.#usesDefaultRepositoryFactory &&
+        isControllerDatabaseCorruption(error)
+      ) {
+        quarantineControllerDatabase({
+          databasePath: this.#paths.databasePath,
+          markerPath: this.#paths.quarantineMarkerPath,
+          occurredAt: startupTime,
+          reason: "sqlite-corruption",
+        });
+      }
+      this.#state = "stopped";
+      throw error;
+    }
     this.#repository = repository;
 
     try {
-      repository.assertIntegrity();
-      const startedAt = safeTimestamp(this.#clock(), "controller start time");
+      try {
+        repository.assertIntegrity();
+      } catch (error) {
+        if (
+          this.#usesDefaultRepositoryFactory &&
+          isControllerDatabaseCorruption(error)
+        ) {
+          repository.close();
+          this.#repository = null;
+          quarantineControllerDatabase({
+            databasePath: this.#paths.databasePath,
+            markerPath: this.#paths.quarantineMarkerPath,
+            occurredAt: startupTime,
+            reason: "sqlite-corruption",
+          });
+        }
+        throw error;
+      }
+      try {
+        this.#recoveryAssessment = assessStartupRecovery(
+          repository.loadSnapshot(this.#runId),
+        );
+      } catch (error) {
+        if (
+          this.#usesDefaultRepositoryFactory &&
+          isControllerDatabaseCorruption(error)
+        ) {
+          repository.close();
+          this.#repository = null;
+          quarantineControllerDatabase({
+            databasePath: this.#paths.databasePath,
+            markerPath: this.#paths.quarantineMarkerPath,
+            occurredAt: startupTime,
+            reason: "persisted-state-invalid",
+          });
+        }
+        throw error;
+      }
+      const startedAt = startupTime;
       this.#startedAt = startedAt;
       const lease = repository.acquireLease(
         this.#ownerId,
@@ -696,6 +817,7 @@ export class ControllerRuntime {
       startedAt: this.#startedAt,
       leaseExpiresAt: lease.expiresAt,
       fencingToken: lease.fencingToken,
+      recovery: this.#recoveryAssessment,
       runtimeDirectory: this.#paths.runtimeDirectory,
       databasePath: this.#paths.databasePath,
       socketPath: this.#paths.socketPath,

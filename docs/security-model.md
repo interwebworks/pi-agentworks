@@ -80,8 +80,11 @@ SQLite runs in WAL mode with foreign keys enabled and an explicit schema version
 Every state transition and append-only event is committed in one transaction with an expected revision and idempotency key.
 Duplicate launch, commit, review, merge, cleanup, and notification requests return the original result instead of repeating side effects.
 
-Startup validates database integrity, recovers incomplete operations from recorded phases, and reconciles external Herdr and Git reality before scheduling work.
-Corrupt state is quarantined and never treated as permission to clean worktrees or rerun merges.
+Startup validates both SQLite integrity and the semantic shape of persisted state before binding the socket.
+Physical corruption or invalid persisted state writes a durable quarantine marker before moving the database and sidecars, preventing accidental empty-state recreation on retry.
+Interrupted agent operations, candidate creation, and merge phases publish a reconciliation-required descriptor and synchronously reject new work.
+After the Git and Herdr gateways are available, recovery clears that gate only by reconciling recorded phases against external Herdr and Git reality.
+Corrupt or unreconciled state is never treated as permission to clean worktrees or rerun merges.
 
 ## Herdr boundary
 
