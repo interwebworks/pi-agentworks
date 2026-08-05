@@ -60,6 +60,37 @@ export interface CandidateCommitResult {
   readonly changedPaths: readonly string[];
 }
 
+export interface MergeCandidateRequest {
+  readonly runId: string;
+  readonly storyId: string;
+  readonly operationId: string;
+  readonly originalCheckout: string;
+  readonly integrationBranch: string;
+  readonly integrationWorktreePath: string;
+  readonly reviewedIntegrationHead: string;
+  readonly storyBranch: string;
+  readonly storyWorktreePath: string;
+  readonly candidateCommit: string;
+  readonly writerAgentId: string;
+  readonly reviewerAgentId: string;
+  readonly requesterRole: string;
+  readonly requiredChecksPassed: boolean;
+  readonly writerLeaseReleased: boolean;
+  readonly controllerLeaseCurrent: boolean;
+  readonly expectedRevisionMatches: boolean;
+  readonly targetIsDefaultOrProtected: boolean;
+  readonly protectedTargetUserApproval: boolean;
+  readonly subject: string;
+}
+
+export interface MergeCandidateResult {
+  readonly status: "created" | "existing";
+  readonly mergeCommit: string;
+  readonly integrationParent: string;
+  readonly candidateParent: string;
+  readonly tree: string;
+}
+
 export interface GitWorkspaceGateway {
   listWorktrees(originalCheckout: string): readonly GitWorktreeRecord[];
   createIntegrationWorkspace(
@@ -71,4 +102,5 @@ export interface GitWorkspaceGateway {
   createCandidateCommit(
     request: CreateCandidateCommitRequest,
   ): CandidateCommitResult;
+  mergeCandidate(request: MergeCandidateRequest): MergeCandidateResult;
 }

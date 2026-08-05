@@ -125,6 +125,49 @@ function createStoryFixture(root: string) {
   };
 }
 
+function mergeRequest(
+  fixture: ReturnType<typeof createStoryFixture>,
+  candidateCommit: string,
+) {
+  return {
+    runId: "run-1",
+    storyId: "story-1",
+    operationId: "merge-story-1",
+    originalCheckout: fixture.repository,
+    integrationBranch: integrationBranchForRun("run-1"),
+    integrationWorktreePath: fixture.integrationPath,
+    reviewedIntegrationHead: fixture.integrationHead,
+    storyBranch: storyBranchForRun("run-1", "story-1"),
+    storyWorktreePath: fixture.storyPath,
+    candidateCommit,
+    writerAgentId: "writer-1",
+    reviewerAgentId: "reviewer-1",
+    requesterRole: "project-manager",
+    requiredChecksPassed: true,
+    writerLeaseReleased: true,
+    controllerLeaseCurrent: true,
+    expectedRevisionMatches: true,
+    targetIsDefaultOrProtected: false,
+    protectedTargetUserApproval: false,
+    subject: "Merge candidate for story-1",
+  };
+}
+
+function createCandidateFixture(root: string) {
+  const fixture = createStoryFixture(root);
+  writeFileSync(join(fixture.storyPath, "candidate.txt"), "candidate\n");
+  const candidate = fixture.gateway.createCandidateCommit(
+    candidateRequest(
+      fixture.repository,
+      "story-1",
+      fixture.storyPath,
+      fixture.integrationHead,
+      fixture.storyHead,
+    ),
+  );
+  return { ...fixture, candidateCommit: candidate.commit };
+}
+
 test("creates and idempotently reuses a dedicated integration worktree", () => {
   const root = mkdtempSync(join(tmpdir(), "agentworks-workspace-"));
   try {
@@ -690,5 +733,155 @@ test("candidate recovery rejects a branch advanced by another commit", () => {
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("merges an exact reviewed candidate and recovers the committed result", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-merge-"));
+  try {
+    const fixture = createCandidateFixture(root);
+    writeFileSync(join(fixture.repository, "original-only.txt"), "preserve\n");
+    const originalStatus = git(fixture.repository, "status", "--porcelain=v1");
+    const hookMarker = join(root, "merge-hook-executed");
+    const signerMarker = join(root, "merge-signer-executed");
+    const postMerge = join(fixture.repository, ".git", "hooks", "post-merge");
+    const signer = join(root, "merge-signer");
+    writeFileSync(postMerge, `#!/bin/sh\ntouch '${hookMarker}'\n`);
+    writeFileSync(signer, `#!/bin/sh\ntouch '${signerMarker}'\nexit 1\n`);
+    chmodSync(postMerge, 0o755);
+    chmodSync(signer, 0o755);
+    git(fixture.repository, "config", "commit.gpgSign", "true");
+    git(fixture.repository, "config", "gpg.program", signer);
+    git(
+      fixture.repository,
+      "config",
+      `branch.${integrationBranchForRun("run-1")}.mergeOptions`,
+      "--strategy=definitely-not-a-strategy",
+    );
+    const request_ = mergeRequest(fixture, fixture.candidateCommit);
+
+    const merged = fixture.gateway.mergeCandidate(request_);
+    assert.equal(merged.status, "created");
+    assert.equal(merged.integrationParent, fixture.integrationHead);
+    assert.equal(merged.candidateParent, fixture.candidateCommit);
+    assert.equal(
+      existsSync(join(fixture.integrationPath, "candidate.txt")),
+      true,
+    );
+    assert.equal(git(fixture.integrationPath, "status", "--porcelain=v1"), "");
+    assert.equal(
+      git(fixture.integrationPath, "show", "-s", "--format=%P", "HEAD"),
+      `${fixture.integrationHead} ${fixture.candidateCommit}`,
+    );
+    assert.match(
+      git(fixture.integrationPath, "show", "-s", "--format=%B", "HEAD"),
+      /Agentworks-Reviewer: reviewer-1/u,
+    );
+    assert.equal(existsSync(hookMarker), false);
+    assert.equal(existsSync(signerMarker), false);
+
+    const recovered = fixture.gateway.mergeCandidate(request_);
+    assert.equal(recovered.status, "existing");
+    assert.equal(recovered.mergeCommit, merged.mergeCommit);
+    assert.equal(
+      git(fixture.repository, "status", "--porcelain=v1"),
+      originalStatus,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovers an exact merge interrupted before commit creation", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-merge-"));
+  try {
+    const fixture = createCandidateFixture(root);
+    git(
+      fixture.integrationPath,
+      "merge",
+      "--no-ff",
+      "--no-commit",
+      fixture.candidateCommit,
+    );
+    assert.equal(
+      git(fixture.integrationPath, "rev-parse", "MERGE_HEAD"),
+      fixture.candidateCommit,
+    );
+
+    const merged = fixture.gateway.mergeCandidate(
+      mergeRequest(fixture, fixture.candidateCommit),
+    );
+    assert.equal(merged.status, "created");
+    assert.equal(git(fixture.integrationPath, "status", "--porcelain=v1"), "");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("merge policy rejects stale, unreviewed, self-reviewed, and protected requests", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-merge-"));
+  try {
+    const fixture = createCandidateFixture(root);
+    const approved = mergeRequest(fixture, fixture.candidateCommit);
+    const denied = [
+      { ...approved, requesterRole: "backend-developer" },
+      { ...approved, requiredChecksPassed: false },
+      { ...approved, reviewerAgentId: "writer-1" },
+      { ...approved, controllerLeaseCurrent: false },
+      { ...approved, expectedRevisionMatches: false },
+      { ...approved, writerLeaseReleased: false },
+      {
+        ...approved,
+        targetIsDefaultOrProtected: true,
+        protectedTargetUserApproval: false,
+      },
+    ];
+    for (const request_ of denied) {
+      assert.throws(() => fixture.gateway.mergeCandidate(request_));
+    }
+    assert.equal(
+      git(fixture.integrationPath, "rev-parse", "HEAD"),
+      fixture.integrationHead,
+    );
+    const protectedMerge = fixture.gateway.mergeCandidate({
+      ...approved,
+      targetIsDefaultOrProtected: true,
+      protectedTargetUserApproval: true,
+    });
+    assert.equal(protectedMerge.status, "created");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("merge fails when integration or candidate identity changes after review", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-merge-"));
+  try {
+    const fixture = createCandidateFixture(root);
+    const reviewed = mergeRequest(fixture, fixture.candidateCommit);
+    writeFileSync(join(fixture.integrationPath, "advance.txt"), "advance\n");
+    git(fixture.integrationPath, "add", "advance.txt");
+    git(fixture.integrationPath, "commit", "-m", "Advance integration");
+    assert.throws(
+      () => fixture.gateway.mergeCandidate(reviewed),
+      /not owned by this operation/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  const secondRoot = mkdtempSync(join(tmpdir(), "agentworks-merge-"));
+  try {
+    const fixture = createCandidateFixture(secondRoot);
+    const reviewed = mergeRequest(fixture, fixture.candidateCommit);
+    writeFileSync(join(fixture.storyPath, "advance.txt"), "advance\n");
+    git(fixture.storyPath, "add", "advance.txt");
+    git(fixture.storyPath, "commit", "-m", "Advance candidate");
+    assert.throws(
+      () => fixture.gateway.mergeCandidate(reviewed),
+      /exact registered candidate/u,
+    );
+  } finally {
+    rmSync(secondRoot, { recursive: true, force: true });
   }
 });

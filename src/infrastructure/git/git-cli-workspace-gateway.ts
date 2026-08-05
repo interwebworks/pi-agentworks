@@ -9,7 +9,10 @@ import type {
   GitWorkspaceGateway,
   GitWorktreeRecord,
   GitWorkspaceResult,
+  MergeCandidateRequest,
+  MergeCandidateResult,
 } from "../../application/ports/git-workspace-gateway.ts";
+import { assessMergeEligibility } from "../../domain/execution-policy.ts";
 import {
   assertSafeWorkspaceId,
   integrationBranchForRun,
@@ -387,7 +390,12 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       );
     }
     this.#mutate(worktreePath, ["add", "--all", "--", "."]);
-    const staged = this.#safeRun(worktreePath, ["diff", "--cached", "--quiet"]);
+    const staged = this.#safeRun(worktreePath, [
+      "diff",
+      "--cached",
+      "--quiet",
+      "--no-ext-diff",
+    ]);
     if (staged.status !== 1) {
       throw new GitWorkspaceError(
         staged.status === 0
@@ -444,6 +452,266 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       parent,
       integrationHead: request.expectedIntegrationHead,
       changedPaths,
+    });
+  }
+
+  mergeCandidate(request: MergeCandidateRequest): MergeCandidateResult {
+    assertSafeWorkspaceId(request.operationId, "Merge operation id");
+    assertSafeWorkspaceId(request.writerAgentId, "Writer agent id");
+    assertSafeWorkspaceId(request.reviewerAgentId, "Reviewer agent id");
+    if (request.integrationBranch !== integrationBranchForRun(request.runId)) {
+      throw new GitWorkspaceError(
+        "Merge integration branch does not match the run identity",
+      );
+    }
+    if (
+      request.storyBranch !== storyBranchForRun(request.runId, request.storyId)
+    ) {
+      throw new GitWorkspaceError(
+        "Merge story branch does not match the story identity",
+      );
+    }
+    if (
+      !OBJECT_ID_PATTERN.test(request.reviewedIntegrationHead) ||
+      !OBJECT_ID_PATTERN.test(request.candidateCommit)
+    ) {
+      throw new GitWorkspaceError("Merge commit evidence is invalid");
+    }
+    if (!request.writerLeaseReleased) {
+      throw new GitWorkspaceError(
+        "Merge requires the story writer lease to be released",
+      );
+    }
+    const subject = validateCommitSubject(request.subject);
+    const checkout = realpathSync(resolve(request.originalCheckout));
+    const integrationPath = realpathSync(
+      resolve(request.integrationWorktreePath),
+    );
+    const storyPath = realpathSync(resolve(request.storyWorktreePath));
+    const worktrees = this.listWorktrees(checkout);
+    const integrationWorktree = worktrees.find(
+      (record) => record.path === integrationPath,
+    );
+    const storyWorktree = worktrees.find((record) => record.path === storyPath);
+    if (
+      integrationWorktree?.branch !== request.integrationBranch ||
+      integrationWorktree.detached ||
+      integrationWorktree.bare ||
+      integrationWorktree.prunable
+    ) {
+      throw new GitWorkspaceError(
+        "Merge target is not the registered integration worktree",
+      );
+    }
+    if (
+      storyWorktree?.branch !== request.storyBranch ||
+      storyWorktree.head !== request.candidateCommit ||
+      storyWorktree.detached ||
+      storyWorktree.bare ||
+      storyWorktree.prunable
+    ) {
+      throw new GitWorkspaceError(
+        "Merge source is not the exact registered candidate worktree",
+      );
+    }
+    this.#assertCleanWorktree(storyPath, "story");
+
+    const policy = assessMergeEligibility({
+      requesterRole: request.requesterRole,
+      writerAgentId: request.writerAgentId,
+      storyHead: request.candidateCommit,
+      integrationHead: request.reviewedIntegrationHead,
+      storyWorktreeClean: true,
+      targetIsRunIntegrationBranch: true,
+      targetIsDefaultOrProtected: request.targetIsDefaultOrProtected,
+      protectedTargetUserApproval: request.protectedTargetUserApproval,
+      controllerLeaseCurrent: request.controllerLeaseCurrent,
+      expectedRevisionMatches: request.expectedRevisionMatches,
+      review: {
+        reviewerAgentId: request.reviewerAgentId,
+        verdict: "approved",
+        reviewedStoryHead: request.candidateCommit,
+        reviewedIntegrationHead: request.reviewedIntegrationHead,
+        requiredChecksPassed: request.requiredChecksPassed,
+      },
+    });
+    if (!policy.allowed) {
+      throw new GitWorkspaceError(
+        `Merge policy denied integration: ${policy.reasons.join("; ")}`,
+      );
+    }
+
+    const message = this.#mergeCommitMessage(request, subject);
+    const currentIntegrationHead = this.#required(integrationPath, [
+      "rev-parse",
+      "HEAD^{commit}",
+    ]);
+    if (integrationWorktree.head !== currentIntegrationHead) {
+      throw new GitWorkspaceError(
+        "Integration worktree HEAD does not match its branch",
+      );
+    }
+    if (currentIntegrationHead !== request.reviewedIntegrationHead) {
+      return this.#recoverMergeCommit(
+        request,
+        integrationPath,
+        currentIntegrationHead,
+        message,
+      );
+    }
+
+    const ancestry = this.#run(checkout, [
+      "merge-base",
+      "--is-ancestor",
+      request.reviewedIntegrationHead,
+      request.candidateCommit,
+    ]);
+    if (ancestry.status !== 0) {
+      throw new GitWorkspaceError(
+        "Reviewed integration commit is not an ancestor of the candidate",
+      );
+    }
+    const preflight = this.#safeRun(checkout, [
+      "merge-tree",
+      "--write-tree",
+      "--no-messages",
+      request.reviewedIntegrationHead,
+      request.candidateCommit,
+    ]);
+    if (preflight.status !== 0 || !OBJECT_ID_PATTERN.test(preflight.stdout)) {
+      throw new GitWorkspaceError(
+        "Candidate cannot be merged cleanly into the reviewed integration HEAD",
+      );
+    }
+    const expectedTree = preflight.stdout;
+    const interruptedMergeHead = this.#optional(integrationPath, [
+      "rev-parse",
+      "--verify",
+      "MERGE_HEAD^{commit}",
+    ]);
+    if (interruptedMergeHead === null) {
+      this.#assertCleanWorktree(integrationPath, "integration");
+      this.#mutate(integrationPath, [
+        "merge",
+        "--no-ff",
+        "--no-commit",
+        "--no-edit",
+        "--no-autostash",
+        "--strategy=ort",
+        request.candidateCommit,
+      ]);
+    } else if (interruptedMergeHead !== request.candidateCommit) {
+      throw new GitWorkspaceError(
+        "Integration worktree contains a different interrupted merge",
+      );
+    }
+    const mergeIndexTree = this.#safeRequired(integrationPath, ["write-tree"]);
+    if (mergeIndexTree !== expectedTree) {
+      throw new GitWorkspaceError(
+        "Interrupted merge index does not match the preflight merge tree",
+      );
+    }
+    this.#mutate(integrationPath, [
+      "commit",
+      "--no-verify",
+      "--no-gpg-sign",
+      "--cleanup=verbatim",
+      "-m",
+      message,
+    ]);
+    const mergeCommit = this.#required(integrationPath, [
+      "rev-parse",
+      "HEAD^{commit}",
+    ]);
+    return this.#verifyMergeCommit(
+      request,
+      integrationPath,
+      mergeCommit,
+      message,
+      expectedTree,
+      "created",
+    );
+  }
+
+  #assertCleanWorktree(worktreePath: string, label: string): void {
+    const changed = parseChangedPaths(
+      this.#safeRequired(worktreePath, [
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+      ]),
+    );
+    if (changed.length > 0) {
+      throw new GitWorkspaceError(`${label} worktree is not clean`);
+    }
+  }
+
+  #mergeCommitMessage(request: MergeCandidateRequest, subject: string): string {
+    return `${subject}\n\nAgentworks-Run: ${request.runId}\nAgentworks-Story: ${request.storyId}\nAgentworks-Candidate: ${request.candidateCommit}\nAgentworks-Integration: ${request.reviewedIntegrationHead}\nAgentworks-Reviewer: ${request.reviewerAgentId}\nAgentworks-Operation: ${request.operationId}`;
+  }
+
+  #recoverMergeCommit(
+    request: MergeCandidateRequest,
+    integrationPath: string,
+    currentIntegrationHead: string,
+    expectedMessage: string,
+  ): MergeCandidateResult {
+    return this.#verifyMergeCommit(
+      request,
+      integrationPath,
+      currentIntegrationHead,
+      expectedMessage,
+      null,
+      "existing",
+    );
+  }
+
+  #verifyMergeCommit(
+    request: MergeCandidateRequest,
+    integrationPath: string,
+    mergeCommit: string,
+    expectedMessage: string,
+    expectedTree: string | null,
+    status: MergeCandidateResult["status"],
+  ): MergeCandidateResult {
+    const parents = this.#required(integrationPath, [
+      "show",
+      "-s",
+      "--format=%P",
+      mergeCommit,
+    ]).split(" ");
+    const message = this.#required(integrationPath, [
+      "show",
+      "-s",
+      "--format=%B",
+      mergeCommit,
+    ]);
+    const tree = this.#required(integrationPath, [
+      "show",
+      "-s",
+      "--format=%T",
+      mergeCommit,
+    ]);
+    if (
+      parents.length !== 2 ||
+      parents[0] !== request.reviewedIntegrationHead ||
+      parents[1] !== request.candidateCommit ||
+      message !== expectedMessage ||
+      (expectedTree !== null && tree !== expectedTree)
+    ) {
+      throw new GitWorkspaceError(
+        "Integration branch advanced to a merge not owned by this operation",
+      );
+    }
+    this.#assertCleanWorktree(integrationPath, "integration");
+    return Object.freeze({
+      status,
+      mergeCommit,
+      integrationParent: request.reviewedIntegrationHead,
+      candidateParent: request.candidateCommit,
+      tree,
     });
   }
 
@@ -690,19 +958,26 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
   }
 
   #safeMutationConfiguration(repositoryPath: string): readonly string[] {
-    const filterKeys = this.#optional(repositoryPath, [
+    const configurationKeys = this.#optional(repositoryPath, [
       "config",
       "--name-only",
       "--get-regexp",
-      "^filter\\..*\\.(clean|smudge|process|required)$",
+      "^(filter\\..*\\.(clean|smudge|process|required)|merge\\..*\\.driver|branch\\..*\\.mergeoptions)$",
     ]);
-    const prefixes = new Set<string>();
-    if (filterKeys !== null) {
-      for (const key of filterKeys.split("\n")) {
-        const match = /^(filter\..+)\.(?:clean|smudge|process|required)$/u.exec(
-          key.trim(),
-        );
-        if (match?.[1] !== undefined) prefixes.add(match[1]);
+    const filterPrefixes = new Set<string>();
+    const mergePrefixes = new Set<string>();
+    const branchMergeOptions = new Set<string>();
+    if (configurationKeys !== null) {
+      for (const key of configurationKeys.split("\n")) {
+        const normalized = key.trim();
+        const filter =
+          /^(filter\..+)\.(?:clean|smudge|process|required)$/u.exec(normalized);
+        if (filter?.[1] !== undefined) filterPrefixes.add(filter[1]);
+        const merge = /^(merge\..+)\.driver$/u.exec(normalized);
+        if (merge?.[1] !== undefined) mergePrefixes.add(merge[1]);
+        if (/^branch\..+\.mergeoptions$/u.test(normalized)) {
+          branchMergeOptions.add(normalized);
+        }
       }
     }
     const configuration = [
@@ -710,6 +985,8 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       "core.hooksPath=/dev/null",
       "-c",
       "core.fsmonitor=false",
+      "-c",
+      "rerere.enabled=false",
       "-c",
       "protocol.file.allow=never",
       "-c",
@@ -723,7 +1000,7 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       "-c",
       "user.email=controller@agentworks.invalid",
     ];
-    for (const prefix of prefixes) {
+    for (const prefix of filterPrefixes) {
       configuration.push(
         "-c",
         `${prefix}.required=false`,
@@ -734,6 +1011,12 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
         "-c",
         `${prefix}.clean=/usr/bin/cat`,
       );
+    }
+    for (const prefix of mergePrefixes) {
+      configuration.push("-c", `${prefix}.driver=/usr/bin/false`);
+    }
+    for (const key of branchMergeOptions) {
+      configuration.push("-c", `${key}=`);
     }
     return Object.freeze(configuration);
   }

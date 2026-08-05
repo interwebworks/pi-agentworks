@@ -59,8 +59,9 @@ Mutating Git commands disable repository hooks, filesystem monitors, file-protoc
 After a writer reports completion and its durable lease is released, the controller verifies the exact worktree, branch, story HEAD, integration HEAD, ancestry, status, and changed paths before creating a candidate commit.
 Status, staging, and commit commands run with effective clean/smudge/process filters neutralized, hooks and filesystem monitors disabled, signing and automatic maintenance disabled, and a fixed controller identity.
 The commit records immutable operation trailers, and recovery accepts it only when the exact parent, full message, registered worktree identity, and clean status match.
-Review targets an exact story commit and an exact integration-base commit.
+Review targets an exact story commit and an exact integration-base commit, and the reviewer must not be the story writer.
 Any change to either identity invalidates approval.
+Merge preflight and execution neutralize effective custom merge drivers, branch merge options, hooks, signing, rerere, autostash, file protocol, filesystem monitors, and automatic maintenance before verifying the exact two-parent commit and resulting tree.
 
 A merge requires all of the following evidence:
 

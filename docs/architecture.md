@@ -145,7 +145,9 @@ The controller creates candidate commits after durable writer-lease release so r
 Candidate creation verifies the registered story worktree/branch/HEAD tuple, unchanged integration evidence, ancestry, parseable conflict-free status, and non-submodule changes before staging all content with hostile hooks, filters, signing, filesystem monitors, and automatic maintenance disabled.
 Each commit contains exact run, story, base, integration, and operation trailers; a retry accepts an existing commit only when its parent and complete message match that operation and the worktree remains clean.
 
-Merge eligibility requires an approved reviewer result, successful required checks, a clean story worktree, the expected branch HEAD, and an unchanged integration base since review or a renewed review after rebasing.
+Merge eligibility requires an independent approved reviewer result, successful required checks, a clean exact-candidate story worktree, the expected branch HEAD, and an unchanged integration base since review or a renewed review after rebasing.
+The controller preflights a two-parent merge tree, suppresses custom merge drivers and branch merge options, and creates a fixed-identity merge commit whose parents, tree, full operation message, and clean integration worktree are verified afterward.
+A retry can finish an exact interrupted pre-commit merge only when `MERGE_HEAD` and the index tree equal the reviewed candidate and preflight tree; after commit it accepts only the exact operation-owned merge.
 Cleanup requires merge ancestry proof and a clean worktree.
 Agentworks does not use force removal for routine cleanup.
 

@@ -31,7 +31,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Implement deterministic Project Manager integration branch/worktree creation with exact base evidence, idempotent attachment recovery, original-checkout preservation, and disabled repository hooks/filter commands.
 - [x] Implement deterministic isolated branches/worktrees per writable story from exact integration-HEAD evidence, with idempotent attachment recovery and overlap rejection.
 - [x] Implement durable, fenced single-writer leases with acquire/renew/release/revoke audit history, monotonic tokens, restart validation, and hard reassignment/candidate gates.
-- [ ] Connect the tested merge, review-invalidation, and cleanup policies to real Git evidence.
+- [x] Connect exact independent-review, review-invalidation, protected-target approval, and merge policies to registered worktrees and real Git commit/tree/ancestry evidence.
+- [ ] Connect cleanup policy to real Git ancestry, cleanliness, ownership, and released-lease evidence.
 - [x] Implement controller-authored candidate commits with exact branch/worktree/base evidence, released-lease gating, conflict/submodule rejection, hostile Git-config suppression, and crash-idempotent operation trailers.
 - [ ] Prove through the sandbox and live child E2E boundary that the controller is the sole Git mutator.
 - [ ] Prove with disposable-repository tests that the original checkout is never used as an agent cwd and remains unmodified.

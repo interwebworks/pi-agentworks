@@ -76,6 +76,7 @@ export interface ReviewEvidence {
 
 export interface MergeEligibilityRequest {
   readonly requesterRole: string;
+  readonly writerAgentId: string;
   readonly storyHead: string;
   readonly integrationHead: string;
   readonly storyWorktreeClean: boolean;
@@ -123,6 +124,9 @@ export function assessMergeEligibility(
   if (review === undefined) {
     reasons.push("independent review evidence is required");
   } else {
+    if (review.reviewerAgentId === request.writerAgentId) {
+      reasons.push("the writer cannot independently review their own story");
+    }
     if (review.verdict !== "approved") {
       reasons.push("the reviewer did not approve the story");
     }

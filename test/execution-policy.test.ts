@@ -83,6 +83,7 @@ function eligibleMerge(
 ): MergeEligibilityRequest {
   return {
     requesterRole: "project-manager",
+    writerAgentId: "writer-1",
     storyHead: "story-head",
     integrationHead: "integration-head",
     storyWorktreeClean: true,
@@ -122,6 +123,23 @@ test("invalidates review when story or integration HEAD changes", () => {
     "the story HEAD changed after review",
     "the integration HEAD changed after review",
   ]);
+});
+
+test("denies self-review by the writer", () => {
+  const decision = assessMergeEligibility(
+    eligibleMerge({
+      review: {
+        reviewerAgentId: "writer-1",
+        verdict: "approved",
+        reviewedStoryHead: "story-head",
+        reviewedIntegrationHead: "integration-head",
+        requiredChecksPassed: true,
+      },
+    }),
+  );
+
+  assert.equal(decision.allowed, false);
+  assert.match(decision.reasons.join("\n"), /cannot independently review/u);
 });
 
 test("denies merge requests from worker agents", () => {
