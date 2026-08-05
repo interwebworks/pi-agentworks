@@ -59,7 +59,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Implement the parent-tab right management-pane lifecycle with atomic shell-environment ownership tags, exact right-sibling layout validation, metadata reconciliation, duplicate/spoof refusal, and interrupted-split recovery.
 - [x] Implement the crash-recoverable `Pi Agents` tab and deterministic balanced binary-split grids from 1 through 16 panes, with exact slot ownership, no-focus creation, idempotent partial completion, and geometry validation.
 - [x] Implement exact pane focus through verified directional-neighbor selection plus tab focus, along with ownership-bound labels, metadata, stable shell-process detection, partial lifecycle recovery, and identity-drift refusal.
-- [ ] Implement deduplicated Herdr visual and audio alerts.
+- [x] Implement bounded concurrency-safe Herdr visual/audio alerts with severity-to-sound mapping, content fingerprints, keyed cooldown deduplication, state-change delivery, retryable failures, and typed delivery evidence.
 
 ## P6 - Interactive Pi agents
 

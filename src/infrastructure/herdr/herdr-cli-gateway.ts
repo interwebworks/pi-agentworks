@@ -10,6 +10,8 @@ import {
   type HerdrCreateTabRequest,
   type HerdrFocusDirection,
   type HerdrGateway,
+  type HerdrNotificationRequest,
+  type HerdrNotificationResult,
   type HerdrPane,
   type HerdrPaneFocusResult,
   type HerdrPaneLayout,
@@ -226,6 +228,20 @@ const FocusResultSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+  },
+  { additionalProperties: false },
+);
+const NotificationResultSchema = Type.Object(
+  {
+    type: Type.Literal("notification_show"),
+    shown: Type.Boolean(),
+    reason: Type.Union([
+      Type.Literal("shown"),
+      Type.Literal("disabled"),
+      Type.Literal("rate_limited"),
+      Type.Literal("no_foreground_client"),
+      Type.Literal("busy"),
+    ]),
   },
   { additionalProperties: false },
 );
@@ -772,6 +788,20 @@ export class HerdrCliGateway implements HerdrGateway {
       this.#integerOption(args, "--ttl-ms", report.ttlMs);
     }
     return this.#empty(args);
+  }
+
+  async showNotification(
+    request: HerdrNotificationRequest,
+  ): Promise<HerdrNotificationResult> {
+    const title = this.#positionalLabel(request.title);
+    const args = ["notification", "show", title];
+    this.#optional(args, "--body", request.body, 4_096);
+    if (request.position !== undefined) {
+      args.push("--position", request.position);
+    }
+    args.push("--sound", request.sound);
+    const result = await this.#success(args, NotificationResultSchema);
+    return Object.freeze({ shown: result.shown, reason: result.reason });
   }
 
   releaseAgent(

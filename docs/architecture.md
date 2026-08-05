@@ -78,7 +78,8 @@ The first production adapter uses Linux Bubblewrap and fails closed when its req
 
 `PiAgentLauncher` starts an interactive Pi agent inside the approved sandbox with an explicit role prompt, task specification, model, tool allowlist, session name, environment allowlist, and controller endpoint.
 
-`NotificationGateway` emits Herdr visual and audio alerts with deduplication.
+`NotificationGateway` emits Herdr-native visual and audio alerts, mapping info/success/attention/failure to none/done/request/request sounds.
+A bounded serialized deduplicator suppresses concurrent or repeated alerts only when both the caller key and SHA-256 content fingerprint match inside the cooldown window; changed state remains visible, failed CLI calls remain retryable, and Herdr shown/disabled/rate-limited/no-client/busy evidence is preserved.
 
 ## Authoritative state
 

@@ -215,6 +215,10 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
         },
       },
     },
+    {
+      id: "cli:notification:show",
+      result: { type: "notification_show", shown: true, reason: "shown" },
+    },
     ok,
     ok,
   ]);
@@ -284,6 +288,15 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     (await client.focusPaneNeighbor("w1P:p5", "left")).focusedPaneId,
     "w1P:p4",
   );
+  assert.deepEqual(
+    await client.showNotification({
+      title: "Review requested",
+      body: "Story 1 needs attention",
+      position: "bottom-right",
+      sound: "request",
+    }),
+    { shown: true, reason: "shown" },
+  );
   await client.closePane("w1P:p5");
   await client.closeTab("w1P:t2");
 
@@ -345,6 +358,17 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     "w1P:p5",
     "--direction",
     "left",
+  ]);
+  assert.deepEqual(executor.calls[14]?.arguments_, [
+    "notification",
+    "show",
+    "Review requested",
+    "--body",
+    "Story 1 needs attention",
+    "--position",
+    "bottom-right",
+    "--sound",
+    "request",
   ]);
 });
 

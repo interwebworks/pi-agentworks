@@ -138,6 +138,24 @@ export interface HerdrAgentSessionReport {
   readonly sessionStartSource?: string;
 }
 
+export type HerdrNotificationPosition =
+  "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export type HerdrNotificationSound = "none" | "done" | "request";
+export type HerdrNotificationReason =
+  "shown" | "disabled" | "rate_limited" | "no_foreground_client" | "busy";
+
+export interface HerdrNotificationRequest {
+  readonly title: string;
+  readonly body?: string;
+  readonly position?: HerdrNotificationPosition;
+  readonly sound: HerdrNotificationSound;
+}
+
+export interface HerdrNotificationResult {
+  readonly shown: boolean;
+  readonly reason: HerdrNotificationReason;
+}
+
 export interface HerdrPaneMetadataReport {
   readonly paneId: string;
   readonly source: string;
@@ -174,6 +192,9 @@ export interface HerdrGateway {
   reportAgent(report: HerdrAgentReport): Promise<void>;
   reportAgentSession(report: HerdrAgentSessionReport): Promise<void>;
   reportPaneMetadata(report: HerdrPaneMetadataReport): Promise<void>;
+  showNotification(
+    request: HerdrNotificationRequest,
+  ): Promise<HerdrNotificationResult>;
   releaseAgent(
     paneId: string,
     source: string,
