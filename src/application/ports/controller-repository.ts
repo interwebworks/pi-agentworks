@@ -49,6 +49,39 @@ export interface FencedWrite {
   readonly now: number;
 }
 
+export interface WriterLease {
+  readonly runId: string;
+  readonly storyId: string;
+  readonly ownerAgentId: string | null;
+  readonly leaseToken: number;
+  readonly expiresAt: number | null;
+  readonly updatedAt: number;
+}
+
+export interface AcquireWriterLeaseInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly storyId: string;
+  readonly ownerAgentId: string;
+  readonly ttlMs: number;
+}
+
+export interface HeldWriterLeaseInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly storyId: string;
+  readonly ownerAgentId: string;
+  readonly leaseToken: number;
+}
+
+export interface RevokeWriterLeaseInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly storyId: string;
+  readonly expectedLeaseToken: number;
+  readonly reason: string;
+}
+
 export interface InitializeRunInput {
   readonly write: FencedWrite;
   readonly idempotencyKey: string;
@@ -81,6 +114,11 @@ export interface ControllerRepository {
   acquireLease(ownerId: string, now: number, ttlMs: number): ControllerLease;
   renewLease(write: FencedWrite, ttlMs: number): ControllerLease;
   releaseLease(write: FencedWrite): void;
+  acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease;
+  renewWriterLease(input: HeldWriterLeaseInput, ttlMs: number): WriterLease;
+  releaseWriterLease(input: HeldWriterLeaseInput): WriterLease;
+  revokeWriterLease(input: RevokeWriterLeaseInput): WriterLease;
+  readWriterLease(runId: string, storyId: string): WriterLease | null;
   initializeRun(input: InitializeRunInput): CommitResult;
   commitSnapshot(input: CommitSnapshotInput): CommitResult;
   loadSnapshot(runId: string): ControllerSnapshot | null;

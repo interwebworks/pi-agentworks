@@ -110,6 +110,7 @@ test("candidate creation and merge phases remain blocked for evidence reconcilia
   candidate = transitionStory(candidate, {
     type: "candidate-requested",
     at: 1_004,
+    writerLeaseReleased: true,
   });
 
   const merging: StoryState = {

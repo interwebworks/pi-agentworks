@@ -21,6 +21,8 @@ import {
   SqliteControllerRepository,
   StaleControllerFenceError,
   StaleRunRevisionError,
+  StaleWriterLeaseError,
+  WriterLeaseHeldError,
 } from "../src/infrastructure/controller/sqlite-controller-repository.ts";
 
 function createFixture(): {
@@ -62,14 +64,31 @@ function story(): StoryState {
   });
 }
 
-function agent(): AgentState {
+function agent(id = "agent-1", taskId = "task-1"): AgentState {
   return createAgentState({
-    id: "agent-1",
+    id,
     runId: "run-1",
     roleRuntimeId: "software-development/backend-developer",
-    taskId: "task-1",
+    taskId,
     worktreePath: "/worktrees/run-1/story-1",
     createdAt: 1_000,
+  });
+}
+
+function assignedStory(agentId = "agent-1"): StoryState {
+  const awaitingApproval = transitionStory(story(), {
+    type: "story-prepared",
+    at: 1_001,
+    complexity: "NORMAL",
+  });
+  const ready = transitionStory(awaitingApproval, {
+    type: "story-plan-approved",
+    at: 1_002,
+  });
+  return transitionStory(ready, {
+    type: "story-assigned",
+    at: 1_003,
+    agentId,
   });
 }
 
@@ -120,7 +139,7 @@ test("repository enables WAL, migrates once, and protects runtime files", () => 
     database.close();
 
     assert.equal(journal.journal_mode, "wal");
-    assert.equal(version.user_version, 1);
+    assert.equal(version.user_version, 2);
     assert.equal(
       statSync(join(fixture.directory, "runtime")).mode & 0o777,
       0o700,
@@ -131,6 +150,49 @@ test("repository enables WAL, migrates once, and protects runtime files", () => 
     reopened.assertIntegrity();
     reopened.close();
   } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("version one databases migrate writer lease tables without losing runs", () => {
+  const fixture = createFixture();
+  let reopened: SqliteControllerRepository | null = null;
+  try {
+    const lease = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, lease.fencingToken);
+    fixture.repository.close();
+
+    const database = new DatabaseSync(fixture.databasePath);
+    database.exec(`
+      DROP TABLE writer_lease_events;
+      DROP TABLE writer_leases;
+      PRAGMA user_version = 1;
+    `);
+    database.close();
+
+    reopened = new SqliteControllerRepository(fixture.databasePath);
+    assert.equal(reopened.loadSnapshot("run-1")?.run.id, "run-1");
+    reopened.close();
+    reopened = null;
+    const migrated = new DatabaseSync(fixture.databasePath);
+    const version = migrated
+      .prepare("PRAGMA user_version")
+      .get() as unknown as { readonly user_version: number };
+    const leaseTable = migrated
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'writer_leases'",
+      )
+      .get() as unknown as { readonly name: string } | undefined;
+    migrated.close();
+    assert.equal(version.user_version, 2);
+    assert.equal(leaseTable?.name, "writer_leases");
+  } finally {
+    reopened?.close();
+    fixture.repository.close();
     rmSync(fixture.directory, { recursive: true, force: true });
   }
 });
@@ -570,6 +632,366 @@ test("stale revisions and released or expired fences cannot mutate state", () =>
           },
         }),
       StaleControllerFenceError,
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("writer leases acquire, renew, release, persist, and audit exact tokens", () => {
+  const fixture = createFixture();
+  let reopened: SqliteControllerRepository | null = null;
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, controller.fencingToken, {
+      stories: [assignedStory()],
+      agents: [agent("agent-1", "story-1")],
+    });
+    const acquired = fixture.repository.acquireWriterLease({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_200,
+      },
+      runId: "run-1",
+      storyId: "story-1",
+      ownerAgentId: "agent-1",
+      ttlMs: 1_000,
+    });
+    assert.equal(acquired.leaseToken, 1);
+    assert.equal(acquired.expiresAt, 2_200);
+
+    const replay = fixture.repository.acquireWriterLease({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_250,
+      },
+      runId: "run-1",
+      storyId: "story-1",
+      ownerAgentId: "agent-1",
+      ttlMs: 9_000,
+    });
+    assert.deepEqual(replay, acquired);
+
+    const renewed = fixture.repository.renewWriterLease(
+      {
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controller.fencingToken,
+          now: 1_300,
+        },
+        runId: "run-1",
+        storyId: "story-1",
+        ownerAgentId: "agent-1",
+        leaseToken: acquired.leaseToken,
+      },
+      2_000,
+    );
+    assert.equal(renewed.expiresAt, 3_300);
+    fixture.repository.close();
+
+    reopened = new SqliteControllerRepository(fixture.databasePath);
+    assert.deepEqual(reopened.readWriterLease("run-1", "story-1"), renewed);
+    const controllerAfterRestart = reopened.acquireLease(
+      "controller-a",
+      1_400,
+      10_000,
+    );
+    const released = reopened.releaseWriterLease({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controllerAfterRestart.fencingToken,
+        now: 1_500,
+      },
+      runId: "run-1",
+      storyId: "story-1",
+      ownerAgentId: "agent-1",
+      leaseToken: acquired.leaseToken,
+    });
+    assert.equal(released.ownerAgentId, null);
+    assert.equal(released.expiresAt, null);
+    assert.deepEqual(
+      reopened.releaseWriterLease({
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controllerAfterRestart.fencingToken,
+          now: 1_501,
+        },
+        runId: "run-1",
+        storyId: "story-1",
+        ownerAgentId: "agent-1",
+        leaseToken: acquired.leaseToken,
+      }),
+      released,
+    );
+    reopened.close();
+    reopened = null;
+
+    const database = new DatabaseSync(fixture.databasePath);
+    const actions = database
+      .prepare(
+        "SELECT action FROM writer_lease_events ORDER BY writer_lease_event_id",
+      )
+      .all() as unknown as readonly { readonly action: string }[];
+    database.close();
+    assert.deepEqual(
+      actions.map((row) => row.action),
+      ["acquired", "renewed", "released"],
+    );
+  } finally {
+    reopened?.close();
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("active writer leases block reassignment until exact-token revocation", () => {
+  const fixture = createFixture();
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    const firstAgent = agent("agent-1", "story-1");
+    const secondAgent = agent("agent-2", "story-1");
+    const firstAssignment = assignedStory();
+    initialize(fixture.repository, controller.fencingToken, {
+      stories: [firstAssignment],
+      agents: [firstAgent, secondAgent],
+    });
+    const firstLease = fixture.repository.acquireWriterLease({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_200,
+      },
+      runId: "run-1",
+      storyId: "story-1",
+      ownerAgentId: "agent-1",
+      ttlMs: 2_000,
+    });
+
+    const unassigned = transitionStory(firstAssignment, {
+      type: "story-reassignment-requested",
+      at: 1_210,
+      reason: "writer disconnected",
+      writerLeaseReleased: true,
+    });
+    const secondAssignment = transitionStory(unassigned, {
+      type: "story-assigned",
+      at: 1_211,
+      agentId: "agent-2",
+    });
+    const commitReassignment = (): void => {
+      fixture.repository.commitSnapshot({
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controller.fencingToken,
+          now: 1_220,
+        },
+        runId: "run-1",
+        expectedRevision: 1,
+        idempotencyKey: "reassign-story-1",
+        request: { command: "reassign-story", storyId: "story-1" },
+        run: run(),
+        stories: [secondAssignment],
+        agents: [firstAgent, secondAgent],
+        events: [
+          {
+            eventId: "event-story-reassigned",
+            type: "story-reassigned",
+            entityType: "story",
+            entityId: "story-1",
+            payload: { agentId: "agent-2" },
+            occurredAt: 1_220,
+          },
+        ],
+      });
+    };
+
+    assert.throws(commitReassignment, StaleWriterLeaseError);
+    assert.throws(
+      () =>
+        fixture.repository.acquireWriterLease({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_230,
+          },
+          runId: "run-1",
+          storyId: "story-1",
+          ownerAgentId: "agent-2",
+          ttlMs: 1_000,
+        }),
+      WriterLeaseHeldError,
+    );
+    const revoked = fixture.repository.revokeWriterLease({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_240,
+      },
+      runId: "run-1",
+      storyId: "story-1",
+      expectedLeaseToken: firstLease.leaseToken,
+      reason: "agent was disconnected before reassignment",
+    });
+    assert.equal(revoked.ownerAgentId, null);
+    assert.deepEqual(
+      fixture.repository.revokeWriterLease({
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controller.fencingToken,
+          now: 1_241,
+        },
+        runId: "run-1",
+        storyId: "story-1",
+        expectedLeaseToken: firstLease.leaseToken,
+        reason: "idempotent retry",
+      }),
+      revoked,
+    );
+    commitReassignment();
+
+    const secondLease = fixture.repository.acquireWriterLease({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_250,
+      },
+      runId: "run-1",
+      storyId: "story-1",
+      ownerAgentId: "agent-2",
+      ttlMs: 1_000,
+    });
+    assert.equal(secondLease.leaseToken, firstLease.leaseToken + 1);
+    assert.throws(
+      () =>
+        fixture.repository.renewWriterLease(
+          {
+            write: {
+              ownerId: "controller-a",
+              fencingToken: controller.fencingToken,
+              now: 1_260,
+            },
+            runId: "run-1",
+            storyId: "story-1",
+            ownerAgentId: "agent-1",
+            leaseToken: firstLease.leaseToken,
+          },
+          1_000,
+        ),
+      StaleWriterLeaseError,
+    );
+    assert.throws(
+      () =>
+        fixture.repository.revokeWriterLease({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_270,
+          },
+          runId: "run-1",
+          storyId: "story-1",
+          expectedLeaseToken: firstLease.leaseToken,
+          reason: "stale revocation",
+        }),
+      StaleWriterLeaseError,
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("writer lease mutations require the active controller fence and assignment", () => {
+  const fixture = createFixture();
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, controller.fencingToken);
+    assert.throws(
+      () =>
+        fixture.repository.acquireWriterLease({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_200,
+          },
+          runId: "run-1",
+          storyId: "story-1",
+          ownerAgentId: "agent-1",
+          ttlMs: 1_000,
+        }),
+      /agent is not assigned/u,
+    );
+
+    assert.throws(
+      () =>
+        fixture.repository.acquireWriterLease({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken + 1,
+            now: 1_200,
+          },
+          runId: "run-1",
+          storyId: "story-1",
+          ownerAgentId: "agent-1",
+          ttlMs: 1_000,
+        }),
+      StaleControllerFenceError,
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("writer lease assignment corruption fails repository startup", () => {
+  const fixture = createFixture();
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, controller.fencingToken, {
+      stories: [assignedStory()],
+      agents: [agent("agent-1", "story-1")],
+    });
+    fixture.repository.acquireWriterLease({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_200,
+      },
+      runId: "run-1",
+      storyId: "story-1",
+      ownerAgentId: "agent-1",
+      ttlMs: 1_000,
+    });
+    fixture.repository.close();
+
+    const database = new DatabaseSync(fixture.databasePath);
+    database
+      .prepare(
+        "UPDATE stories SET state_json = json_set(state_json, '$.assignedAgentId', 'agent-2')",
+      )
+      .run();
+    database.close();
+    assert.throws(
+      () => new SqliteControllerRepository(fixture.databasePath),
+      ControllerDatabaseIntegrityError,
     );
   } finally {
     fixture.repository.close();

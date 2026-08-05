@@ -169,6 +169,7 @@ test("a story follows prepared, assigned, candidate, review, and merge states", 
   current = transitionStory(current, {
     type: "candidate-requested",
     at: 1_005,
+    writerLeaseReleased: true,
   });
   current = transitionStory(current, {
     type: "candidate-created",
@@ -211,6 +212,7 @@ test("review approval must match the exact candidate and integration HEAD", () =
   current = transitionStory(current, {
     type: "candidate-requested",
     at: 1_004,
+    writerLeaseReleased: true,
   });
   current = transitionStory(current, {
     type: "candidate-created",
@@ -248,6 +250,7 @@ test("requested changes invalidate candidate evidence when work restarts", () =>
   current = transitionStory(current, {
     type: "candidate-requested",
     at: 1_004,
+    writerLeaseReleased: true,
   });
   current = transitionStory(current, {
     type: "candidate-created",
@@ -266,6 +269,57 @@ test("requested changes invalidate candidate evidence when work restarts", () =>
   assert.equal(current.candidateStoryHead, null);
   assert.equal(current.reviewedIntegrationHead, null);
   assert.equal(current.reviewerAgentId, null);
+});
+
+test("story reassignment requires prior writer lease release", () => {
+  const ready = transitionStory(story(), {
+    type: "story-prepared",
+    at: 1_001,
+    complexity: "HIGH",
+  });
+  const assigned = transitionStory(ready, {
+    type: "story-assigned",
+    at: 1_002,
+    agentId: "agent-1",
+  });
+  const working = transitionStory(assigned, {
+    type: "story-work-started",
+    at: 1_003,
+  });
+  assert.throws(
+    () =>
+      transitionStory(working, {
+        type: "candidate-requested",
+        at: 1_004,
+        writerLeaseReleased: false,
+      }),
+    /writer lease is still active/u,
+  );
+  assert.throws(
+    () =>
+      transitionStory(working, {
+        type: "story-reassignment-requested",
+        at: 1_004,
+        reason: "agent disconnected",
+        writerLeaseReleased: false,
+      }),
+    /writer lease is still active/u,
+  );
+
+  const unassigned = transitionStory(working, {
+    type: "story-reassignment-requested",
+    at: 1_004,
+    reason: "agent disconnected",
+    writerLeaseReleased: true,
+  });
+  assert.equal(unassigned.status, "ready");
+  assert.equal(unassigned.assignedAgentId, null);
+  const reassigned = transitionStory(unassigned, {
+    type: "story-assigned",
+    at: 1_005,
+    agentId: "agent-2",
+  });
+  assert.equal(reassigned.assignedAgentId, "agent-2");
 });
 
 test("story blocking preserves the exact state to resume", () => {

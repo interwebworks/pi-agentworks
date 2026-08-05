@@ -133,7 +133,10 @@ The detected default branch is always protected, while repository and user branc
 The Project Manager integration branch also lives in a worktree.
 Each writable story gets a deterministic `agentworks/<run>/stories/<story>` branch and a non-overlapping worktree created from an exact integration commit, never from a moving branch name alone.
 Interrupted story branch creation and worktree attachment are recovered idempotently only while the unattached branch still equals that expected integration commit.
-Every write-capable story has one active writer lease.
+Every write-capable story has at most one durable writer lease.
+Writer leases use monotonic per-story tokens under the controller fencing token, expire unless renewed, and record acquisition, renewal, release, and revocation in an append-only SQLite audit table.
+A snapshot cannot reassign a story, remove or close its writer, or move past the writable phase while the durable lease remains held, even if an in-memory transition claim says it was released.
+Reassignment therefore revokes or releases the exact current token first, returns the story to ready, assigns the replacement, and acquires a higher token that fences out the former writer.
 Commands resolve canonical repository and worktree paths before execution.
 
 Child sandboxes mount the host root and Git metadata read-only while mounting only the assigned worktree and narrowly scoped runtime paths read-write.

@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
+  AcquireWriterLeaseInput,
   CommitResult,
   CommitSnapshotInput,
   ControllerEventCursor,
@@ -12,8 +13,11 @@ import type {
   ControllerRepository,
   ControllerSnapshot,
   FencedWrite,
+  HeldWriterLeaseInput,
   InitializeRunInput,
   JsonValue,
+  RevokeWriterLeaseInput,
+  WriterLease,
 } from "../../application/ports/controller-repository.ts";
 import {
   isAgentState,
@@ -24,7 +28,7 @@ import {
   type StoryState,
 } from "../../domain/controller-state.ts";
 
-const DATABASE_SCHEMA_VERSION = 1;
+const DATABASE_SCHEMA_VERSION = 2;
 const MAX_EVENT_READ_LIMIT = 1_000;
 const MAX_EVENTS_PER_COMMIT = 100;
 
@@ -63,6 +67,31 @@ interface IntegrityRow {
   readonly integrity_check: string;
 }
 
+interface WriterLeaseRow {
+  readonly run_id: string;
+  readonly story_id: string;
+  readonly owner_agent_id: string | null;
+  readonly lease_token: number;
+  readonly expires_at: number | null;
+  readonly updated_at: number;
+}
+
+interface ActiveWriterLeaseRow extends WriterLeaseRow {
+  readonly owner_agent_id: string;
+  readonly expires_at: number;
+}
+
+function isActiveWriterLeaseRow(
+  row: WriterLeaseRow | null,
+  now: number,
+): row is ActiveWriterLeaseRow {
+  return (
+    typeof row?.owner_agent_id === "string" &&
+    typeof row.expires_at === "number" &&
+    row.expires_at > now
+  );
+}
+
 export class ControllerRepositoryError extends Error {}
 
 export class ControllerLeaseHeldError extends ControllerRepositoryError {
@@ -81,6 +110,25 @@ export class StaleControllerFenceError extends ControllerRepositoryError {
   constructor(reason: string) {
     super(`Controller fencing check failed: ${reason}`);
     this.name = "StaleControllerFenceError";
+  }
+}
+
+export class WriterLeaseHeldError extends ControllerRepositoryError {
+  readonly ownerAgentId: string;
+  readonly expiresAt: number;
+
+  constructor(ownerAgentId: string, expiresAt: number) {
+    super(`Writer lease is held by ${ownerAgentId} until ${String(expiresAt)}`);
+    this.name = "WriterLeaseHeldError";
+    this.ownerAgentId = ownerAgentId;
+    this.expiresAt = expiresAt;
+  }
+}
+
+export class StaleWriterLeaseError extends ControllerRepositoryError {
+  constructor(reason: string) {
+    super(`Writer lease check failed: ${reason}`);
+    this.name = "StaleWriterLeaseError";
   }
 }
 
@@ -279,6 +327,36 @@ function validateEvents(events: readonly ControllerEventInput[]): void {
   }
 }
 
+function parseWriterLease(row: WriterLeaseRow): WriterLease {
+  const leaseToken = asSafeInteger(row.lease_token, "writer lease token");
+  const updatedAt = asSafeInteger(
+    row.updated_at,
+    "writer lease update timestamp",
+  );
+  if (leaseToken < 0) {
+    throw new ControllerDatabaseIntegrityError(
+      "writer lease token cannot be negative",
+    );
+  }
+  if ((row.owner_agent_id === null) !== (row.expires_at === null)) {
+    throw new ControllerDatabaseIntegrityError(
+      "writer lease owner and expiration are inconsistent",
+    );
+  }
+  const expiresAt =
+    row.expires_at === null
+      ? null
+      : asSafeInteger(row.expires_at, "writer lease expiration");
+  return Object.freeze({
+    runId: row.run_id,
+    storyId: row.story_id,
+    ownerAgentId: row.owner_agent_id,
+    leaseToken,
+    expiresAt,
+    updatedAt,
+  });
+}
+
 function parseCommitResult(
   serialized: string,
   replayed: boolean,
@@ -415,6 +493,201 @@ export class SqliteControllerRepository implements ControllerRepository {
     this.#protectDatabaseFiles();
   }
 
+  acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease {
+    this.#assertOpen();
+    const runId = nonEmpty(input.runId, "writer lease run id");
+    const storyId = nonEmpty(input.storyId, "writer lease story id");
+    const ownerAgentId = nonEmpty(
+      input.ownerAgentId,
+      "writer lease owner agent id",
+    );
+    this.#assertTimeAndTtl(input.write.now, input.ttlMs);
+    const lease = this.#transaction(() => {
+      this.#assertFence(input.write);
+      const current = this.#writerLeaseRow(runId, storyId);
+      if (isActiveWriterLeaseRow(current, input.write.now)) {
+        if (current.owner_agent_id !== ownerAgentId) {
+          throw new WriterLeaseHeldError(
+            current.owner_agent_id,
+            current.expires_at,
+          );
+        }
+        this.#assertAgentAssignedToStory(runId, storyId, ownerAgentId);
+        return parseWriterLease(current);
+      }
+      this.#assertAgentAssignedToStory(runId, storyId, ownerAgentId);
+
+      const leaseToken = (current?.lease_token ?? 0) + 1;
+      const expiresAt = input.write.now + input.ttlMs;
+      this.#database
+        .prepare(
+          `INSERT INTO writer_leases(
+             run_id, story_id, owner_agent_id, lease_token, expires_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(run_id, story_id) DO UPDATE SET
+             owner_agent_id = excluded.owner_agent_id,
+             lease_token = excluded.lease_token,
+             expires_at = excluded.expires_at,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          runId,
+          storyId,
+          ownerAgentId,
+          leaseToken,
+          expiresAt,
+          input.write.now,
+        );
+      this.#recordWriterLeaseEvent(
+        input.write,
+        runId,
+        storyId,
+        leaseToken,
+        ownerAgentId,
+        "acquired",
+        null,
+      );
+      return Object.freeze({
+        runId,
+        storyId,
+        ownerAgentId,
+        leaseToken,
+        expiresAt,
+        updatedAt: input.write.now,
+      });
+    });
+    this.#protectDatabaseFiles();
+    return lease;
+  }
+
+  renewWriterLease(input: HeldWriterLeaseInput, ttlMs: number): WriterLease {
+    this.#assertOpen();
+    this.#assertTimeAndTtl(input.write.now, ttlMs);
+    const lease = this.#transaction(() => {
+      this.#assertFence(input.write);
+      const current = this.#assertHeldWriterLease(input, true);
+      const expiresAt = input.write.now + ttlMs;
+      this.#database
+        .prepare(
+          `UPDATE writer_leases
+           SET expires_at = ?, updated_at = ?
+           WHERE run_id = ? AND story_id = ?`,
+        )
+        .run(expiresAt, input.write.now, input.runId, input.storyId);
+      this.#recordWriterLeaseEvent(
+        input.write,
+        input.runId,
+        input.storyId,
+        current.lease_token,
+        input.ownerAgentId,
+        "renewed",
+        null,
+      );
+      return Object.freeze({
+        runId: input.runId,
+        storyId: input.storyId,
+        ownerAgentId: input.ownerAgentId,
+        leaseToken: current.lease_token,
+        expiresAt,
+        updatedAt: input.write.now,
+      });
+    });
+    this.#protectDatabaseFiles();
+    return lease;
+  }
+
+  releaseWriterLease(input: HeldWriterLeaseInput): WriterLease {
+    this.#assertOpen();
+    const lease = this.#transaction(() => {
+      this.#assertFence(input.write);
+      const current = this.#writerLeaseRow(input.runId, input.storyId);
+      if (
+        current !== null &&
+        current.owner_agent_id === null &&
+        current.lease_token === input.leaseToken
+      ) {
+        return parseWriterLease(current);
+      }
+      const held = this.#assertHeldWriterLease(input, true);
+      this.#database
+        .prepare(
+          `UPDATE writer_leases
+           SET owner_agent_id = NULL, expires_at = NULL, updated_at = ?
+           WHERE run_id = ? AND story_id = ?`,
+        )
+        .run(input.write.now, input.runId, input.storyId);
+      this.#recordWriterLeaseEvent(
+        input.write,
+        input.runId,
+        input.storyId,
+        held.lease_token,
+        input.ownerAgentId,
+        "released",
+        null,
+      );
+      return Object.freeze({
+        runId: input.runId,
+        storyId: input.storyId,
+        ownerAgentId: null,
+        leaseToken: held.lease_token,
+        expiresAt: null,
+        updatedAt: input.write.now,
+      });
+    });
+    this.#protectDatabaseFiles();
+    return lease;
+  }
+
+  revokeWriterLease(input: RevokeWriterLeaseInput): WriterLease {
+    this.#assertOpen();
+    const reason = nonEmpty(input.reason, "writer lease revocation reason");
+    asSafeInteger(input.expectedLeaseToken, "expected writer lease token");
+    const lease = this.#transaction(() => {
+      this.#assertFence(input.write);
+      const current = this.#requiredWriterLeaseRow(input.runId, input.storyId);
+      if (current.lease_token !== input.expectedLeaseToken) {
+        throw new StaleWriterLeaseError("token is stale or missing");
+      }
+      if (current.owner_agent_id === null) return parseWriterLease(current);
+      const priorOwner = current.owner_agent_id;
+      this.#database
+        .prepare(
+          `UPDATE writer_leases
+           SET owner_agent_id = NULL, expires_at = NULL, updated_at = ?
+           WHERE run_id = ? AND story_id = ?`,
+        )
+        .run(input.write.now, input.runId, input.storyId);
+      this.#recordWriterLeaseEvent(
+        input.write,
+        input.runId,
+        input.storyId,
+        current.lease_token,
+        priorOwner,
+        "revoked",
+        reason,
+      );
+      return Object.freeze({
+        runId: input.runId,
+        storyId: input.storyId,
+        ownerAgentId: null,
+        leaseToken: current.lease_token,
+        expiresAt: null,
+        updatedAt: input.write.now,
+      });
+    });
+    this.#protectDatabaseFiles();
+    return lease;
+  }
+
+  readWriterLease(runId: string, storyId: string): WriterLease | null {
+    this.#assertOpen();
+    const row = this.#writerLeaseRow(
+      nonEmpty(runId, "writer lease run id"),
+      nonEmpty(storyId, "writer lease story id"),
+    );
+    return row === null ? null : parseWriterLease(row);
+  }
+
   initializeRun(input: InitializeRunInput): CommitResult {
     this.#assertOpen();
     const runId = nonEmpty(input.run.id, "run id");
@@ -496,6 +769,11 @@ export class SqliteControllerRepository implements ControllerRepository {
       if (actualRevision !== input.expectedRevision) {
         throw new StaleRunRevisionError(input.expectedRevision, actualRevision);
       }
+      this.#assertWriterLeaseSnapshotConsistency(
+        runId,
+        input.stories,
+        input.agents,
+      );
 
       const revision = actualRevision + 1;
       this.#database
@@ -690,6 +968,34 @@ export class SqliteControllerRepository implements ControllerRepository {
         "foreign key check found violations",
       );
     }
+    const leaseRows = this.#database
+      .prepare(
+        `SELECT run_id, story_id, owner_agent_id, lease_token, expires_at, updated_at
+         FROM writer_leases`,
+      )
+      .all() as unknown as readonly WriterLeaseRow[];
+    for (const row of leaseRows) parseWriterLease(row);
+    const leaseRunIds = new Set(leaseRows.map((row) => row.run_id));
+    for (const runId of leaseRunIds) {
+      const snapshot = this.loadSnapshot(runId);
+      if (snapshot === null) {
+        throw new ControllerDatabaseIntegrityError(
+          `writer leases reference missing run ${runId}`,
+        );
+      }
+      try {
+        this.#assertWriterLeaseSnapshotConsistency(
+          runId,
+          snapshot.stories,
+          snapshot.agents,
+        );
+      } catch (error) {
+        if (error instanceof StaleWriterLeaseError) {
+          throw new ControllerDatabaseIntegrityError(error.message);
+        }
+        throw error;
+      }
+    }
   }
 
   close(): void {
@@ -791,7 +1097,214 @@ export class SqliteControllerRepository implements ControllerRepository {
           PRAGMA user_version = 1;
         `);
       }
+      if (version < 2) {
+        this.#database.exec(`
+          CREATE TABLE writer_leases (
+            run_id TEXT NOT NULL,
+            story_id TEXT NOT NULL,
+            owner_agent_id TEXT,
+            lease_token INTEGER NOT NULL CHECK (lease_token >= 1),
+            expires_at INTEGER,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (run_id, story_id),
+            FOREIGN KEY (run_id, story_id)
+              REFERENCES stories(run_id, story_id) ON DELETE CASCADE,
+            CHECK (
+              (owner_agent_id IS NULL AND expires_at IS NULL) OR
+              (owner_agent_id IS NOT NULL AND expires_at IS NOT NULL)
+            )
+          ) STRICT;
+
+          CREATE TABLE writer_lease_events (
+            writer_lease_event_id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            story_id TEXT NOT NULL,
+            lease_token INTEGER NOT NULL CHECK (lease_token >= 1),
+            owner_agent_id TEXT NOT NULL,
+            action TEXT NOT NULL CHECK (
+              action IN ('acquired', 'renewed', 'released', 'revoked')
+            ),
+            reason TEXT,
+            controller_owner_id TEXT NOT NULL,
+            controller_fencing_token INTEGER NOT NULL,
+            occurred_at INTEGER NOT NULL,
+            FOREIGN KEY (run_id, story_id)
+              REFERENCES stories(run_id, story_id) ON DELETE CASCADE
+          ) STRICT;
+          CREATE INDEX writer_lease_events_by_story
+            ON writer_lease_events(run_id, story_id, writer_lease_event_id);
+
+          PRAGMA user_version = 2;
+        `);
+      }
     });
+  }
+
+  #assertWriterLeaseSnapshotConsistency(
+    runId: string,
+    stories: readonly StoryState[],
+    agents: readonly AgentState[],
+  ): void {
+    const activeRows = this.#database
+      .prepare(
+        `SELECT run_id, story_id, owner_agent_id, lease_token, expires_at, updated_at
+         FROM writer_leases
+         WHERE run_id = ? AND owner_agent_id IS NOT NULL`,
+      )
+      .all(runId) as unknown as readonly WriterLeaseRow[];
+    for (const lease of activeRows) {
+      const story = stories.find(
+        (candidate) => candidate.id === lease.story_id,
+      );
+      const agent = agents.find(
+        (candidate) => candidate.id === lease.owner_agent_id,
+      );
+      const assignedAgentId = story?.assignedAgentId ?? null;
+      const agentTaskId = agent?.taskId ?? null;
+      const storyWorktree = story?.worktreePath ?? null;
+      const agentWorktree = agent?.worktreePath ?? null;
+      const agentClosed = agent?.status === "closed";
+      const storyCanBeWritten =
+        story !== undefined &&
+        ["assigned", "working", "changes-requested", "blocked"].includes(
+          story.status,
+        );
+      if (
+        assignedAgentId !== lease.owner_agent_id ||
+        agentTaskId !== lease.story_id ||
+        storyWorktree === null ||
+        storyWorktree !== agentWorktree ||
+        agentClosed ||
+        !storyCanBeWritten
+      ) {
+        throw new StaleWriterLeaseError(
+          `story ${lease.story_id} must release or revoke its writer lease before reassignment or agent removal`,
+        );
+      }
+    }
+  }
+
+  #requiredWriterLeaseRow(runId: string, storyId: string): WriterLeaseRow {
+    const row = this.#writerLeaseRow(runId, storyId);
+    if (row === null) {
+      throw new StaleWriterLeaseError("lease is missing");
+    }
+    return row;
+  }
+
+  #writerLeaseRow(runId: string, storyId: string): WriterLeaseRow | null {
+    const row = this.#database
+      .prepare(
+        `SELECT run_id, story_id, owner_agent_id, lease_token, expires_at, updated_at
+         FROM writer_leases
+         WHERE run_id = ? AND story_id = ?`,
+      )
+      .get(runId, storyId) as unknown as WriterLeaseRow | undefined;
+    return row ?? null;
+  }
+
+  #assertHeldWriterLease(
+    input: HeldWriterLeaseInput,
+    requireUnexpired: boolean,
+  ): WriterLeaseRow {
+    const runId = nonEmpty(input.runId, "writer lease run id");
+    const storyId = nonEmpty(input.storyId, "writer lease story id");
+    const ownerAgentId = nonEmpty(
+      input.ownerAgentId,
+      "writer lease owner agent id",
+    );
+    asSafeInteger(input.leaseToken, "writer lease token");
+    asSafeInteger(input.write.now, "writer lease timestamp");
+    const row = this.#writerLeaseRow(runId, storyId);
+    if (row === null) throw new StaleWriterLeaseError("lease is missing");
+    if (row.owner_agent_id !== ownerAgentId) {
+      throw new StaleWriterLeaseError("owner does not hold the lease");
+    }
+    if (row.lease_token !== input.leaseToken) {
+      throw new StaleWriterLeaseError("token is stale");
+    }
+    if (
+      requireUnexpired &&
+      (row.expires_at === null || row.expires_at <= input.write.now)
+    ) {
+      throw new StaleWriterLeaseError("lease has expired");
+    }
+    return row;
+  }
+
+  #assertAgentAssignedToStory(
+    runId: string,
+    storyId: string,
+    ownerAgentId: string,
+  ): void {
+    const storyRow = this.#database
+      .prepare(
+        "SELECT state_json FROM stories WHERE run_id = ? AND story_id = ?",
+      )
+      .get(runId, storyId) as unknown as StateRow | undefined;
+    const agentRow = this.#database
+      .prepare(
+        "SELECT state_json FROM agents WHERE run_id = ? AND agent_id = ?",
+      )
+      .get(runId, ownerAgentId) as unknown as StateRow | undefined;
+    if (storyRow === undefined || agentRow === undefined) {
+      throw new StaleWriterLeaseError("assigned story or agent is missing");
+    }
+    const story = parseJsonObject(storyRow.state_json, "writer lease story");
+    const agent = parseJsonObject(agentRow.state_json, "writer lease agent");
+    if (!isStoryState(story) || !isAgentState(agent)) {
+      throw new ControllerDatabaseIntegrityError(
+        "writer lease assignment state is invalid",
+      );
+    }
+    if (
+      story.assignedAgentId !== ownerAgentId ||
+      agent.taskId !== storyId ||
+      story.worktreePath !== agent.worktreePath
+    ) {
+      throw new StaleWriterLeaseError(
+        "agent is not assigned to the story worktree",
+      );
+    }
+    if (!["assigned", "working", "changes-requested"].includes(story.status)) {
+      throw new StaleWriterLeaseError(
+        `story status ${story.status} cannot hold a writer lease`,
+      );
+    }
+    if (["failed", "completed", "closed"].includes(agent.status)) {
+      throw new StaleWriterLeaseError(
+        `agent status ${agent.status} cannot hold a writer lease`,
+      );
+    }
+  }
+
+  #recordWriterLeaseEvent(
+    write: FencedWrite,
+    runId: string,
+    storyId: string,
+    leaseToken: number,
+    ownerAgentId: string,
+    action: "acquired" | "renewed" | "released" | "revoked",
+    reason: string | null,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO writer_lease_events(
+           run_id, story_id, lease_token, owner_agent_id, action, reason,
+           controller_owner_id, controller_fencing_token, occurred_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        storyId,
+        leaseToken,
+        ownerAgentId,
+        action,
+        reason,
+        write.ownerId,
+        write.fencingToken,
+        write.now,
+      );
   }
 
   #assertFence(write: FencedWrite): void {

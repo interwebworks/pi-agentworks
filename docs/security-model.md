@@ -78,6 +78,9 @@ A worktree can be removed only when clean, merged by ancestry proof, free of a w
 
 Each run has one controller writer lease.
 The lease includes a fencing token so a stale controller cannot mutate state or Git after replacement.
+Each writable story separately has at most one assigned-agent lease with a monotonic token and expiration.
+All story-lease mutations require the current controller fence, while reassignment, candidate handoff, agent closure, and cleanup require durable release or exact-token revocation first.
+Stale story tokens cannot renew, release, revoke, or regain authority after a replacement writer receives a higher token.
 Controller discovery uses a user-private runtime directory, lock file, PID metadata, socket, and database identity.
 
 SQLite runs in WAL mode with foreign keys enabled and an explicit schema version.

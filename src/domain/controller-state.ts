@@ -280,7 +280,17 @@ export type StoryTransition =
       readonly agentId: string;
     }
   | { readonly type: "story-work-started"; readonly at: number }
-  | { readonly type: "candidate-requested"; readonly at: number }
+  | {
+      readonly type: "story-reassignment-requested";
+      readonly at: number;
+      readonly reason: string;
+      readonly writerLeaseReleased: boolean;
+    }
+  | {
+      readonly type: "candidate-requested";
+      readonly at: number;
+      readonly writerLeaseReleased: boolean;
+    }
   | {
       readonly type: "candidate-created";
       readonly at: number;
@@ -633,8 +643,42 @@ export function transitionStory(
         reviewerAgentId: null,
         updatedAt: transition.at,
       });
+    case "story-reassignment-requested":
+      assertStoryStatus(current, transition, [
+        "assigned",
+        "working",
+        "awaiting-candidate",
+        "changes-requested",
+      ]);
+      if (!transition.writerLeaseReleased) {
+        invalid(
+          "story",
+          current.status,
+          transition,
+          "writer lease is still active",
+        );
+      }
+      nonEmpty(transition.reason, "reassignment reason");
+      return Object.freeze({
+        ...current,
+        status: "ready",
+        assignedAgentId: null,
+        candidateStoryHead: null,
+        reviewedIntegrationHead: null,
+        reviewerAgentId: null,
+        blockedReason: null,
+        updatedAt: transition.at,
+      });
     case "candidate-requested":
       assertStoryStatus(current, transition, ["working"]);
+      if (!transition.writerLeaseReleased) {
+        invalid(
+          "story",
+          current.status,
+          transition,
+          "writer lease is still active",
+        );
+      }
       return Object.freeze({
         ...current,
         status: "awaiting-candidate",
