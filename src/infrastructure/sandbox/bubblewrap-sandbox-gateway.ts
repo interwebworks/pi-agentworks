@@ -205,7 +205,14 @@ export class BubblewrapSandboxGateway implements SandboxGateway {
     for (const path of ["/media", "/mnt"]) {
       if (existsSync(path)) arguments_.push("--tmpfs", path);
     }
-    arguments_.push("--bind", worktree, worktree, "--bind", session, session);
+    arguments_.push(
+      request.worktreeAccess === "read-write" ? "--bind" : "--ro-bind",
+      worktree,
+      worktree,
+      "--bind",
+      session,
+      session,
+    );
     for (const path of [...gitMetadata, ...readOnly].sort()) {
       arguments_.push("--ro-bind", path, path);
     }
@@ -228,6 +235,7 @@ export class BubblewrapSandboxGateway implements SandboxGateway {
       }),
       evidence: Object.freeze({
         ...capabilities.evidence,
+        assignedWorktreeWritable: request.worktreeAccess === "read-write",
         networkIsolated: request.networkPolicy === "isolated",
       }),
     });

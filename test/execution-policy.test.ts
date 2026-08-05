@@ -52,6 +52,31 @@ test("HIGH mode cannot bypass a missing sandbox", () => {
   );
 });
 
+test("read-only roles require a read-only worktree mount", () => {
+  const readOnlyTask = {
+    ...task,
+    writePolicy: "read-only",
+  } as TaskSpecification;
+  assert.doesNotThrow(() =>
+    assertAgentLaunchPermitted({
+      complexity: "NORMAL",
+      task: readOnlyTask,
+      sandbox: { ...secureSandbox, assignedWorktreeWritable: false },
+      roleRequiresNetwork: false,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertAgentLaunchPermitted({
+        complexity: "NORMAL",
+        task: readOnlyTask,
+        sandbox: secureSandbox,
+        roleRequiresNetwork: false,
+      }),
+    /read-only role cannot receive a writable worktree/u,
+  );
+});
+
 test("denies writable Git metadata to child agents", () => {
   assert.throws(
     () =>

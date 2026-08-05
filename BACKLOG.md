@@ -63,7 +63,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P6 - Interactive Pi agents
 
-- [ ] Implement secure interactive Pi launch with role prompt, model, tools, task, worktree, and session identity.
+- [x] Implement secure interactive Pi launch with fenced lease/revision authority, private immutable prompt artifacts, exact role/model/thinking/tool/task/session identity, dedicated Pi config/session storage, explicit single-extension loading, role-specific read-only/read-write worktree mounts, Bubblewrap/Herdr composition, and live process evidence.
 - [ ] Implement dormant-by-default child bridge mode.
 - [ ] Implement structured lifecycle, operation, result, blocker, and supervisor communication.
 - [ ] Implement disconnected-pane detection and resumable session restoration.

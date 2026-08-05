@@ -94,6 +94,7 @@ test(
           `/run/user/${String(process.getuid?.() ?? 0)}`,
         ],
         assignedWorktreePath: paths.worktree,
+        worktreeAccess: "read-write",
         gitMetadataPaths: [paths.gitMetadata],
         sessionPath: paths.session,
         runtimePath: paths.runtime,
@@ -140,6 +141,41 @@ test(
 );
 
 test(
+  "read-only roles cannot mutate their assigned worktree",
+  { skip: !existsSync("/usr/bin/bwrap") },
+  () => {
+    const paths = fixture();
+    try {
+      const plan = gateway().plan({
+        command: "/bin/sh",
+        arguments: [
+          "-c",
+          `if touch '${paths.worktree}/forbidden' 2>/dev/null; then exit 21; fi; touch '${paths.session}/allowed'`,
+        ],
+        assignedWorktreePath: paths.worktree,
+        worktreeAccess: "read-only",
+        gitMetadataPaths: [paths.gitMetadata],
+        sessionPath: paths.session,
+        runtimePath: paths.runtime,
+        readOnlyPaths: [],
+        environment: {},
+        networkPolicy: "isolated",
+      });
+      assert.equal(plan.evidence.assignedWorktreeWritable, false);
+      const result = spawnSync(plan.executablePath, plan.arguments, {
+        encoding: "utf8",
+        env: plan.hostEnvironment,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(existsSync(join(paths.worktree, "forbidden")), false);
+      assert.equal(existsSync(join(paths.session, "allowed")), true);
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "network-approved launch retains the host network namespace",
   { skip: !existsSync("/usr/bin/bwrap") },
   () => {
@@ -149,6 +185,7 @@ test(
         command: "/bin/sh",
         arguments: ["-c", "readlink /proc/self/ns/net"],
         assignedWorktreePath: paths.worktree,
+        worktreeAccess: "read-write",
         gitMetadataPaths: [paths.gitMetadata],
         sessionPath: paths.session,
         runtimePath: paths.runtime,
@@ -177,6 +214,7 @@ test("planner rejects untrusted commands, missing Git metadata, overlap, and env
       command: "/bin/true",
       arguments: [],
       assignedWorktreePath: paths.worktree,
+      worktreeAccess: "read-write" as const,
       gitMetadataPaths: [paths.gitMetadata],
       sessionPath: paths.session,
       runtimePath: paths.runtime,

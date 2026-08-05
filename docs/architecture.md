@@ -76,7 +76,11 @@ The Project Manager and workers can request Git operations but cannot execute mu
 Before the gateway may launch, `BubblewrapCapabilityDoctor` validates the trusted executable and proves the required namespaces and mount/environment behavior in a real throwaway sandbox; `ProductionSandboxLaunchGate` fails closed on any missing or partial evidence.
 The first production adapter uses Linux Bubblewrap and fails closed when its required capabilities are unavailable.
 
-`PiAgentLauncher` starts an interactive Pi agent inside the approved sandbox with an explicit role prompt, task specification, model, tool allowlist, session name, environment allowlist, and controller endpoint.
+`PiAgentLauncher` starts an interactive Pi agent inside the approved sandbox only after exact pane ownership, controller fence/revision, and durable writer-lease authority checks.
+It stores the bounded role system prompt and strict task assignment as private controller-authored artifacts, reuses them only when content matches exactly, and rebinds them read-only inside the otherwise writable dedicated session mount.
+The Pi CLI receives explicit provider, model, thinking level, tool allowlist, child extension, task file, UUID session identity, session name, no-project-approval policy, and disabled ambient extension/skill/prompt/theme discovery.
+A dedicated per-agent Pi config directory is the only credential/config surface; the host Pi home is masked, credentials never appear in the Bubblewrap or Herdr argv, and the controller socket is referenced by path inside the read-only runtime mount.
+The launcher gives story writers a writable assigned worktree only with an active writer lease, gives reviewers and advisors a read-only worktree, and polls Herdr until the exact Pi CLI, session ID, and task artifact appear in foreground process argv evidence.
 
 `NotificationGateway` emits Herdr-native visual and audio alerts, mapping info/success/attention/failure to none/done/request/request sounds.
 A bounded serialized deduplicator suppresses concurrent or repeated alerts only when both the caller key and SHA-256 content fingerprint match inside the cooldown window; changed state remains visible, failed CLI calls remain retryable, and Herdr shown/disabled/rate-limited/no-client/busy evidence is preserved.

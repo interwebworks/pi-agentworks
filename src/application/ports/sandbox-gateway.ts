@@ -6,6 +6,7 @@ export interface SandboxLaunchRequest {
   readonly command: string;
   readonly arguments: readonly string[];
   readonly assignedWorktreePath: string;
+  readonly worktreeAccess: "read-only" | "read-write";
   readonly gitMetadataPaths: readonly string[];
   readonly sessionPath: string;
   readonly runtimePath: string;

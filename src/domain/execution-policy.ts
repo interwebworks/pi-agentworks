@@ -43,8 +43,19 @@ export function assertAgentLaunchPermitted(request: AgentLaunchRequest): void {
     if (!sandbox.rootReadOnly) {
       reasons.push("the host root must be mounted read-only");
     }
-    if (!sandbox.assignedWorktreeWritable) {
-      reasons.push("the assigned worktree must be the project write boundary");
+    if (
+      request.task.writePolicy === "story-writer" &&
+      !sandbox.assignedWorktreeWritable
+    ) {
+      reasons.push(
+        "a story writer requires the assigned writable worktree boundary",
+      );
+    }
+    if (
+      request.task.writePolicy === "read-only" &&
+      sandbox.assignedWorktreeWritable
+    ) {
+      reasons.push("a read-only role cannot receive a writable worktree mount");
     }
     if (!sandbox.gitMetadataReadOnly) {
       reasons.push("Git metadata must be read-only to child agents");
