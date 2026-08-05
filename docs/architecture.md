@@ -127,6 +127,9 @@ Further inactivity marks the assignment blocked, emits an audio alert, and requi
 ## Git safety
 
 The original checkout is never an agent cwd.
+Before planning worktrees, a read-only Git adapter resolves canonical repository, per-worktree Git directory, common Git directory, current HEAD, object format, local branches, and credential-redacted remotes with bounded argument-array commands.
+Default-branch detection uses local remote-HEAD evidence first and offline conventional or single-branch evidence second; it never contacts a remote during inspection.
+The detected default branch is always protected, while repository and user branch-pattern protections are additive and cannot weaken it.
 The Project Manager integration branch also lives in a worktree.
 Every write-capable story has one active writer lease.
 Commands resolve canonical repository and worktree paths before execution.
