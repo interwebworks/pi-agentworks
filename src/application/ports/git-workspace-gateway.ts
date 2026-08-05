@@ -19,7 +19,19 @@ export interface CreateIntegrationWorkspaceRequest {
   readonly worktreePath: string;
 }
 
-export interface IntegrationWorkspaceResult {
+export interface CreateStoryWorkspaceRequest {
+  readonly runId: string;
+  readonly storyId: string;
+  readonly originalCheckout: string;
+  readonly repositoryRoot: string;
+  readonly commonGitDirectory: string;
+  readonly integrationBranch: string;
+  readonly expectedIntegrationHead: string;
+  readonly storyBranch: string;
+  readonly worktreePath: string;
+}
+
+export interface GitWorkspaceResult {
   readonly status: "created" | "recovered" | "existing";
   readonly branch: string;
   readonly branchHead: string;
@@ -30,5 +42,8 @@ export interface GitWorkspaceGateway {
   listWorktrees(originalCheckout: string): readonly GitWorktreeRecord[];
   createIntegrationWorkspace(
     request: CreateIntegrationWorkspaceRequest,
-  ): IntegrationWorkspaceResult;
+  ): GitWorkspaceResult;
+  createStoryWorkspace(
+    request: CreateStoryWorkspaceRequest,
+  ): GitWorkspaceResult;
 }

@@ -12,7 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { integrationBranchForRun } from "../src/domain/workspace-naming.ts";
+import {
+  integrationBranchForRun,
+  storyBranchForRun,
+} from "../src/domain/workspace-naming.ts";
 import { GitCliRepositoryInspector } from "../src/infrastructure/git/git-cli-repository-inspector.ts";
 import {
   GitCliWorkspaceGateway,
@@ -54,6 +57,27 @@ function request(
     baseBranch: "main",
     expectedBaseHead: expectedBaseHead ?? inspection.headCommit ?? "",
     integrationBranch: integrationBranchForRun("run-1"),
+    worktreePath,
+  };
+}
+
+function storyRequest(
+  repository: string,
+  storyId: string,
+  worktreePath: string,
+  expectedIntegrationHead: string,
+) {
+  const inspection = new GitCliRepositoryInspector().inspect(repository);
+  assert.ok(inspection.repositoryRoot);
+  return {
+    runId: "run-1",
+    storyId,
+    originalCheckout: inspection.repositoryRoot,
+    repositoryRoot: inspection.repositoryRoot,
+    commonGitDirectory: inspection.commonGitDirectory,
+    integrationBranch: integrationBranchForRun("run-1"),
+    expectedIntegrationHead,
+    storyBranch: storyBranchForRun("run-1", storyId),
     worktreePath,
   };
 }
@@ -126,7 +150,7 @@ test("stale base evidence and a hijacked existing branch fail closed", () => {
         gateway.createIntegrationWorkspace(
           request(repository, join(root, "stale-worktree"), oldHead),
         ),
-      /Base branch HEAD changed/u,
+      /Integration base branch HEAD changed/u,
     );
 
     git(repository, "branch", integrationBranchForRun("run-1"), oldHead);
@@ -225,6 +249,132 @@ test("shell-shaped worktree paths and invalid integration identities cannot inje
         }),
       GitWorkspaceError,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("creates one isolated worktree per story from the exact integration HEAD", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-story-workspace-"));
+  try {
+    const repository = createRepository(root);
+    const gateway = new GitCliWorkspaceGateway();
+    const integrationPath = join(root, "worktrees", "integration");
+    const integration = gateway.createIntegrationWorkspace(
+      request(repository, integrationPath),
+    );
+    writeFileSync(join(integrationPath, "pm-notes.txt"), "stay isolated\n");
+    const integrationStatus = git(integrationPath, "status", "--porcelain=v1");
+    const originalStatus = git(repository, "status", "--porcelain=v1");
+
+    const firstPath = join(root, "worktrees", "story-1");
+    const secondPath = join(root, "worktrees", "story-2");
+    const first = gateway.createStoryWorkspace(
+      storyRequest(repository, "story-1", firstPath, integration.branchHead),
+    );
+    const second = gateway.createStoryWorkspace(
+      storyRequest(repository, "story-2", secondPath, integration.branchHead),
+    );
+    assert.equal(first.status, "created");
+    assert.equal(first.branch, "agentworks/run-1/stories/story-1");
+    assert.equal(second.branch, "agentworks/run-1/stories/story-2");
+    assert.equal(first.branchHead, integration.branchHead);
+    assert.equal(second.branchHead, integration.branchHead);
+    assert.equal(existsSync(join(firstPath, "pm-notes.txt")), false);
+    assert.equal(
+      git(integrationPath, "status", "--porcelain=v1"),
+      integrationStatus,
+    );
+    assert.equal(git(repository, "status", "--porcelain=v1"), originalStatus);
+
+    const existing = gateway.createStoryWorkspace(
+      storyRequest(repository, "story-1", firstPath, integration.branchHead),
+    );
+    assert.equal(existing.status, "existing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovers interrupted story attachment and rejects stale integration evidence", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-story-workspace-"));
+  try {
+    const repository = createRepository(root);
+    const gateway = new GitCliWorkspaceGateway();
+    const integrationPath = join(root, "integration");
+    const integration = gateway.createIntegrationWorkspace(
+      request(repository, integrationPath),
+    );
+    const storyBranch = storyBranchForRun("run-1", "story-1");
+    git(repository, "branch", storyBranch, integration.branchHead);
+    const recovered = gateway.createStoryWorkspace(
+      storyRequest(
+        repository,
+        "story-1",
+        join(root, "story-1"),
+        integration.branchHead,
+      ),
+    );
+    assert.equal(recovered.status, "recovered");
+
+    writeFileSync(join(integrationPath, "advance.txt"), "advance\n");
+    git(integrationPath, "add", "advance.txt");
+    git(integrationPath, "commit", "-m", "Advance integration");
+    assert.throws(
+      () =>
+        gateway.createStoryWorkspace(
+          storyRequest(
+            repository,
+            "story-2",
+            join(root, "story-2"),
+            integration.branchHead,
+          ),
+        ),
+      /Story base branch HEAD changed/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("story paths cannot overlap existing worktrees or claim another story identity", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-story-workspace-"));
+  try {
+    const repository = createRepository(root);
+    const gateway = new GitCliWorkspaceGateway();
+    const integrationPath = join(root, "integration");
+    const integration = gateway.createIntegrationWorkspace(
+      request(repository, integrationPath),
+    );
+    assert.throws(
+      () =>
+        gateway.createStoryWorkspace(
+          storyRequest(
+            repository,
+            "story-1",
+            join(integrationPath, "nested"),
+            integration.branchHead,
+          ),
+        ),
+      /nested within another worktree/u,
+    );
+
+    const valid = storyRequest(
+      repository,
+      "story-1",
+      join(root, "story-1"),
+      integration.branchHead,
+    );
+    assert.throws(
+      () =>
+        gateway.createStoryWorkspace({
+          ...valid,
+          storyBranch: storyBranchForRun("run-1", "story-2"),
+        }),
+      /does not match the story identity/u,
+    );
+    assert.throws(() => storyBranchForRun("run-1", "story..lock"));
+    assert.throws(() => storyBranchForRun("../run", "story-1"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

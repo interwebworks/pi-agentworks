@@ -131,6 +131,8 @@ Before planning worktrees, a read-only Git adapter resolves canonical repository
 Default-branch detection uses local remote-HEAD evidence first and offline conventional or single-branch evidence second; it never contacts a remote during inspection.
 The detected default branch is always protected, while repository and user branch-pattern protections are additive and cannot weaken it.
 The Project Manager integration branch also lives in a worktree.
+Each writable story gets a deterministic `agentworks/<run>/stories/<story>` branch and a non-overlapping worktree created from an exact integration commit, never from a moving branch name alone.
+Interrupted story branch creation and worktree attachment are recovered idempotently only while the unattached branch still equals that expected integration commit.
 Every write-capable story has one active writer lease.
 Commands resolve canonical repository and worktree paths before execution.
 

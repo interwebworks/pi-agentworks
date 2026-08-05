@@ -29,7 +29,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 - [x] Implement canonical, read-only repository inspection with worktree/common-dir identity, offline default-branch evidence, credential-redacted remotes, object format, and additive protected-branch patterns.
 - [x] Implement deterministic Project Manager integration branch/worktree creation with exact base evidence, idempotent attachment recovery, original-checkout preservation, and disabled repository hooks/filter commands.
-- [ ] Implement one branch and worktree per writable story.
+- [x] Implement deterministic isolated branches/worktrees per writable story from exact integration-HEAD evidence, with idempotent attachment recovery and overlap rejection.
 - [ ] Implement writer leases and connect the tested merge, review-invalidation, and cleanup policies to real Git evidence.
 - [ ] Make the controller the sole Git mutator, including candidate commits requested by agents.
 - [ ] Prove with disposable-repository tests that the original checkout is never used as an agent cwd and remains unmodified.

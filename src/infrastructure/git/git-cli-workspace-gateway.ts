@@ -3,11 +3,15 @@ import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import type {
   CreateIntegrationWorkspaceRequest,
+  CreateStoryWorkspaceRequest,
   GitWorkspaceGateway,
   GitWorktreeRecord,
-  IntegrationWorkspaceResult,
+  GitWorkspaceResult,
 } from "../../application/ports/git-workspace-gateway.ts";
-import { integrationBranchForRun } from "../../domain/workspace-naming.ts";
+import {
+  integrationBranchForRun,
+  storyBranchForRun,
+} from "../../domain/workspace-naming.ts";
 
 const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -27,6 +31,17 @@ interface GitCommandResult {
   readonly status: number;
   readonly stdout: string;
   readonly stderr: string;
+}
+
+interface CreateWorkspaceCommand {
+  readonly label: "Integration" | "Story";
+  readonly checkout: string;
+  readonly repositoryRoot: string;
+  readonly commonGitDirectory: string;
+  readonly baseBranch: string;
+  readonly expectedBaseHead: string;
+  readonly branch: string;
+  readonly worktreePath: string;
 }
 
 export interface GitCliWorkspaceGatewayOptions {
@@ -151,133 +166,167 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
 
   createIntegrationWorkspace(
     request: CreateIntegrationWorkspaceRequest,
-  ): IntegrationWorkspaceResult {
-    const checkout = realpathSync(resolve(request.originalCheckout));
-    const repositoryRoot = realpathSync(resolve(request.repositoryRoot));
-    const commonGitDirectory = realpathSync(
-      resolve(request.commonGitDirectory),
-    );
-    if (checkout !== repositoryRoot) {
-      throw new GitWorkspaceError(
-        "Integration worktree creation must originate from the original checkout root",
-      );
-    }
+  ): GitWorkspaceResult {
     if (request.integrationBranch !== integrationBranchForRun(request.runId)) {
       throw new GitWorkspaceError(
         "Integration branch does not match the run identity",
       );
     }
-    this.#validateBranch(checkout, request.baseBranch);
-    this.#validateBranch(checkout, request.integrationBranch);
-    if (!OBJECT_ID_PATTERN.test(request.expectedBaseHead)) {
-      throw new GitWorkspaceError("Expected base HEAD is invalid");
+    return this.#createWorkspace({
+      label: "Integration",
+      checkout: request.originalCheckout,
+      repositoryRoot: request.repositoryRoot,
+      commonGitDirectory: request.commonGitDirectory,
+      baseBranch: request.baseBranch,
+      expectedBaseHead: request.expectedBaseHead,
+      branch: request.integrationBranch,
+      worktreePath: request.worktreePath,
+    });
+  }
+
+  createStoryWorkspace(
+    request: CreateStoryWorkspaceRequest,
+  ): GitWorkspaceResult {
+    if (request.integrationBranch !== integrationBranchForRun(request.runId)) {
+      throw new GitWorkspaceError(
+        "Integration branch does not match the run identity",
+      );
+    }
+    if (
+      request.storyBranch !== storyBranchForRun(request.runId, request.storyId)
+    ) {
+      throw new GitWorkspaceError(
+        "Story branch does not match the story identity",
+      );
+    }
+    return this.#createWorkspace({
+      label: "Story",
+      checkout: request.originalCheckout,
+      repositoryRoot: request.repositoryRoot,
+      commonGitDirectory: request.commonGitDirectory,
+      baseBranch: request.integrationBranch,
+      expectedBaseHead: request.expectedIntegrationHead,
+      branch: request.storyBranch,
+      worktreePath: request.worktreePath,
+    });
+  }
+
+  #createWorkspace(command: CreateWorkspaceCommand): GitWorkspaceResult {
+    const checkout = realpathSync(resolve(command.checkout));
+    const repositoryRoot = realpathSync(resolve(command.repositoryRoot));
+    const commonGitDirectory = realpathSync(
+      resolve(command.commonGitDirectory),
+    );
+    if (checkout !== repositoryRoot) {
+      throw new GitWorkspaceError(
+        `${command.label} worktree creation must originate from the original checkout root`,
+      );
+    }
+    this.#validateBranch(checkout, command.baseBranch);
+    this.#validateBranch(checkout, command.branch);
+    if (!OBJECT_ID_PATTERN.test(command.expectedBaseHead)) {
+      throw new GitWorkspaceError(
+        `Expected ${command.label.toLowerCase()} base HEAD is invalid`,
+      );
     }
 
+    const worktrees = this.listWorktrees(checkout);
     const worktreePath = this.#prepareWorktreePath(
-      request.worktreePath,
+      command.worktreePath,
       repositoryRoot,
       commonGitDirectory,
+      worktrees,
     );
-    const worktrees = this.listWorktrees(checkout);
     const branchWorktree = worktrees.find(
-      (worktree) => worktree.branch === request.integrationBranch,
+      (worktree) => worktree.branch === command.branch,
     );
     const pathWorktree = worktrees.find(
       (worktree) => worktree.path === worktreePath,
     );
     if (branchWorktree !== undefined && branchWorktree.path !== worktreePath) {
       throw new GitWorkspaceError(
-        `Integration branch is already attached at ${branchWorktree.path}`,
+        `${command.label} branch is already attached at ${branchWorktree.path}`,
       );
     }
-    if (
-      pathWorktree !== undefined &&
-      pathWorktree.branch !== request.integrationBranch
-    ) {
+    if (pathWorktree !== undefined && pathWorktree.branch !== command.branch) {
       throw new GitWorkspaceError(
-        "Integration worktree path is registered to another branch",
+        `${command.label} worktree path is registered to another branch`,
       );
     }
 
-    const integrationHead = this.#optional(checkout, [
+    const branchHead = this.#optional(checkout, [
       "rev-parse",
       "--verify",
-      `refs/heads/${request.integrationBranch}^{commit}`,
+      `refs/heads/${command.branch}^{commit}`,
     ]);
     if (branchWorktree !== undefined && pathWorktree !== undefined) {
-      if (integrationHead === null || branchWorktree.head !== integrationHead) {
+      if (branchHead === null || branchWorktree.head !== branchHead) {
         throw new GitWorkspaceError(
-          "Existing integration worktree identity is inconsistent",
+          `Existing ${command.label.toLowerCase()} worktree identity is inconsistent`,
         );
       }
       return Object.freeze({
         status: "existing",
-        branch: request.integrationBranch,
-        branchHead: integrationHead,
+        branch: command.branch,
+        branchHead,
         worktreePath,
       });
     }
 
     if (existsSync(worktreePath)) {
       throw new GitWorkspaceError(
-        "Unregistered integration worktree path already exists",
+        `Unregistered ${command.label.toLowerCase()} worktree path already exists`,
       );
     }
 
-    let status: IntegrationWorkspaceResult["status"];
-    if (integrationHead !== null) {
-      if (integrationHead !== request.expectedBaseHead) {
+    let status: GitWorkspaceResult["status"];
+    if (branchHead !== null) {
+      if (branchHead !== command.expectedBaseHead) {
         throw new GitWorkspaceError(
-          "Unattached integration branch does not match the expected base HEAD",
+          `Unattached ${command.label.toLowerCase()} branch does not match the expected base HEAD`,
         );
       }
-      this.#mutate(checkout, [
-        "worktree",
-        "add",
-        worktreePath,
-        request.integrationBranch,
-      ]);
+      this.#mutate(checkout, ["worktree", "add", worktreePath, command.branch]);
       status = "recovered";
     } else {
       const baseHead = this.#required(checkout, [
         "rev-parse",
         "--verify",
-        `refs/heads/${request.baseBranch}^{commit}`,
+        `refs/heads/${command.baseBranch}^{commit}`,
       ]);
-      if (baseHead !== request.expectedBaseHead) {
+      if (baseHead !== command.expectedBaseHead) {
         throw new GitWorkspaceError(
-          "Base branch HEAD changed before integration worktree creation",
+          `${command.label} base branch HEAD changed before worktree creation`,
         );
       }
       this.#mutate(checkout, [
         "worktree",
         "add",
         "-b",
-        request.integrationBranch,
+        command.branch,
         worktreePath,
-        request.expectedBaseHead,
+        command.expectedBaseHead,
       ]);
       status = "created";
     }
 
     const verified = this.listWorktrees(checkout).find(
       (worktree) =>
-        worktree.path === worktreePath &&
-        worktree.branch === request.integrationBranch,
+        worktree.path === worktreePath && worktree.branch === command.branch,
     );
     const verifiedHead = this.#required(checkout, [
       "rev-parse",
       "--verify",
-      `refs/heads/${request.integrationBranch}^{commit}`,
+      `refs/heads/${command.branch}^{commit}`,
     ]);
     if (verified?.head !== verifiedHead) {
       throw new GitWorkspaceError(
-        "Created integration worktree failed identity verification",
+        `Created ${command.label.toLowerCase()} worktree failed identity verification`,
       );
     }
     return Object.freeze({
       status,
-      branch: request.integrationBranch,
+      branch: command.branch,
       branchHead: verifiedHead,
       worktreePath,
     });
@@ -287,6 +336,7 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
     requestedPath: string,
     repositoryRoot: string,
     commonGitDirectory: string,
+    worktrees: readonly GitWorktreeRecord[],
   ): string {
     const normalized = resolve(requestedPath);
     if (
@@ -294,21 +344,30 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       isWithin(normalized, commonGitDirectory)
     ) {
       throw new GitWorkspaceError(
-        "Integration worktree must be outside the original checkout and Git metadata",
+        "Worktree must be outside the original checkout and Git metadata",
       );
+    }
+    for (const worktree of worktrees) {
+      if (
+        normalized !== worktree.path &&
+        (isWithin(normalized, worktree.path) ||
+          isWithin(worktree.path, normalized))
+      ) {
+        throw new GitWorkspaceError(
+          "Worktree path cannot contain or be nested within another worktree",
+        );
+      }
     }
     const parent = dirname(normalized);
     mkdirSync(parent, { recursive: true, mode: 0o700 });
     const parentStatus = lstatSync(parent);
     if (!parentStatus.isDirectory() || parentStatus.isSymbolicLink()) {
-      throw new GitWorkspaceError(
-        "Integration worktree parent must be a real directory",
-      );
+      throw new GitWorkspaceError("Worktree parent must be a real directory");
     }
     const realParent = realpathSync(parent);
     if (realParent !== resolve(parent)) {
       throw new GitWorkspaceError(
-        "Integration worktree parent cannot traverse symbolic links",
+        "Worktree parent cannot traverse symbolic links",
       );
     }
     return resolve(realParent, basename(normalized));
