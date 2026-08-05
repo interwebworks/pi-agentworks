@@ -50,9 +50,11 @@ Package-provided roots can be supplied through the same repository port without 
 
 `TaskSpecificationFactory` validates that every assignment is executable without unapproved invention.
 
-`RunCoordinator` advances stories through planned, approved, assigned, working, review, merge, and completion states.
+`RunCoordinator` advances versioned run and story records through guarded planning, approval, assignment, work, candidate, exact-HEAD review, merge, blocking, failure, and completion states.
+Terminal states cannot be reopened, incomplete runs cannot complete, and review evidence is invalidated when its story or integration identity changes.
 
-`AgentSupervisor` tracks heartbeats, bounded `.` nudges, blocked states, recovery, and escalation.
+`AgentSupervisor` tracks explicit launch, Pi-session readiness, meaningful activity, heartbeats, waiting, blocking, pane loss, recovery, bounded `.` nudges, completion, and closure.
+Heartbeats prove process life but do not postpone a nudge when no meaningful work advances.
 
 `MergePolicy` decides whether review and branch evidence permit integration.
 

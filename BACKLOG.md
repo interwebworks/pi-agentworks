@@ -15,7 +15,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P1 - Controller
 
-- [ ] Implement the versioned controller state model and transition policy.
+- [x] Implement the versioned run, story, agent, review, recovery, and liveness state model with guarded transitions.
 - [ ] Implement the SQLite repository with transactional revisions and events.
 - [ ] Implement the authenticated, bounded Unix socket protocol.
 - [ ] Implement controller startup, independent supervision, writer lease, fencing, reconnection, shutdown, and crash recovery.
