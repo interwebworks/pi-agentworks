@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { Check } from "typebox/value";
 import { getComplexityPolicy, type ComplexityMode } from "./complexity.ts";
 
-export const CONTROLLER_STATE_SCHEMA_VERSION = 1 as const;
+export const CONTROLLER_STATE_SCHEMA_VERSION = 2 as const;
 
 export type RunStatus =
   | "planning"

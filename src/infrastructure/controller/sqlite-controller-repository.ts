@@ -1094,7 +1094,7 @@ export class SqliteControllerRepository implements ControllerRepository {
           INSERT INTO controller_lease(singleton, owner_id, fencing_token, expires_at)
           VALUES (1, NULL, 0, NULL);
 
-          PRAGMA user_version = 1;
+          PRAGMA user_version = 2;
         `);
       }
       if (version < 2) {
