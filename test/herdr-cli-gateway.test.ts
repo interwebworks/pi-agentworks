@@ -210,6 +210,7 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     workspaceId: "w1P",
     cwd: "/worktrees/integration",
     label: "Pi Agents",
+    environment: { Z_TAG: "last", A_TAG: "first" },
   });
   assert.equal(created.rootPane.paneId, "w1P:p4");
   assert.equal(
@@ -219,6 +220,7 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
         direction: "right",
         ratio: 0.5,
         cwd: "/worktrees/story",
+        environment: { AGENTWORKS_RUN_ID: "run-1" },
       })
     ).paneId,
     "w1P:p5",
@@ -275,6 +277,10 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     "/worktrees/integration",
     "--label",
     "Pi Agents",
+    "--env",
+    "A_TAG=first",
+    "--env",
+    "Z_TAG=last",
     "--no-focus",
   ]);
   assert.deepEqual(executor.calls[3]?.arguments_, [
@@ -288,6 +294,8 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     "0.5",
     "--cwd",
     "/worktrees/story",
+    "--env",
+    "AGENTWORKS_RUN_ID=run-1",
     "--no-focus",
   ]);
   assert.deepEqual(executor.calls[6]?.arguments_, [

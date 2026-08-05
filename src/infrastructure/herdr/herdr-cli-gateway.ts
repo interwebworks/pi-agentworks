@@ -513,20 +513,19 @@ export class HerdrCliGateway implements HerdrGateway {
     if (!isAbsolute(request.cwd)) {
       throw new HerdrCliCommandError("Herdr tab cwd must be absolute", []);
     }
-    const result = await this.#success(
-      [
-        "tab",
-        "create",
-        "--workspace",
-        assertIdentifier(request.workspaceId, "workspace"),
-        "--cwd",
-        assertText(request.cwd, "Herdr tab cwd"),
-        "--label",
-        assertText(request.label, "Herdr tab label", 256),
-        request.focus === true ? "--focus" : "--no-focus",
-      ],
-      TabCreatedResultSchema,
-    );
+    const args = [
+      "tab",
+      "create",
+      "--workspace",
+      assertIdentifier(request.workspaceId, "workspace"),
+      "--cwd",
+      assertText(request.cwd, "Herdr tab cwd"),
+      "--label",
+      assertText(request.label, "Herdr tab label", 256),
+    ];
+    this.#environmentOptions(args, request.environment);
+    args.push(request.focus === true ? "--focus" : "--no-focus");
+    const result = await this.#success(args, TabCreatedResultSchema);
     return Object.freeze({
       tab: rawTab(result.tab),
       rootPane: rawPane(result.root_pane),
@@ -547,22 +546,21 @@ export class HerdrCliGateway implements HerdrGateway {
         [],
       );
     }
-    const result = await this.#success(
-      [
-        "pane",
-        "split",
-        "--pane",
-        assertIdentifier(request.paneId, "pane"),
-        "--direction",
-        request.direction,
-        "--ratio",
-        String(request.ratio),
-        "--cwd",
-        assertText(request.cwd, "Herdr pane cwd"),
-        request.focus === true ? "--focus" : "--no-focus",
-      ],
-      PaneInfoResultSchema,
-    );
+    const args = [
+      "pane",
+      "split",
+      "--pane",
+      assertIdentifier(request.paneId, "pane"),
+      "--direction",
+      request.direction,
+      "--ratio",
+      String(request.ratio),
+      "--cwd",
+      assertText(request.cwd, "Herdr pane cwd"),
+    ];
+    this.#environmentOptions(args, request.environment);
+    args.push(request.focus === true ? "--focus" : "--no-focus");
+    const result = await this.#success(args, PaneInfoResultSchema);
     return rawPane(result.pane);
   }
 
@@ -861,6 +859,33 @@ export class HerdrCliGateway implements HerdrGateway {
       );
     }
     return valid;
+  }
+
+  #environmentOptions(
+    args: string[],
+    environment: Readonly<Record<string, string>> | undefined,
+  ): void {
+    const entries = Object.entries(environment ?? {});
+    if (entries.length > 64) {
+      throw new HerdrCliCommandError(
+        "Too many Herdr pane environment entries",
+        [],
+      );
+    }
+    for (const [name, value] of entries.sort(([left], [right]) =>
+      left.localeCompare(right),
+    )) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(name)) {
+        throw new HerdrCliCommandError(
+          "Invalid Herdr pane environment name",
+          [],
+        );
+      }
+      args.push(
+        "--env",
+        `${name}=${assertText(value, "pane environment", 4_096)}`,
+      );
+    }
   }
 
   #optional(

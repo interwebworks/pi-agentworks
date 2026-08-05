@@ -99,7 +99,10 @@ No Agentworks runtime database is placed in the original checkout.
 ## Herdr layout
 
 The parent pane ID and tab ID come from Herdr environment variables.
-The management pane splits the parent pane to the right and uses enough width for long agent lists.
+The management pane splits the parent pane to the right without taking focus and uses enough width for long agent lists.
+The split atomically injects run, operation, parent-pane, and pane-kind ownership tags into the new shell environment before any later rename or metadata side effect.
+Recovery binds `/proc/<shell-pid>/environ` to stable pre/post Herdr process evidence, then reconciles display metadata only when the environment tags, controller pane identity, cwd, tab, workspace, and exact right-sibling geometry agree.
+This allows a crash immediately after split to recover without adopting or deleting an unrelated pane; duplicate, spoofed, or moved claims block for reconciliation.
 The `Pi Agents` tab is created in the same workspace.
 
 The grid planner maps an agent count to rows and columns with no more than sixteen cells.

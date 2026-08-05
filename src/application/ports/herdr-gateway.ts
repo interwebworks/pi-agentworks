@@ -94,6 +94,7 @@ export interface HerdrCreateTabRequest {
   readonly workspaceId: string;
   readonly cwd: string;
   readonly label: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly focus?: boolean;
 }
 
@@ -102,6 +103,7 @@ export interface HerdrSplitPaneRequest {
   readonly direction: "right" | "down";
   readonly ratio: number;
   readonly cwd: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly focus?: boolean;
 }
 
