@@ -7,11 +7,11 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 - [x] Record the approved product contract and SOLID architecture.
 - [x] Implement complexity policy and task-specification contracts with runtime validation and tests.
-- [ ] Add built-in role-pack schema and discovery precedence.
+- [x] Add the strict role-pack schema, bounded prompt loading, trust gate, and builtin/user/project discovery precedence.
 - [x] Add package-level format, lint, typecheck, unit-test, and runtime-audit checks.
 - [x] Define the OS-enforced sandbox, controller-only Git authority, fencing, idempotency, and adversarial security gates.
 - [x] Implement pure launch, merge, and cleanup safety policies with tests.
-- [ ] Add CI.
+- [x] Add least-privilege CI for the package quality suite.
 
 ## P1 - Controller
 

@@ -42,7 +42,9 @@ The child bridge adapts Pi lifecycle events into controller reports.
 
 `ComplexityPolicy` owns confirmation and concurrency behavior for LOW, NORMAL, and HIGH.
 
-`RolePackRepository` discovers built-in, user, package, and trusted-project role packs.
+`RolePackRepository` discovers strict data-only role packs with builtin, user, and trusted-project precedence.
+Manifests reject unknown fields, unsafe controller authority, symlinks, traversal, oversized prompts, and write-policy conflicts before a role becomes selectable.
+Package-provided roots can be supplied through the same repository port without changing domain policy.
 
 `TeamComposer` selects roles germane to the task while respecting complexity limits.
 

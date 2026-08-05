@@ -47,7 +47,6 @@ export const TaskSpecificationSchema = Type.Object(
     writePolicy: Type.Union([
       Type.Literal("read-only"),
       Type.Literal("story-writer"),
-      Type.Literal("pm-integration"),
     ]),
   },
   { additionalProperties: false },
