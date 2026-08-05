@@ -18,6 +18,7 @@ export interface PiAgentLaunchRequest {
   readonly configPath: string;
   readonly runtimePath: string;
   readonly controllerSocketPath: string;
+  readonly controllerChildAuthToken: string;
   readonly piCliPath: string;
   readonly piPackagePath: string;
   readonly agentworksPackagePath: string;
@@ -37,6 +38,7 @@ export interface PiAgentLaunchEvidence {
   readonly sandbox: SandboxEvidence;
   readonly rolePromptPath: string;
   readonly taskPromptPath: string;
+  readonly controllerCapabilityPath: string;
   readonly rolePromptSha256: string;
   readonly taskPromptSha256: string;
   readonly commandSha256: string;

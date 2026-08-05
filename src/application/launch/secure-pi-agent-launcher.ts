@@ -32,6 +32,7 @@ const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const PROVIDER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
+const CHILD_AUTH_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
 type LaunchHerdrGateway = Pick<
   HerdrGateway,
@@ -298,6 +299,11 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
         "task-assignment.md",
         taskPrompt(request),
       ),
+      capability: writeDurableArtifact(
+        sessionPath,
+        "controller-child-capability.token",
+        `${request.controllerChildAuthToken}\n`,
+      ),
     });
     const nodePath = canonicalExisting(request.nodePath, "Node executable");
     const piCliPath = canonicalExisting(request.piCliPath, "Pi CLI path");
@@ -381,12 +387,14 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
         agentworksPackagePath,
         artifacts.role.path,
         artifacts.task.path,
+        artifacts.capability.path,
         ...request.additionalReadOnlyPaths,
       ],
       environment: {
         AGENTWORKS_AGENT_ID: request.task.assignedAgentId,
         AGENTWORKS_CHILD_MODE: "1",
         AGENTWORKS_CONTROLLER_SOCKET: controllerSocketPath,
+        AGENTWORKS_CONTROLLER_TOKEN_FILE: artifacts.capability.path,
         AGENTWORKS_RUN_ID: request.task.runId,
         PI_CODING_AGENT_DIR: configPath,
         PI_CODING_AGENT_SESSION_DIR: piSessionPath,
@@ -420,6 +428,7 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
       sandbox: plan.evidence,
       rolePromptPath: artifacts.role.path,
       taskPromptPath: artifacts.task.path,
+      controllerCapabilityPath: artifacts.capability.path,
       rolePromptSha256: artifacts.role.digest,
       taskPromptSha256: artifacts.task.digest,
       commandSha256: sha256(command.join("\0")),
@@ -429,6 +438,11 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
   #assertRequest(request: PiAgentLaunchRequest): void {
     if (!SESSION_ID_PATTERN.test(request.sessionId)) {
       throw new SecurePiAgentLaunchError("Pi session id must be an exact UUID");
+    }
+    if (!CHILD_AUTH_TOKEN_PATTERN.test(request.controllerChildAuthToken)) {
+      throw new SecurePiAgentLaunchError(
+        "Controller child authentication capability is invalid",
+      );
     }
     if (!PROVIDER_PATTERN.test(request.provider)) {
       throw new SecurePiAgentLaunchError("Pi provider is invalid");

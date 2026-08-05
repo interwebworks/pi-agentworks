@@ -192,8 +192,7 @@ export async function runControllerProcess(
       : { renewIntervalMs: configuration.renewIntervalMs }),
     authorizeIdentity(request) {
       if (request.clientKind !== "child") return true;
-      if (request.agentId === null || request.clientId !== request.agentId)
-        return false;
+      if (request.agentId === null) return false;
       const snapshot = runtime.repository.loadSnapshot(configuration.runId);
       return (
         snapshot?.agents.some((agent) => agent.id === request.agentId) ?? false
@@ -201,10 +200,34 @@ export async function runControllerProcess(
     },
     handleRequest(request) {
       if (request.clientKind === "child") {
-        throw new ControllerRequestError(
-          "forbidden",
-          "Child clients cannot use controller administration actions",
+        if (request.action !== "child.hello") {
+          throw new ControllerRequestError(
+            "forbidden",
+            "Child clients cannot use controller administration actions",
+          );
+        }
+        if (!isEmptyObject(request.payload) || request.agentId === null) {
+          throw new ControllerRequestError(
+            "invalid-payload",
+            "Child hello payload must be empty",
+          );
+        }
+        const snapshot = runtime.repository.loadSnapshot(configuration.runId);
+        const agent = snapshot?.agents.find(
+          (candidate) => candidate.id === request.agentId,
         );
+        if (snapshot === null || agent === undefined) {
+          throw new ControllerRequestError(
+            "unknown-agent",
+            "Child agent is not registered",
+          );
+        }
+        return toJsonValue({
+          runId: configuration.runId,
+          agentId: agent.id,
+          revision: snapshot.revision,
+          status: agent.status,
+        });
       }
       switch (request.action) {
         case "controller.ping": {

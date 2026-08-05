@@ -237,6 +237,16 @@ export function parseControllerRequest(value: unknown): ControllerRequest {
       "child clients require an agentId",
     ]);
   }
+  if (
+    value.clientKind === "child" &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      value.clientId,
+    )
+  ) {
+    throw new InvalidControllerProtocolMessageError([
+      "child clientId must be a unique UUID connection identity",
+    ]);
+  }
   if (value.clientKind !== "child" && value.agentId !== null) {
     throw new InvalidControllerProtocolMessageError([
       "parent and management clients cannot claim an agentId",

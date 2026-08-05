@@ -207,6 +207,7 @@ function fixture() {
     configPath: join(session, "pi-config"),
     runtimePath: runtime,
     controllerSocketPath: controllerSocket,
+    controllerChildAuthToken: "a".repeat(43),
     piCliPath: piCli,
     piPackagePath: piPackage,
     agentworksPackagePath: agentworksPackage,
@@ -251,9 +252,17 @@ test("composes one fenced interactive Pi process through Bubblewrap and Herdr", 
     assert.equal(sandbox.networkPolicy, "host");
     assert.equal(sandbox.environment.AGENTWORKS_CHILD_MODE, "1");
     assert.equal(sandbox.environment.PI_TELEMETRY, "0");
+    assert.equal(
+      sandbox.environment.AGENTWORKS_CONTROLLER_TOKEN_FILE,
+      evidence.controllerCapabilityPath,
+    );
     assert.equal(sandbox.environment.OPENAI_API_KEY, undefined);
     assert.equal(sandbox.readOnlyPaths.includes(evidence.rolePromptPath), true);
     assert.equal(sandbox.readOnlyPaths.includes(evidence.taskPromptPath), true);
+    assert.equal(
+      sandbox.readOnlyPaths.includes(evidence.controllerCapabilityPath),
+      true,
+    );
 
     const cli = sandbox.arguments;
     assert.equal(cli[0], current.request.piCliPath);
@@ -272,9 +281,19 @@ test("composes one fenced interactive Pi process through Bubblewrap and Herdr", 
       ),
       false,
     );
+    assert.equal(
+      JSON.stringify(current.herdr.commands).includes(
+        current.request.controllerChildAuthToken,
+      ),
+      false,
+    );
 
     assert.equal(statSync(evidence.rolePromptPath).mode & 0o777, 0o600);
     assert.equal(statSync(evidence.taskPromptPath).mode & 0o777, 0o600);
+    assert.equal(
+      statSync(evidence.controllerCapabilityPath).mode & 0o777,
+      0o600,
+    );
     assert.match(
       readFileSync(evidence.rolePromptPath, "utf8"),
       /sole Git mutator/u,

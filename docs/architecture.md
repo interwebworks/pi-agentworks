@@ -120,14 +120,17 @@ The adapter validates returned pane IDs before launching any process.
 
 ## Child protocol
 
-The controller creates a random run token and a user-only Unix socket.
-Child processes receive only the socket path, token, run ID, agent ID, and role-safe environment.
-The child bridge sends versioned messages for session-ready, state, operation, heartbeat, supervisor-message, completion, failure, and shutdown.
+The controller creates a random administrative run token and a user-only Unix socket.
+It derives a separate HMAC capability for each exact run and agent identity, so a compromised child never receives the administrative token and cannot reuse its capability to claim another agent.
+The launcher stores that capability in a private controller-authored file rebound read-only inside the sandbox; child environment and process arguments contain only its path.
 Transport uses four-byte big-endian length-prefixed JSON with bounded frame size, queued frames, JSON depth, JSON nodes, connections, and idle time.
 The socket and its directory are user-private, an existing path is never replaced implicitly, and cleanup removes only the exact socket inode created by the server.
-The controller uses constant-time token-digest comparison and rejects unknown versions, invalid tokens, oversized frames, duplicate sequence numbers, and agent/run mismatches.
+The controller uses constant-time token-digest comparison and rejects unknown versions, invalid per-agent capabilities, oversized frames, duplicate sequence numbers, and agent/run mismatches.
+Each child connection receives a fresh UUID sequence identity, authenticates with `child.hello`, and verifies the returned run, agent, revision, and status before any tool call is allowed.
+The next communication slice extends this authenticated channel with session-ready, state, operation, heartbeat, supervisor-message, completion, failure, and shutdown reports.
 
-The child bridge is dormant outside an Agentworks launch environment.
+The child bridge registers nothing unless `AGENTWORKS_CHILD_MODE` is exactly `1`.
+Exact child mode validates the real private socket and capability file, shuts down Pi when authentication fails, and blocks every tool call while unauthenticated.
 Child mode does not register the parent management tool.
 This prevents recursively creating teams in ordinary Pi sessions.
 

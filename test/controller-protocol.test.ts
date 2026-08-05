@@ -26,6 +26,7 @@ import {
   ControllerRemoteError,
   ControllerRequestError,
   ControllerTransportError,
+  deriveChildAuthToken,
   UnixControllerClient,
   UnixControllerServer,
 } from "../src/infrastructure/controller/unix-controller-transport.ts";
@@ -79,10 +80,7 @@ function createServerFixture(
       ? {}
       : { maxQueuedFrames: options.maxQueuedFrames }),
     authorizeIdentity(message) {
-      return (
-        message.clientKind !== "child" ||
-        (message.clientId === "child-client-1" && message.agentId === "agent-1")
-      );
+      return message.clientKind !== "child" || message.agentId === "agent-1";
     },
     handleRequest(message) {
       handled.push(message);
@@ -164,6 +162,16 @@ test("request parsing rejects unknown versions, fields, identities, and deep pay
         agentId: null,
       }),
     /child clients require an agentId/u,
+  );
+  assert.throws(
+    () =>
+      parseControllerRequest({
+        ...request(),
+        clientKind: "child",
+        clientId: "not-a-uuid",
+        agentId: "agent-1",
+      }),
+    /unique UUID connection identity/u,
   );
   assert.throws(
     () => parseControllerRequest({ ...request(), agentId: "agent-1" }),
@@ -273,6 +281,17 @@ test("fragmented requests are authenticated and decoded before handling", async 
   }
 });
 
+test("child capabilities bind unambiguous run and agent tuples", () => {
+  assert.notEqual(
+    deriveChildAuthToken(AUTH_TOKEN, "a\u0000b", "c"),
+    deriveChildAuthToken(AUTH_TOKEN, "a", "b\u0000c"),
+  );
+  assert.notEqual(
+    deriveChildAuthToken(AUTH_TOKEN, "run-1", "agent-1"),
+    deriveChildAuthToken(AUTH_TOKEN, "run-1", "agent-2"),
+  );
+});
+
 test("bad token, wrong run, and mismatched child identity fail closed", async () => {
   const fixture = createServerFixture();
   try {
@@ -292,19 +311,36 @@ test("bad token, wrong run, and mismatched child identity fail closed", async ()
     assert.equal(wrongRun.ok, false);
     assert.equal(wrongRun.error.code, "unauthorized");
 
+    const validChildToken = deriveChildAuthToken(
+      AUTH_TOKEN,
+      "run-1",
+      "agent-1",
+    );
+    const validChild = await rawRequest(
+      fixture.socketPath,
+      request({
+        requestId: "valid-child",
+        clientId: "12345678-1234-4123-8123-123456789abc",
+        clientKind: "child",
+        agentId: "agent-1",
+        authToken: validChildToken,
+      }),
+    );
+    assert.equal(validChild.ok, true);
+
     const wrongAgent = await rawRequest(
       fixture.socketPath,
       request({
         requestId: "wrong-agent",
-        clientId: "child-client-1",
+        clientId: "87654321-4321-4321-8321-cba987654321",
         clientKind: "child",
         agentId: "agent-2",
-        sequence: 3,
+        authToken: validChildToken,
       }),
     );
     assert.equal(wrongAgent.ok, false);
     assert.equal(wrongAgent.error.code, "unauthorized");
-    assert.equal(fixture.handled.length, 0);
+    assert.equal(fixture.handled.length, 1);
   } finally {
     await fixture.server.close();
     rmSync(fixture.directory, { recursive: true, force: true });

@@ -30,7 +30,8 @@ Roles requiring network access must declare that requirement in their role and a
 Network access does not expand filesystem or credential access.
 
 Only an explicit environment allowlist reaches a child process.
-Controller tokens, run identity, child identity, terminal metadata, model configuration, and approved provider credentials are passed deliberately.
+Run identity, child identity, terminal metadata, model configuration, approved provider credentials, the controller socket path, and the path to a per-agent capability file are passed deliberately.
+The administrative controller token and capability content never appear in child process arguments or environment values.
 Unrelated secrets and parent environment variables are omitted.
 
 Before launch, the capability doctor requires a canonical root-owned, non-writable Bubblewrap executable with parseable version output and runs a live sandbox probe.
@@ -46,8 +47,10 @@ Agentworks exposes only the required paths, read-only wherever possible.
 The child receives a dedicated writable session directory rather than the parent's session directory.
 Agentworks does not expose the parent conversation unless a future explicitly approved fork-context feature provides a redacted copy.
 
-The child bridge is loaded in a dormant mode by default.
-It activates only when a valid Agentworks launch contract is present.
+The child bridge is loaded in a dormant mode by default and registers no hooks or tools unless the exact child marker is present.
+The controller derives a run-and-agent-specific HMAC capability from its administrative token, and the launcher writes it to a private file rebound read-only inside the sandbox.
+Exact child mode requires that private regular file and a real private Unix socket, performs an authenticated identity hello with a fresh connection UUID, and verifies the controller's exact run and agent response.
+Authentication failure requests Pi shutdown and keeps a tool-call lockdown active, while a capability for one agent cannot authenticate as another.
 Child mode does not register the parent `agentworks` management tool, preventing recursive team creation.
 
 ## Git authority

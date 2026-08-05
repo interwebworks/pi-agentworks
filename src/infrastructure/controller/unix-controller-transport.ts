@@ -1,4 +1,9 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -110,6 +115,30 @@ function safeTokenMatch(candidate: string, expectedDigest: Buffer): boolean {
   return timingSafeEqual(tokenDigest(candidate), expectedDigest);
 }
 
+export function deriveChildAuthToken(
+  controllerAuthToken: string,
+  runId: string,
+  agentId: string,
+): string {
+  const token = nonEmpty(
+    controllerAuthToken,
+    "controller authentication token",
+  );
+  if (token.length < 32 || token.length > 512) {
+    throw new ControllerTransportError(
+      "Controller authentication token length must be from 32 to 512 characters",
+    );
+  }
+  const identity = JSON.stringify([
+    nonEmpty(runId, "run id"),
+    nonEmpty(agentId, "agent id"),
+  ]);
+  return createHmac("sha256", token)
+    .update("agentworks-child-v1\0", "utf8")
+    .update(identity, "utf8")
+    .digest("base64url");
+}
+
 function validateSocketPath(socketPath: string): string {
   const normalized = resolve(nonEmpty(socketPath, "controller socket path"));
   if (Buffer.byteLength(normalized, "utf8") > MAX_UNIX_SOCKET_PATH_BYTES) {
@@ -137,6 +166,7 @@ function protocolErrorResponse(
 export class UnixControllerServer {
   readonly #socketPath: string;
   readonly #runId: string;
+  readonly #authToken: string;
   readonly #authTokenDigest: Buffer;
   readonly #maxFrameBytes: number;
   readonly #maxConnections: number;
@@ -160,6 +190,7 @@ export class UnixControllerServer {
         "Authentication token length must be from 32 to 512 characters",
       );
     }
+    this.#authToken = authToken;
     this.#authTokenDigest = tokenDigest(authToken);
     this.#maxFrameBytes = positiveSafeInteger(
       options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES,
@@ -333,9 +364,19 @@ export class UnixControllerServer {
       throw error;
     }
 
+    const expectedTokenDigest =
+      request.clientKind === "child" && request.agentId !== null
+        ? tokenDigest(
+            deriveChildAuthToken(
+              this.#authToken,
+              request.runId,
+              request.agentId,
+            ),
+          )
+        : this.#authTokenDigest;
     if (
       request.runId !== this.#runId ||
-      !safeTokenMatch(request.authToken, this.#authTokenDigest) ||
+      !safeTokenMatch(request.authToken, expectedTokenDigest) ||
       !(await this.#authorizeIdentity(request))
     ) {
       this.#sendAndClose(
