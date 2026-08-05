@@ -38,6 +38,28 @@ export interface GitWorkspaceResult {
   readonly worktreePath: string;
 }
 
+export interface CreateCandidateCommitRequest {
+  readonly runId: string;
+  readonly storyId: string;
+  readonly operationId: string;
+  readonly originalCheckout: string;
+  readonly integrationBranch: string;
+  readonly expectedIntegrationHead: string;
+  readonly storyBranch: string;
+  readonly expectedStoryHead: string;
+  readonly worktreePath: string;
+  readonly subject: string;
+  readonly writerLeaseReleased: boolean;
+}
+
+export interface CandidateCommitResult {
+  readonly status: "created" | "existing";
+  readonly commit: string;
+  readonly parent: string;
+  readonly integrationHead: string;
+  readonly changedPaths: readonly string[];
+}
+
 export interface GitWorkspaceGateway {
   listWorktrees(originalCheckout: string): readonly GitWorktreeRecord[];
   createIntegrationWorkspace(
@@ -46,4 +68,7 @@ export interface GitWorkspaceGateway {
   createStoryWorkspace(
     request: CreateStoryWorkspaceRequest,
   ): GitWorkspaceResult;
+  createCandidateCommit(
+    request: CreateCandidateCommitRequest,
+  ): CandidateCommitResult;
 }

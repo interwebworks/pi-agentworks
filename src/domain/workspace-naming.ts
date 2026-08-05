@@ -9,6 +9,13 @@ function isSafeWorkspaceId(value: string): boolean {
   );
 }
 
+export function assertSafeWorkspaceId(value: string, label: string): string {
+  if (!isSafeWorkspaceId(value)) {
+    throw new InvalidWorkspaceIdentityError(`${label} is unsafe`);
+  }
+  return value;
+}
+
 export class InvalidWorkspaceIdentityError extends Error {
   constructor(message: string) {
     super(message);
@@ -17,19 +24,12 @@ export class InvalidWorkspaceIdentityError extends Error {
 }
 
 export function integrationBranchForRun(runId: string): string {
-  if (!isSafeWorkspaceId(runId)) {
-    throw new InvalidWorkspaceIdentityError(
-      "Run id is unsafe for Git workspace naming",
-    );
-  }
+  assertSafeWorkspaceId(runId, "Run id");
   return `agentworks/${runId}/integration`;
 }
 
 export function storyBranchForRun(runId: string, storyId: string): string {
-  if (!isSafeWorkspaceId(runId) || !isSafeWorkspaceId(storyId)) {
-    throw new InvalidWorkspaceIdentityError(
-      "Run and story ids are unsafe for Git workspace naming",
-    );
-  }
+  assertSafeWorkspaceId(runId, "Run id");
+  assertSafeWorkspaceId(storyId, "Story id");
   return `agentworks/${runId}/stories/${storyId}`;
 }

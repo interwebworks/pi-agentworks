@@ -2,6 +2,8 @@ import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import type {
+  CandidateCommitResult,
+  CreateCandidateCommitRequest,
   CreateIntegrationWorkspaceRequest,
   CreateStoryWorkspaceRequest,
   GitWorkspaceGateway,
@@ -9,6 +11,7 @@ import type {
   GitWorkspaceResult,
 } from "../../application/ports/git-workspace-gateway.ts";
 import {
+  assertSafeWorkspaceId,
   integrationBranchForRun,
   storyBranchForRun,
 } from "../../domain/workspace-naming.ts";
@@ -60,6 +63,79 @@ function positiveSafeInteger(value: number, label: string): number {
 function isWithin(candidate: string, parent: string): boolean {
   const path = relative(parent, candidate);
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+
+function validateCommitSubject(subject: string): string {
+  if (
+    subject.length < 1 ||
+    subject.length > 120 ||
+    subject.trim() !== subject
+  ) {
+    throw new GitWorkspaceError(
+      "Candidate commit subject must contain from 1 to 120 trimmed characters",
+    );
+  }
+  for (const character of subject) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 32 || code === 127) {
+      throw new GitWorkspaceError(
+        "Candidate commit subject cannot contain control characters",
+      );
+    }
+  }
+  return subject;
+}
+
+function fieldAfterSpaces(value: string, spaceCount: number): string {
+  let offset = -1;
+  for (let index = 0; index < spaceCount; index += 1) {
+    offset = value.indexOf(" ", offset + 1);
+    if (offset < 0) {
+      throw new GitWorkspaceError("Git returned malformed status data");
+    }
+  }
+  return value.slice(offset + 1);
+}
+
+function parseChangedPaths(serialized: string): readonly string[] {
+  if (serialized.length === 0) return [];
+  const paths = new Set<string>();
+  const records = serialized.split("\0");
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] ?? "";
+    if (record.length === 0) continue;
+    if (record.startsWith("u ")) {
+      throw new GitWorkspaceError(
+        "Candidate worktree contains unresolved merge conflicts",
+      );
+    }
+    if (record.startsWith("? ")) {
+      paths.add(record.slice(2));
+      continue;
+    }
+    if (record.startsWith("! ")) continue;
+    if (record.startsWith("1 ") || record.startsWith("2 ")) {
+      const fields = record.split(" ", 4);
+      const submodule = fields[2];
+      if (submodule?.startsWith("S") === true) {
+        throw new GitWorkspaceError(
+          "Candidate worktree contains unsupported submodule changes",
+        );
+      }
+      paths.add(fieldAfterSpaces(record, record.startsWith("2 ") ? 9 : 8));
+      if (record.startsWith("2 ")) {
+        const originalPath = records[index + 1];
+        if (originalPath === undefined || originalPath.length === 0) {
+          throw new GitWorkspaceError("Git returned malformed rename status");
+        }
+        paths.add(originalPath);
+        index += 1;
+      }
+      continue;
+    }
+    throw new GitWorkspaceError("Git returned an unknown status record");
+  }
+  return Object.freeze([...paths].sort());
 }
 
 function parseWorktrees(serialized: string): readonly GitWorktreeRecord[] {
@@ -208,6 +284,231 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       expectedBaseHead: request.expectedIntegrationHead,
       branch: request.storyBranch,
       worktreePath: request.worktreePath,
+    });
+  }
+
+  createCandidateCommit(
+    request: CreateCandidateCommitRequest,
+  ): CandidateCommitResult {
+    assertSafeWorkspaceId(request.operationId, "Candidate operation id");
+    if (request.integrationBranch !== integrationBranchForRun(request.runId)) {
+      throw new GitWorkspaceError(
+        "Candidate integration branch does not match the run identity",
+      );
+    }
+    if (
+      request.storyBranch !== storyBranchForRun(request.runId, request.storyId)
+    ) {
+      throw new GitWorkspaceError(
+        "Candidate story branch does not match the story identity",
+      );
+    }
+    if (!request.writerLeaseReleased) {
+      throw new GitWorkspaceError(
+        "Candidate commit requires the writer lease to be released",
+      );
+    }
+    if (
+      !OBJECT_ID_PATTERN.test(request.expectedStoryHead) ||
+      !OBJECT_ID_PATTERN.test(request.expectedIntegrationHead)
+    ) {
+      throw new GitWorkspaceError("Candidate commit evidence is invalid");
+    }
+    const subject = validateCommitSubject(request.subject);
+    const checkout = realpathSync(resolve(request.originalCheckout));
+    const worktreePath = realpathSync(resolve(request.worktreePath));
+    const worktree = this.listWorktrees(checkout).find(
+      (record) => record.path === worktreePath,
+    );
+    if (
+      worktree?.branch !== request.storyBranch ||
+      worktree.detached ||
+      worktree.bare ||
+      worktree.prunable
+    ) {
+      throw new GitWorkspaceError(
+        "Candidate worktree is not the registered story branch worktree",
+      );
+    }
+
+    const currentStoryHead = this.#required(worktreePath, [
+      "rev-parse",
+      "--verify",
+      `refs/heads/${request.storyBranch}^{commit}`,
+    ]);
+    const message = this.#candidateCommitMessage(request, subject);
+    if (worktree.head !== currentStoryHead) {
+      throw new GitWorkspaceError(
+        "Candidate worktree HEAD does not match its story branch",
+      );
+    }
+    if (currentStoryHead !== request.expectedStoryHead) {
+      return this.#recoverCandidateCommit(
+        request,
+        worktreePath,
+        currentStoryHead,
+        message,
+      );
+    }
+    const integrationHead = this.#required(checkout, [
+      "rev-parse",
+      "--verify",
+      `refs/heads/${request.integrationBranch}^{commit}`,
+    ]);
+    if (integrationHead !== request.expectedIntegrationHead) {
+      throw new GitWorkspaceError(
+        "Integration HEAD changed before candidate commit creation",
+      );
+    }
+    const ancestry = this.#run(checkout, [
+      "merge-base",
+      "--is-ancestor",
+      request.expectedIntegrationHead,
+      request.expectedStoryHead,
+    ]);
+    if (ancestry.status !== 0) {
+      throw new GitWorkspaceError(
+        "Expected integration commit is not an ancestor of the story HEAD",
+      );
+    }
+
+    const changedPaths = parseChangedPaths(
+      this.#safeRequired(worktreePath, [
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+      ]),
+    );
+    if (changedPaths.length === 0) {
+      throw new GitWorkspaceError(
+        "Candidate worktree has no changes to commit",
+      );
+    }
+    this.#mutate(worktreePath, ["add", "--all", "--", "."]);
+    const staged = this.#safeRun(worktreePath, ["diff", "--cached", "--quiet"]);
+    if (staged.status !== 1) {
+      throw new GitWorkspaceError(
+        staged.status === 0
+          ? "Candidate has no staged content after normalization"
+          : "Unable to verify staged candidate content",
+      );
+    }
+    this.#mutate(worktreePath, [
+      "commit",
+      "--no-verify",
+      "--no-gpg-sign",
+      "--cleanup=verbatim",
+      "-m",
+      message,
+    ]);
+    const commit = this.#required(worktreePath, ["rev-parse", "HEAD^{commit}"]);
+    const parent = this.#required(worktreePath, [
+      "rev-parse",
+      "HEAD^1^{commit}",
+    ]);
+    const persistedMessage = this.#required(worktreePath, [
+      "show",
+      "-s",
+      "--format=%B",
+      commit,
+    ]);
+    if (persistedMessage !== message) {
+      throw new GitWorkspaceError(
+        "Candidate commit metadata changed during commit creation",
+      );
+    }
+    if (parent !== request.expectedStoryHead) {
+      throw new GitWorkspaceError(
+        "Candidate commit parent does not match the expected story HEAD",
+      );
+    }
+    const remaining = parseChangedPaths(
+      this.#safeRequired(worktreePath, [
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+      ]),
+    );
+    if (remaining.length > 0) {
+      throw new GitWorkspaceError(
+        "Candidate worktree is not clean after commit creation",
+      );
+    }
+    return Object.freeze({
+      status: "created",
+      commit,
+      parent,
+      integrationHead: request.expectedIntegrationHead,
+      changedPaths,
+    });
+  }
+
+  #candidateCommitMessage(
+    request: CreateCandidateCommitRequest,
+    subject: string,
+  ): string {
+    return `${subject}\n\nAgentworks-Run: ${request.runId}\nAgentworks-Story: ${request.storyId}\nAgentworks-Base: ${request.expectedStoryHead}\nAgentworks-Integration: ${request.expectedIntegrationHead}\nAgentworks-Operation: ${request.operationId}`;
+  }
+
+  #recoverCandidateCommit(
+    request: CreateCandidateCommitRequest,
+    worktreePath: string,
+    currentStoryHead: string,
+    expectedMessage: string,
+  ): CandidateCommitResult {
+    const parent = this.#optional(worktreePath, [
+      "rev-parse",
+      "--verify",
+      `${currentStoryHead}^1^{commit}`,
+    ]);
+    const message = this.#required(worktreePath, [
+      "show",
+      "-s",
+      "--format=%B",
+      currentStoryHead,
+    ]);
+    if (parent !== request.expectedStoryHead || message !== expectedMessage) {
+      throw new GitWorkspaceError(
+        "Story branch advanced to a commit not owned by this candidate operation",
+      );
+    }
+    const remaining = parseChangedPaths(
+      this.#safeRequired(worktreePath, [
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+      ]),
+    );
+    if (remaining.length > 0) {
+      throw new GitWorkspaceError(
+        "Recovered candidate worktree contains changes after its commit",
+      );
+    }
+    const changedPaths = Object.freeze(
+      this.#required(worktreePath, [
+        "diff-tree",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        "-z",
+        currentStoryHead,
+      ])
+        .split("\0")
+        .filter((path) => path.length > 0)
+        .sort(),
+    );
+    return Object.freeze({
+      status: "existing",
+      commit: currentStoryHead,
+      parent,
+      integrationHead: request.expectedIntegrationHead,
+      changedPaths,
     });
   }
 
@@ -391,7 +692,6 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
   #safeMutationConfiguration(repositoryPath: string): readonly string[] {
     const filterKeys = this.#optional(repositoryPath, [
       "config",
-      "--local",
       "--name-only",
       "--get-regexp",
       "^filter\\..*\\.(clean|smudge|process|required)$",
@@ -412,6 +712,16 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       "core.fsmonitor=false",
       "-c",
       "protocol.file.allow=never",
+      "-c",
+      "commit.gpgSign=false",
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "-c",
+      "user.name=Agentworks Controller",
+      "-c",
+      "user.email=controller@agentworks.invalid",
     ];
     for (const prefix of prefixes) {
       configuration.push(
@@ -428,11 +738,29 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
     return Object.freeze(configuration);
   }
 
-  #mutate(repositoryPath: string, arguments_: readonly string[]): string {
-    return this.#required(repositoryPath, [
+  #safeRun(
+    repositoryPath: string,
+    arguments_: readonly string[],
+  ): GitCommandResult {
+    return this.#run(repositoryPath, [
       ...this.#safeMutationConfiguration(repositoryPath),
       ...arguments_,
     ]);
+  }
+
+  #safeRequired(repositoryPath: string, arguments_: readonly string[]): string {
+    const result = this.#safeRun(repositoryPath, arguments_);
+    if (result.status !== 0) {
+      throw new GitWorkspaceError(
+        `Safe Git operation failed: ${result.stderr || "unknown Git error"}`,
+        arguments_,
+      );
+    }
+    return result.stdout;
+  }
+
+  #mutate(repositoryPath: string, arguments_: readonly string[]): string {
+    return this.#safeRequired(repositoryPath, arguments_);
   }
 
   #required(repositoryPath: string, arguments_: readonly string[]): string {

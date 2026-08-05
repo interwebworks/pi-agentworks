@@ -82,6 +82,49 @@ function storyRequest(
   };
 }
 
+function candidateRequest(
+  repository: string,
+  storyId: string,
+  worktreePath: string,
+  expectedIntegrationHead: string,
+  expectedStoryHead = expectedIntegrationHead,
+) {
+  return {
+    runId: "run-1",
+    storyId,
+    operationId: `candidate-${storyId}`,
+    originalCheckout: repository,
+    integrationBranch: integrationBranchForRun("run-1"),
+    expectedIntegrationHead,
+    storyBranch: storyBranchForRun("run-1", storyId),
+    expectedStoryHead,
+    worktreePath,
+    subject: `Create candidate for ${storyId}`,
+    writerLeaseReleased: true,
+  };
+}
+
+function createStoryFixture(root: string) {
+  const repository = createRepository(root);
+  const gateway = new GitCliWorkspaceGateway();
+  const integrationPath = join(root, "integration");
+  const integration = gateway.createIntegrationWorkspace(
+    request(repository, integrationPath),
+  );
+  const storyPath = join(root, "story-1");
+  const storyWorkspace = gateway.createStoryWorkspace(
+    storyRequest(repository, "story-1", storyPath, integration.branchHead),
+  );
+  return {
+    repository,
+    gateway,
+    integrationPath,
+    integrationHead: integration.branchHead,
+    storyPath,
+    storyHead: storyWorkspace.branchHead,
+  };
+}
+
 test("creates and idempotently reuses a dedicated integration worktree", () => {
   const root = mkdtempSync(join(tmpdir(), "agentworks-workspace-"));
   try {
@@ -375,6 +418,276 @@ test("story paths cannot overlap existing worktrees or claim another story ident
     );
     assert.throws(() => storyBranchForRun("run-1", "story..lock"));
     assert.throws(() => storyBranchForRun("../run", "story-1"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("creates and recovers an exact controller-authored candidate commit", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-candidate-"));
+  try {
+    const fixture = createStoryFixture(root);
+    writeFileSync(join(fixture.repository, "original-only.txt"), "preserve\n");
+    writeFileSync(join(fixture.integrationPath, "pm-only.txt"), "preserve\n");
+    const originalStatus = git(fixture.repository, "status", "--porcelain=v1");
+    const integrationStatus = git(
+      fixture.integrationPath,
+      "status",
+      "--porcelain=v1",
+    );
+    git(fixture.storyPath, "mv", "README.md", "renamed README.md");
+    writeFileSync(join(fixture.storyPath, "renamed README.md"), "candidate\n");
+    writeFileSync(join(fixture.storyPath, "new file.txt"), "new\n");
+    const candidate = candidateRequest(
+      fixture.repository,
+      "story-1",
+      fixture.storyPath,
+      fixture.integrationHead,
+      fixture.storyHead,
+    );
+
+    const created = fixture.gateway.createCandidateCommit(candidate);
+    assert.equal(created.status, "created");
+    assert.equal(created.parent, fixture.storyHead);
+    assert.deepEqual(created.changedPaths, [
+      "README.md",
+      "new file.txt",
+      "renamed README.md",
+    ]);
+    assert.equal(git(fixture.storyPath, "status", "--porcelain=v1"), "");
+    assert.equal(
+      git(fixture.storyPath, "show", "-s", "--format=%an <%ae>", "HEAD"),
+      "Agentworks Controller <controller@agentworks.invalid>",
+    );
+    assert.match(
+      git(fixture.storyPath, "show", "-s", "--format=%B", "HEAD"),
+      /Agentworks-Operation: candidate-story-1/u,
+    );
+
+    const recovered = fixture.gateway.createCandidateCommit(candidate);
+    assert.equal(recovered.status, "existing");
+    assert.equal(recovered.commit, created.commit);
+    assert.deepEqual(recovered.changedPaths, created.changedPaths);
+    assert.equal(
+      git(fixture.repository, "status", "--porcelain=v1"),
+      originalStatus,
+    );
+    assert.equal(
+      git(fixture.integrationPath, "status", "--porcelain=v1"),
+      integrationStatus,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate creation fails closed for active leases, empty work, and stale integration", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-candidate-"));
+  try {
+    const fixture = createStoryFixture(root);
+    const candidate = candidateRequest(
+      fixture.repository,
+      "story-1",
+      fixture.storyPath,
+      fixture.integrationHead,
+    );
+    assert.throws(
+      () =>
+        fixture.gateway.createCandidateCommit({
+          ...candidate,
+          writerLeaseReleased: false,
+        }),
+      /writer lease to be released/u,
+    );
+    assert.throws(
+      () => fixture.gateway.createCandidateCommit(candidate),
+      /no changes to commit/u,
+    );
+
+    writeFileSync(join(fixture.integrationPath, "advance.txt"), "advance\n");
+    git(fixture.integrationPath, "add", "advance.txt");
+    git(fixture.integrationPath, "commit", "-m", "Advance integration");
+    writeFileSync(join(fixture.storyPath, "README.md"), "candidate\n");
+    assert.throws(
+      () => fixture.gateway.createCandidateCommit(candidate),
+      /Integration HEAD changed/u,
+    );
+    assert.throws(
+      () =>
+        fixture.gateway.createCandidateCommit({
+          ...candidate,
+          operationId: "../candidate",
+        }),
+      /unsafe/u,
+    );
+    assert.throws(
+      () =>
+        fixture.gateway.createCandidateCommit({
+          ...candidate,
+          subject: "bad\nsubject",
+        }),
+      /control characters/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate creation rejects an unresolved index before staging", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-candidate-"));
+  try {
+    const fixture = createStoryFixture(root);
+    const hashBlob = (content: string): string =>
+      execFileSync(
+        "git",
+        ["-C", fixture.storyPath, "hash-object", "-w", "--stdin"],
+        { encoding: "utf8", input: content },
+      ).trim();
+    const base = git(fixture.storyPath, "rev-parse", "HEAD:README.md");
+    const ours = hashBlob("ours\n");
+    const theirs = hashBlob("theirs\n");
+    const zeroObject = "0".repeat(base.length);
+    execFileSync(
+      "git",
+      ["-C", fixture.storyPath, "update-index", "--index-info"],
+      {
+        input: `0 ${zeroObject}\tREADME.md\n100644 ${base} 1\tREADME.md\n100644 ${ours} 2\tREADME.md\n100644 ${theirs} 3\tREADME.md\n`,
+      },
+    );
+    writeFileSync(
+      join(fixture.storyPath, "README.md"),
+      "<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n",
+    );
+    assert.throws(
+      () =>
+        fixture.gateway.createCandidateCommit(
+          candidateRequest(
+            fixture.repository,
+            "story-1",
+            fixture.storyPath,
+            fixture.integrationHead,
+          ),
+        ),
+      /unresolved merge conflicts/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate creation rejects submodule index changes", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-candidate-"));
+  try {
+    const fixture = createStoryFixture(root);
+    git(
+      fixture.storyPath,
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `160000,${fixture.storyHead},nested-repository`,
+    );
+    assert.throws(
+      () =>
+        fixture.gateway.createCandidateCommit(
+          candidateRequest(
+            fixture.repository,
+            "story-1",
+            fixture.storyPath,
+            fixture.integrationHead,
+          ),
+        ),
+      /unsupported submodule changes/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate mutation suppresses repository hooks, filters, and signing programs", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-candidate-"));
+  try {
+    const repository = createRepository(root);
+    const hookMarker = join(root, "commit-hook-executed");
+    const filterMarker = join(root, "clean-filter-executed");
+    const signerMarker = join(root, "signer-executed");
+    const hook = join(repository, ".git", "hooks", "post-commit");
+    const signer = join(root, "malicious-signer");
+    writeFileSync(signer, `#!/bin/sh\ntouch '${signerMarker}'\nexit 1\n`);
+    chmodSync(signer, 0o755);
+    writeFileSync(
+      join(repository, ".gitattributes"),
+      "README.md filter=evil\n",
+    );
+    git(
+      repository,
+      "config",
+      "filter.evil.clean",
+      `touch '${filterMarker}'; cat`,
+    );
+    git(repository, "config", "filter.evil.smudge", "cat");
+    git(repository, "config", "commit.gpgSign", "true");
+    git(repository, "config", "core.commentChar", "A");
+    git(repository, "config", "gpg.program", signer);
+    git(repository, "add", ".gitattributes");
+    git(
+      repository,
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "-m",
+      "Add attributes",
+    );
+    rmSync(filterMarker, { force: true });
+    writeFileSync(hook, `#!/bin/sh\ntouch '${hookMarker}'\n`);
+    chmodSync(hook, 0o755);
+
+    const gateway = new GitCliWorkspaceGateway();
+    const integrationPath = join(root, "integration");
+    const integration = gateway.createIntegrationWorkspace(
+      request(repository, integrationPath),
+    );
+    const storyPath = join(root, "story-1");
+    const story = gateway.createStoryWorkspace(
+      storyRequest(repository, "story-1", storyPath, integration.branchHead),
+    );
+    writeFileSync(join(storyPath, "README.md"), "safe candidate\n");
+    const result = gateway.createCandidateCommit(
+      candidateRequest(
+        repository,
+        "story-1",
+        storyPath,
+        integration.branchHead,
+        story.branchHead,
+      ),
+    );
+    assert.equal(result.status, "created");
+    assert.equal(existsSync(hookMarker), false);
+    assert.equal(existsSync(filterMarker), false);
+    assert.equal(existsSync(signerMarker), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate recovery rejects a branch advanced by another commit", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-candidate-"));
+  try {
+    const fixture = createStoryFixture(root);
+    const candidate = candidateRequest(
+      fixture.repository,
+      "story-1",
+      fixture.storyPath,
+      fixture.integrationHead,
+    );
+    writeFileSync(join(fixture.storyPath, "README.md"), "candidate\n");
+    fixture.gateway.createCandidateCommit(candidate);
+    writeFileSync(join(fixture.storyPath, "after.txt"), "unauthorized\n");
+    git(fixture.storyPath, "add", "after.txt");
+    git(fixture.storyPath, "commit", "-m", "Unrelated commit");
+    assert.throws(
+      () => fixture.gateway.createCandidateCommit(candidate),
+      /not owned by this candidate operation/u,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

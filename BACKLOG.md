@@ -32,7 +32,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Implement deterministic isolated branches/worktrees per writable story from exact integration-HEAD evidence, with idempotent attachment recovery and overlap rejection.
 - [x] Implement durable, fenced single-writer leases with acquire/renew/release/revoke audit history, monotonic tokens, restart validation, and hard reassignment/candidate gates.
 - [ ] Connect the tested merge, review-invalidation, and cleanup policies to real Git evidence.
-- [ ] Make the controller the sole Git mutator, including candidate commits requested by agents.
+- [x] Implement controller-authored candidate commits with exact branch/worktree/base evidence, released-lease gating, conflict/submodule rejection, hostile Git-config suppression, and crash-idempotent operation trailers.
+- [ ] Prove through the sandbox and live child E2E boundary that the controller is the sole Git mutator.
 - [ ] Prove with disposable-repository tests that the original checkout is never used as an agent cwd and remains unmodified.
 
 ## P3 - Roles, planning, and approvals

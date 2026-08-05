@@ -141,7 +141,9 @@ Commands resolve canonical repository and worktree paths before execution.
 
 Child sandboxes mount the host root and Git metadata read-only while mounting only the assigned worktree and narrowly scoped runtime paths read-write.
 Tool restrictions and cwd are defense in depth rather than the security boundary.
-The controller creates candidate commits after writer completion so review and merge operate on exact immutable commit identities.
+The controller creates candidate commits after durable writer-lease release so review and merge operate on exact immutable commit identities.
+Candidate creation verifies the registered story worktree/branch/HEAD tuple, unchanged integration evidence, ancestry, parseable conflict-free status, and non-submodule changes before staging all content with hostile hooks, filters, signing, filesystem monitors, and automatic maintenance disabled.
+Each commit contains exact run, story, base, integration, and operation trailers; a retry accepts an existing commit only when its parent and complete message match that operation and the worktree remains clean.
 
 Merge eligibility requires an approved reviewer result, successful required checks, a clean story worktree, the expected branch HEAD, and an unchanged integration base since review or a renewed review after rebasing.
 Cleanup requires merge ancestry proof and a clean worktree.

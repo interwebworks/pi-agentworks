@@ -56,7 +56,9 @@ Controller-created branches use deterministic run/story names and exact immutabl
 Integration worktree creation is idempotent across interrupted branch and attachment phases, rejects existing unregistered paths or mismatched branches, and verifies the registered worktree/branch/HEAD tuple after Git returns.
 Mutating Git commands disable repository hooks, filesystem monitors, file-protocol expansion, and configured clean/smudge/process filters so an untrusted repository cannot turn checkout into controller-code execution.
 
-After a writer reports completion, the controller verifies the worktree and creates a candidate commit.
+After a writer reports completion and its durable lease is released, the controller verifies the exact worktree, branch, story HEAD, integration HEAD, ancestry, status, and changed paths before creating a candidate commit.
+Status, staging, and commit commands run with effective clean/smudge/process filters neutralized, hooks and filesystem monitors disabled, signing and automatic maintenance disabled, and a fixed controller identity.
+The commit records immutable operation trailers, and recovery accepts it only when the exact parent, full message, registered worktree identity, and clean status match.
 Review targets an exact story commit and an exact integration-base commit.
 Any change to either identity invalidates approval.
 
