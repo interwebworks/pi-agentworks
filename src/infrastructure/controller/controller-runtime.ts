@@ -4,6 +4,8 @@ import {
   closeSync,
   constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -39,6 +41,10 @@ export const ControllerRuntimeDescriptorSchema = Type.Object(
     runId: Type.String({ minLength: 1, maxLength: 64 }),
     ownerId: Type.String({ minLength: 1, maxLength: 128 }),
     processId: Type.Integer({ minimum: 1 }),
+    processStartIdentity: Type.Union([
+      Type.Null(),
+      Type.String({ minLength: 1, maxLength: 128 }),
+    ]),
     startedAt: Type.Integer({ minimum: 0 }),
     leaseExpiresAt: Type.Integer({ minimum: 0 }),
     fencingToken: Type.Integer({ minimum: 1 }),
@@ -55,6 +61,7 @@ export interface ControllerRuntimeDescriptor {
   readonly runId: string;
   readonly ownerId: string;
   readonly processId: number;
+  readonly processStartIdentity: string | null;
   readonly startedAt: number;
   readonly leaseExpiresAt: number;
   readonly fencingToken: number;
@@ -86,6 +93,7 @@ export interface ControllerRuntimeOptions {
   readonly autoRenew?: boolean;
   readonly clock?: () => number;
   readonly processId?: number;
+  readonly processStartIdentity?: string | null;
   readonly repositoryFactory?: (databasePath: string) => ControllerRepository;
   readonly serverFactory?: (
     options: UnixControllerServerOptions,
@@ -118,6 +126,23 @@ function safeTimestamp(value: number, label: string): number {
     );
   }
   return value;
+}
+
+export function readProcessStartIdentity(processId: number): string | null {
+  positiveSafeInteger(processId, "process id");
+  try {
+    const stat = readFileSync(`/proc/${String(processId)}/stat`, "utf8");
+    const commandEnd = stat.lastIndexOf(")");
+    if (commandEnd < 0) return null;
+    const fields = stat
+      .slice(commandEnd + 1)
+      .trim()
+      .split(/\s+/u);
+    const startTime = fields[19];
+    return startTime === undefined ? null : `linux:${startTime}`;
+  } catch {
+    return null;
+  }
 }
 
 function assertRunId(runId: string): string {
@@ -161,25 +186,49 @@ function ensurePrivateDirectory(path: string): void {
   chmodSync(path, 0o700);
 }
 
-function assertPrivateRegularFile(path: string, label: string): void {
-  const status = lstatSync(path);
-  if (!status.isFile() || status.isSymbolicLink() || status.nlink !== 1) {
-    throw new ControllerRuntimeError(
-      `${label} must be one private regular file`,
-    );
+interface PrivateFileRead {
+  readonly content: string;
+  readonly device: number;
+  readonly inode: number;
+}
+
+function readPrivateRegularFile(path: string, label: string): PrivateFileRead {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const status = fstatSync(descriptor);
+    if (!status.isFile() || status.nlink !== 1) {
+      throw new ControllerRuntimeError(
+        `${label} must be one private regular file`,
+      );
+    }
+    if (
+      typeof process.getuid === "function" &&
+      status.uid !== process.getuid()
+    ) {
+      throw new ControllerRuntimeError(`${label} has a different owner`);
+    }
+    fchmodSync(descriptor, 0o600);
+    return Object.freeze({
+      content: readFileSync(descriptor, "utf8"),
+      device: status.dev,
+      inode: status.ino,
+    });
+  } finally {
+    closeSync(descriptor);
   }
-  if (typeof process.getuid === "function" && status.uid !== process.getuid()) {
-    throw new ControllerRuntimeError(`${label} has a different owner`);
-  }
-  chmodSync(path, 0o600);
 }
 
 function readExistingToken(tokenPath: string): string {
-  if (!existsSync(tokenPath)) {
-    throw new ControllerRuntimeError("Controller token file is missing");
+  let file: PrivateFileRead;
+  try {
+    file = readPrivateRegularFile(tokenPath, "Controller token");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new ControllerRuntimeError("Controller token file is missing");
+    }
+    throw error;
   }
-  assertPrivateRegularFile(tokenPath, "Controller token");
-  const token = readFileSync(tokenPath, "utf8").trim();
+  const token = file.content.trim();
   if (token.length < 32 || token.length > 512) {
     throw new ControllerRuntimeError(
       "Controller token file has invalid content",
@@ -207,7 +256,7 @@ function createOrReadToken(tokenPath: string): string {
   } finally {
     if (descriptor !== null) closeSync(descriptor);
   }
-  assertPrivateRegularFile(tokenPath, "Controller token");
+  readPrivateRegularFile(tokenPath, "Controller token");
   return token;
 }
 
@@ -274,9 +323,22 @@ function writeDescriptorAtomically(
 function removeOwnedDescriptor(descriptorPath: string, ownerId: string): void {
   if (!existsSync(descriptorPath)) return;
   try {
-    assertPrivateRegularFile(descriptorPath, "Controller descriptor");
-    const descriptor = parseDescriptor(readFileSync(descriptorPath, "utf8"));
-    if (descriptor.ownerId === ownerId) unlinkSync(descriptorPath);
+    const file = readPrivateRegularFile(
+      descriptorPath,
+      "Controller descriptor",
+    );
+    const descriptor = parseDescriptor(file.content);
+    if (descriptor.ownerId === ownerId) {
+      const current = lstatSync(descriptorPath);
+      if (
+        current.isFile() &&
+        !current.isSymbolicLink() &&
+        current.dev === file.device &&
+        current.ino === file.inode
+      ) {
+        unlinkSync(descriptorPath);
+      }
+    }
   } catch {
     // A malformed or replaced descriptor is not safe to remove automatically.
   }
@@ -332,11 +394,17 @@ export function discoverControllerRuntime(
   runId: string,
 ): DiscoveredControllerRuntime | null {
   const paths = resolveControllerRuntimePaths(runtimeRoot, runId);
-  if (!existsSync(paths.descriptorPath)) return null;
-  assertPrivateRegularFile(paths.descriptorPath, "Controller descriptor");
-  const descriptor = parseDescriptor(
-    readFileSync(paths.descriptorPath, "utf8"),
-  );
+  let descriptorFile: PrivateFileRead;
+  try {
+    descriptorFile = readPrivateRegularFile(
+      paths.descriptorPath,
+      "Controller descriptor",
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const descriptor = parseDescriptor(descriptorFile.content);
   if (
     descriptor.runId !== runId ||
     descriptor.runtimeDirectory !== paths.runtimeDirectory ||
@@ -361,6 +429,7 @@ export class ControllerRuntime {
   readonly #autoRenew: boolean;
   readonly #clock: () => number;
   readonly #processId: number;
+  readonly #processStartIdentity: string | null;
   readonly #repositoryFactory: (databasePath: string) => ControllerRepository;
   readonly #serverFactory: (
     options: UnixControllerServerOptions,
@@ -402,6 +471,8 @@ export class ControllerRuntime {
       options.processId ?? process.pid,
       "controller process id",
     );
+    this.#processStartIdentity =
+      options.processStartIdentity ?? readProcessStartIdentity(this.#processId);
     this.#repositoryFactory =
       options.repositoryFactory ??
       ((databasePath) => new SqliteControllerRepository(databasePath));
@@ -621,6 +692,7 @@ export class ControllerRuntime {
       runId: this.#runId,
       ownerId: this.#ownerId,
       processId: this.#processId,
+      processStartIdentity: this.#processStartIdentity,
       startedAt: this.#startedAt,
       leaseExpiresAt: lease.expiresAt,
       fencingToken: lease.fencingToken,
