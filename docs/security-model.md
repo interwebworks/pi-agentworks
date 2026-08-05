@@ -31,7 +31,9 @@ Only an explicit environment allowlist reaches a child process.
 Controller tokens, run identity, child identity, terminal metadata, model configuration, and approved provider credentials are passed deliberately.
 Unrelated secrets and parent environment variables are omitted.
 
-If Bubblewrap or another approved sandbox adapter is unavailable, Agentworks refuses to launch agents.
+Before launch, the capability doctor requires a canonical root-owned, non-writable Bubblewrap executable with parseable version output and runs a live sandbox probe.
+The probe proves distinct user, mount, PID, and network namespaces; disables and tests nested user-namespace creation; verifies the host root and Git metadata reject writes; verifies the assigned boundary accepts writes; and confirms a parent canary is absent after environment clearing.
+If any probe fails, the production launch gate returns no sandbox evidence and refuses to launch agents.
 LOW, NORMAL, and HIGH all use the same hard sandbox gate.
 A future platform adapter must pass the same boundary tests before it can advertise production support.
 

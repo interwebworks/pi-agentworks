@@ -47,7 +47,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P4 - Sandboxed execution
 
-- [ ] Implement a sandbox capability doctor and fail-closed launch gate.
+- [x] Implement a fail-closed Bubblewrap capability doctor and launch gate with trusted executable/version checks plus live user/mount/PID/network namespace, nested-userns, read-only root/Git, writable-boundary, and environment probes.
 - [ ] Implement the Linux Bubblewrap adapter with read-only host root and Git metadata.
 - [ ] Implement dedicated writable worktree, session, runtime, and temporary mounts.
 - [ ] Implement environment allowlisting and per-role network isolation.

@@ -70,6 +70,7 @@ Heartbeats prove process life but do not postpone a nudge when no meaningful wor
 The Project Manager and workers can request Git operations but cannot execute mutating Git commands directly.
 
 `SandboxGateway` enforces the child filesystem, Git metadata, environment, and network boundary outside the model process.
+Before the gateway may launch, `BubblewrapCapabilityDoctor` validates the trusted executable and proves the required namespaces and mount/environment behavior in a real throwaway sandbox; `ProductionSandboxLaunchGate` fails closed on any missing or partial evidence.
 The first production adapter uses Linux Bubblewrap and fails closed when its required capabilities are unavailable.
 
 `PiAgentLauncher` starts an interactive Pi agent inside the approved sandbox with an explicit role prompt, task specification, model, tool allowlist, session name, environment allowlist, and controller endpoint.
