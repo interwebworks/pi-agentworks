@@ -48,10 +48,10 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 ## P4 - Sandboxed execution
 
 - [x] Implement a fail-closed Bubblewrap capability doctor and launch gate with trusted executable/version checks plus live user/mount/PID/network namespace, nested-userns, read-only root/Git, writable-boundary, and environment probes.
-- [ ] Implement the Linux Bubblewrap adapter with read-only host root and Git metadata.
-- [ ] Implement dedicated writable worktree, session, runtime, and temporary mounts.
-- [ ] Implement environment allowlisting and per-role network isolation.
-- [ ] Prove that child writes outside the assigned worktree and disallowed network access fail.
+- [x] Implement the Linux Bubblewrap command planner with read-only host root/Git metadata, masked home/runtime/temp/media mounts, disabled nested user namespaces, and explicit approved re-exposure.
+- [x] Implement dedicated writable worktree and session mounts plus private temporary and read-only controller-runtime mounts.
+- [x] Implement strict environment allowlisting and explicit isolated-versus-approved-host network policy.
+- [x] Prove with live child probes that outside-worktree/Git/runtime/resource writes, home/runtime secret reads, parent environment leakage, and isolated-network default routes fail.
 
 ## P5 - Herdr integration
 

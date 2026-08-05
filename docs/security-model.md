@@ -18,8 +18,9 @@ The child bridge protocol is authenticated, bounded, versioned, and tied to one 
 
 The first supported production sandbox is Linux Bubblewrap.
 Agentworks runs every child Pi process inside a mount namespace with the host root mounted read-only.
-The assigned worktree is the only project-content path mounted read-write.
-A private temporary directory, dedicated Pi session directory, and narrowly scoped Agentworks runtime paths are mounted read-write as required.
+Because read-only is not read-denial, the adapter overlays private tmpfs mounts on the host home tree, `/run`, `/tmp`, `/var/tmp`, `/mnt`, and `/media`, then selectively re-exposes only approved paths.
+The assigned worktree and dedicated session directory are the only persistent host paths mounted read-write; temporary storage is private tmpfs and the controller runtime is read-only because connecting to its Unix socket does not require directory mutation.
+The assigned worktree `.git` marker and all common/per-worktree Git metadata are explicitly rebound read-only after the writable worktree mount.
 Git metadata remains read-only inside child sandboxes.
 The original checkout remains read-only and is never the child cwd.
 

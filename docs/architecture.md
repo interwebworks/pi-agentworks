@@ -140,7 +140,9 @@ A snapshot cannot reassign a story, remove or close its writer, or move past the
 Reassignment therefore revokes or releases the exact current token first, returns the story to ready, assigns the replacement, and acquires a higher token that fences out the former writer.
 Commands resolve canonical repository and worktree paths before execution.
 
-Child sandboxes mount the host root and Git metadata read-only while mounting only the assigned worktree and narrowly scoped runtime paths read-write.
+Child sandboxes mount the host root read-only, mask host home/runtime/temporary/removable-media trees with private tmpfs mounts, and selectively rebind approved resources.
+Only the assigned worktree and dedicated session path are persistent writable mounts; the worktree `.git` marker, common Git metadata, controller runtime, and approved Pi resources are rebound read-only after writable mounts.
+The command plan clears the inherited environment, adds only validated non-reserved entries, disables capabilities and nested user namespaces, and unshares networking unless the role has an approved network requirement.
 Tool restrictions and cwd are defense in depth rather than the security boundary.
 The controller creates candidate commits after durable writer-lease release so review and merge operate on exact immutable commit identities.
 Candidate creation verifies the registered story worktree/branch/HEAD tuple, unchanged integration evidence, ancestry, parseable conflict-free status, and non-submodule changes before staging all content with hostile hooks, filters, signing, filesystem monitors, and automatic maintenance disabled.
