@@ -8,8 +8,10 @@ import {
   type HerdrAgentSessionReport,
   type HerdrCapabilityEvidence,
   type HerdrCreateTabRequest,
+  type HerdrFocusDirection,
   type HerdrGateway,
   type HerdrPane,
+  type HerdrPaneFocusResult,
   type HerdrPaneLayout,
   type HerdrPaneMetadataReport,
   type HerdrPaneProcessInfo,
@@ -207,6 +209,24 @@ const TabCreatedResultSchema = Type.Object(
 );
 const LayoutResultSchema = Type.Object(
   { type: Type.Literal("pane_layout"), layout: LayoutSchema },
+  { additionalProperties: false },
+);
+const FocusResultSchema = Type.Object(
+  {
+    type: Type.Literal("pane_focus_direction"),
+    focus: Type.Object(
+      {
+        changed: Type.Boolean(),
+        source_pane_id: Identifier,
+        focused_pane_id: Type.Optional(Type.Union([Type.Null(), Identifier])),
+        reason: Type.Optional(
+          Type.Union([Type.Null(), Type.Literal("no_neighbor")]),
+        ),
+        layout: LayoutSchema,
+      },
+      { additionalProperties: false },
+    ),
+  },
   { additionalProperties: false },
 );
 const ProcessInfoResultSchema = Type.Object(
@@ -593,6 +613,30 @@ export class HerdrCliGateway implements HerdrGateway {
       ["tab", "focus", assertIdentifier(tabId, "tab")],
       TabInfoResultSchema,
     );
+  }
+
+  async focusPaneNeighbor(
+    paneId: string,
+    direction: HerdrFocusDirection,
+  ): Promise<HerdrPaneFocusResult> {
+    const result = await this.#success(
+      [
+        "pane",
+        "focus",
+        "--pane",
+        assertIdentifier(paneId, "pane"),
+        "--direction",
+        direction,
+      ],
+      FocusResultSchema,
+    );
+    return Object.freeze({
+      changed: result.focus.changed,
+      sourcePaneId: result.focus.source_pane_id,
+      focusedPaneId: result.focus.focused_pane_id ?? null,
+      reason: result.focus.reason ?? null,
+      layout: rawLayout(result.focus.layout),
+    });
   }
 
   closeTab(tabId: string): Promise<void> {

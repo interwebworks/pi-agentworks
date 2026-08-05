@@ -42,6 +42,21 @@ const PANE = {
   state_labels: { working: "BUILD" },
   tokens: { run: "run-1" },
 };
+const LAYOUT = {
+  workspace_id: "w1P",
+  tab_id: "w1P:t2",
+  zoomed: false,
+  area: { x: 0, y: 0, width: 200, height: 80 },
+  focused_pane_id: "w1P:p4",
+  panes: [
+    {
+      pane_id: "w1P:p4",
+      focused: true,
+      rect: { x: 0, y: 0, width: 200, height: 80 },
+    },
+  ],
+  splits: [],
+};
 
 class FakeExecutor implements HerdrCommandExecutor {
   readonly calls: {
@@ -100,21 +115,7 @@ test("protocol-pinned reads map bounded Herdr responses into domain evidence", a
       id: "cli:pane:layout",
       result: {
         type: "pane_layout",
-        layout: {
-          workspace_id: "w1P",
-          tab_id: "w1P:t2",
-          zoomed: false,
-          area: { x: 0, y: 0, width: 200, height: 80 },
-          focused_pane_id: "w1P:p4",
-          panes: [
-            {
-              pane_id: "w1P:p4",
-              focused: true,
-              rect: { x: 0, y: 0, width: 200, height: 80 },
-            },
-          ],
-          splits: [],
-        },
+        layout: LAYOUT,
       },
     },
     {
@@ -201,6 +202,19 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     "",
     "",
     "",
+    { id: "cli:tab:focus", result: { type: "tab_info", tab: TAB } },
+    {
+      id: "cli:pane:focus",
+      result: {
+        type: "pane_focus_direction",
+        focus: {
+          changed: true,
+          source_pane_id: "w1P:p5",
+          focused_pane_id: "w1P:p4",
+          layout: LAYOUT,
+        },
+      },
+    },
     ok,
     ok,
   ]);
@@ -265,6 +279,11 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     "Builder 01",
     10,
   );
+  await client.focusTab("w1P:t2");
+  assert.equal(
+    (await client.focusPaneNeighbor("w1P:p5", "left")).focusedPaneId,
+    "w1P:p4",
+  );
   await client.closePane("w1P:p5");
   await client.closeTab("w1P:t2");
 
@@ -318,6 +337,14 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     "session-1",
     "--session-start-source",
     "agentworks",
+  ]);
+  assert.deepEqual(executor.calls[13]?.arguments_, [
+    "pane",
+    "focus",
+    "--pane",
+    "w1P:p5",
+    "--direction",
+    "left",
   ]);
 });
 

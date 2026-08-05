@@ -58,7 +58,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Implement protocol-17-pinned, bounded typed Herdr command/response adapters for tab, pane, layout, process, lifecycle, metadata, focus, close, text, and safely quoted terminal-run operations.
 - [x] Implement the parent-tab right management-pane lifecycle with atomic shell-environment ownership tags, exact right-sibling layout validation, metadata reconciliation, duplicate/spoof refusal, and interrupted-split recovery.
 - [x] Implement the crash-recoverable `Pi Agents` tab and deterministic balanced binary-split grids from 1 through 16 panes, with exact slot ownership, no-focus creation, idempotent partial completion, and geometry validation.
-- [ ] Implement pane focus, labels, metadata, process detection, and recovery.
+- [x] Implement exact pane focus through verified directional-neighbor selection plus tab focus, along with ownership-bound labels, metadata, stable shell-process detection, partial lifecycle recovery, and identity-drift refusal.
 - [ ] Implement deduplicated Herdr visual and audio alerts.
 
 ## P6 - Interactive Pi agents

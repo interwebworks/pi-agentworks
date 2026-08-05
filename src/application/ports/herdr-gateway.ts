@@ -82,6 +82,16 @@ export interface HerdrProcess {
   readonly cwd: string | null;
 }
 
+export type HerdrFocusDirection = "left" | "right" | "up" | "down";
+
+export interface HerdrPaneFocusResult {
+  readonly changed: boolean;
+  readonly sourcePaneId: string;
+  readonly focusedPaneId: string | null;
+  readonly reason: "no_neighbor" | null;
+  readonly layout: HerdrPaneLayout;
+}
+
 export interface HerdrPaneProcessInfo {
   readonly paneId: string;
   readonly shellPid: number | null;
@@ -153,6 +163,10 @@ export interface HerdrGateway {
   renameTab(tabId: string, label: string): Promise<void>;
   renamePane(paneId: string, label: string): Promise<void>;
   focusTab(tabId: string): Promise<void>;
+  focusPaneNeighbor(
+    paneId: string,
+    direction: HerdrFocusDirection,
+  ): Promise<HerdrPaneFocusResult>;
   closeTab(tabId: string): Promise<void>;
   closePane(paneId: string): Promise<void>;
   runCommand(paneId: string, command: readonly string[]): Promise<void>;

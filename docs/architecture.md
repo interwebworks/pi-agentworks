@@ -110,6 +110,7 @@ The grid planner maps every agent count from one through sixteen to landscape-bi
 It first creates equal-height rows with deterministic down splits, then creates equal-width cells inside each row with deterministic right splits; no placeholder panes are created.
 The lifecycle validates unique controller pane identities, exact assignment cwd values, dedicated-tab ownership, contiguous row/column geometry, full tab coverage, and dimensions balanced within terminal rounding.
 Layout operations are idempotent against both controller pane records and live shell-environment evidence.
+Because Herdr exposes directional focus rather than direct pane-ID focus, Agentworks finds edge-adjacent source panes from the live geometry, tries candidates in deterministic overlap order, accepts only a response naming the exact target, focuses the target tab, and re-reads the layout to verify retained focus.
 The adapter validates returned pane IDs before launching any process.
 
 ## Child protocol
