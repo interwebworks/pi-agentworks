@@ -103,11 +103,13 @@ The management pane splits the parent pane to the right without taking focus and
 The split atomically injects run, operation, parent-pane, and pane-kind ownership tags into the new shell environment before any later rename or metadata side effect.
 Recovery binds `/proc/<shell-pid>/environ` to stable pre/post Herdr process evidence, then reconciles display metadata only when the environment tags, controller pane identity, cwd, tab, workspace, and exact right-sibling geometry agree.
 This allows a crash immediately after split to recover without adopting or deleting an unrelated pane; duplicate, spoofed, or moved claims block for reconciliation.
-The `Pi Agents` tab is created in the same workspace.
+The `Pi Agents` tab is created in the same workspace without taking focus.
+Its root shell and every split shell receive atomic run, operation, agent, and numeric-slot ownership tags, allowing a partially built grid to resume after any successful external split.
 
-The grid planner maps an agent count to rows and columns with no more than sixteen cells.
-The Herdr adapter builds a deterministic binary split tree because Herdr exposes right and down splits rather than a direct grid primitive.
-Layout operations are idempotent against controller pane records.
+The grid planner maps every agent count from one through sixteen to landscape-biased rows whose pane counts differ by at most one.
+It first creates equal-height rows with deterministic down splits, then creates equal-width cells inside each row with deterministic right splits; no placeholder panes are created.
+The lifecycle validates unique controller pane identities, exact assignment cwd values, dedicated-tab ownership, contiguous row/column geometry, full tab coverage, and dimensions balanced within terminal rounding.
+Layout operations are idempotent against both controller pane records and live shell-environment evidence.
 The adapter validates returned pane IDs before launching any process.
 
 ## Child protocol
