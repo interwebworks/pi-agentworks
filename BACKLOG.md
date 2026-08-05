@@ -39,9 +39,9 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P3 - Roles, planning, and approvals
 
-- [ ] Implement software-development, writing-and-authorship, research, and general-delivery role packs.
-- [ ] Implement task-aware team composition within LOW, NORMAL, and HIGH limits.
-- [ ] Implement complete user-story and assignment generation.
+- [x] Implement software-development, writing-and-authorship, research, and general-delivery role packs.
+- [x] Implement task-aware team composition within LOW, NORMAL, and HIGH limits.
+- [x] Implement complete user-story and assignment generation.
 - [ ] Implement mode-specific TUI approvals, including mandatory LOW and NORMAL model confirmation.
 - [ ] Implement Project Manager tuning and supervisor messages from the parent.
 
