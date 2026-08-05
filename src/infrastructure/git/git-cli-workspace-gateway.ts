@@ -3,6 +3,8 @@ import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import type {
   CandidateCommitResult,
+  CleanupStoryWorkspaceRequest,
+  CleanupStoryWorkspaceResult,
   CreateCandidateCommitRequest,
   CreateIntegrationWorkspaceRequest,
   CreateStoryWorkspaceRequest,
@@ -12,7 +14,10 @@ import type {
   MergeCandidateRequest,
   MergeCandidateResult,
 } from "../../application/ports/git-workspace-gateway.ts";
-import { assessMergeEligibility } from "../../domain/execution-policy.ts";
+import {
+  assessCleanupEligibility,
+  assessMergeEligibility,
+} from "../../domain/execution-policy.ts";
 import {
   assertSafeWorkspaceId,
   integrationBranchForRun,
@@ -100,7 +105,10 @@ function fieldAfterSpaces(value: string, spaceCount: number): string {
   return value.slice(offset + 1);
 }
 
-function parseChangedPaths(serialized: string): readonly string[] {
+function parseChangedPaths(
+  serialized: string,
+  includeIgnored = false,
+): readonly string[] {
   if (serialized.length === 0) return [];
   const paths = new Set<string>();
   const records = serialized.split("\0");
@@ -116,7 +124,10 @@ function parseChangedPaths(serialized: string): readonly string[] {
       paths.add(record.slice(2));
       continue;
     }
-    if (record.startsWith("! ")) continue;
+    if (record.startsWith("! ")) {
+      if (includeIgnored) paths.add(record.slice(2));
+      continue;
+    }
     if (record.startsWith("1 ") || record.startsWith("2 ")) {
       const fields = record.split(" ", 4);
       const submodule = fields[2];
@@ -631,6 +642,203 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       expectedTree,
       "created",
     );
+  }
+
+  cleanupStoryWorkspace(
+    request: CleanupStoryWorkspaceRequest,
+  ): CleanupStoryWorkspaceResult {
+    assertSafeWorkspaceId(request.operationId, "Cleanup operation id");
+    assertSafeWorkspaceId(request.mergeOperationId, "Merge operation id");
+    assertSafeWorkspaceId(request.reviewerAgentId, "Reviewer agent id");
+    if (request.integrationBranch !== integrationBranchForRun(request.runId)) {
+      throw new GitWorkspaceError(
+        "Cleanup integration branch does not match the run identity",
+      );
+    }
+    if (
+      request.storyBranch !== storyBranchForRun(request.runId, request.storyId)
+    ) {
+      throw new GitWorkspaceError(
+        "Cleanup story branch does not match the story identity",
+      );
+    }
+    if (
+      !OBJECT_ID_PATTERN.test(request.candidateCommit) ||
+      !OBJECT_ID_PATTERN.test(request.reviewedIntegrationHead) ||
+      !OBJECT_ID_PATTERN.test(request.mergeCommit)
+    ) {
+      throw new GitWorkspaceError("Cleanup commit evidence is invalid");
+    }
+    const mergeSubject = validateCommitSubject(request.mergeSubject);
+    const checkout = realpathSync(resolve(request.originalCheckout));
+    const integrationPath = realpathSync(
+      resolve(request.integrationWorktreePath),
+    );
+    const storyRequestedPath = resolve(request.storyWorktreePath);
+    const storyPath = existsSync(storyRequestedPath)
+      ? realpathSync(storyRequestedPath)
+      : storyRequestedPath;
+    const worktrees = this.listWorktrees(checkout);
+    const integrationWorktree = worktrees.find(
+      (record) => record.path === integrationPath,
+    );
+    const currentIntegrationHead = this.#required(integrationPath, [
+      "rev-parse",
+      "HEAD^{commit}",
+    ]);
+    if (
+      integrationWorktree?.branch !== request.integrationBranch ||
+      integrationWorktree.head !== currentIntegrationHead ||
+      integrationWorktree.detached ||
+      integrationWorktree.bare ||
+      integrationWorktree.prunable
+    ) {
+      throw new GitWorkspaceError(
+        "Cleanup integration worktree identity is invalid",
+      );
+    }
+
+    const expectedMergeMessage = `${mergeSubject}\n\nAgentworks-Run: ${request.runId}\nAgentworks-Story: ${request.storyId}\nAgentworks-Candidate: ${request.candidateCommit}\nAgentworks-Integration: ${request.reviewedIntegrationHead}\nAgentworks-Reviewer: ${request.reviewerAgentId}\nAgentworks-Operation: ${request.mergeOperationId}`;
+    const mergeParents = this.#required(checkout, [
+      "show",
+      "-s",
+      "--format=%P",
+      request.mergeCommit,
+    ]).split(" ");
+    const mergeMessage = this.#required(checkout, [
+      "show",
+      "-s",
+      "--format=%B",
+      request.mergeCommit,
+    ]);
+    if (
+      mergeParents.length !== 2 ||
+      mergeParents[0] !== request.reviewedIntegrationHead ||
+      mergeParents[1] !== request.candidateCommit ||
+      mergeMessage !== expectedMergeMessage
+    ) {
+      throw new GitWorkspaceError(
+        "Cleanup merge evidence is not owned by the expected operation",
+      );
+    }
+    const ancestry = this.#run(checkout, [
+      "merge-base",
+      "--is-ancestor",
+      request.mergeCommit,
+      currentIntegrationHead,
+    ]);
+    const storyMergedIntoIntegration = ancestry.status === 0;
+
+    const branchWorktree = worktrees.find(
+      (record) => record.branch === request.storyBranch,
+    );
+    const pathWorktree = worktrees.find((record) => record.path === storyPath);
+    if (branchWorktree?.path !== pathWorktree?.path) {
+      throw new GitWorkspaceError(
+        "Cleanup story branch and worktree registration do not match",
+      );
+    }
+    if (
+      pathWorktree !== undefined &&
+      (pathWorktree.branch !== request.storyBranch ||
+        pathWorktree.head !== request.candidateCommit ||
+        pathWorktree.detached ||
+        pathWorktree.bare ||
+        pathWorktree.prunable ||
+        pathWorktree.locked)
+    ) {
+      throw new GitWorkspaceError("Cleanup story worktree identity is invalid");
+    }
+    if (pathWorktree === undefined && existsSync(storyPath)) {
+      throw new GitWorkspaceError(
+        "Unregistered content exists at the cleanup worktree path",
+      );
+    }
+    const branchHead = this.#optional(checkout, [
+      "rev-parse",
+      "--verify",
+      `refs/heads/${request.storyBranch}^{commit}`,
+    ]);
+    if (branchHead !== null && branchHead !== request.candidateCommit) {
+      throw new GitWorkspaceError(
+        "Cleanup story branch no longer points to the reviewed candidate",
+      );
+    }
+    if (pathWorktree !== undefined && branchHead === null) {
+      throw new GitWorkspaceError(
+        "Cleanup story worktree has lost its branch reference",
+      );
+    }
+
+    let worktreeClean = true;
+    if (pathWorktree !== undefined) {
+      const changes = parseChangedPaths(
+        this.#safeRequired(storyPath, [
+          "status",
+          "--porcelain=v2",
+          "-z",
+          "--untracked-files=all",
+          "--ignored=matching",
+          "--ignore-submodules=none",
+        ]),
+        true,
+      );
+      worktreeClean = changes.length === 0;
+    }
+    const policy = assessCleanupEligibility({
+      controllerLeaseCurrent: request.controllerLeaseCurrent,
+      expectedRevisionMatches: request.expectedRevisionMatches,
+      worktreeClean,
+      storyMergedIntoIntegration,
+      writerLeaseReleased: request.writerLeaseReleased,
+      agentClosed: request.agentClosed,
+      worktreeBelongsToRun: true,
+    });
+    if (!policy.allowed) {
+      throw new GitWorkspaceError(
+        `Cleanup policy denied removal: ${policy.reasons.join("; ")}`,
+      );
+    }
+
+    const hadWorktree = pathWorktree !== undefined;
+    const hadBranch = branchHead !== null;
+    if (hadWorktree) {
+      this.#mutate(checkout, ["worktree", "remove", "--", storyPath]);
+      const remainingWorktree = this.listWorktrees(checkout).find(
+        (record) =>
+          record.path === storyPath || record.branch === request.storyBranch,
+      );
+      if (remainingWorktree !== undefined || existsSync(storyPath)) {
+        throw new GitWorkspaceError(
+          "Git did not completely remove the story worktree",
+        );
+      }
+    }
+    if (hadBranch) {
+      this.#mutate(checkout, [
+        "update-ref",
+        "-d",
+        `refs/heads/${request.storyBranch}`,
+        request.candidateCommit,
+      ]);
+      if (
+        this.#optional(checkout, [
+          "rev-parse",
+          "--verify",
+          `refs/heads/${request.storyBranch}^{commit}`,
+        ]) !== null
+      ) {
+        throw new GitWorkspaceError(
+          "Git did not delete the exact story branch",
+        );
+      }
+    }
+    return Object.freeze({
+      status: hadWorktree ? "removed" : hadBranch ? "recovered" : "existing",
+      worktreeAbsent: true,
+      branchAbsent: true,
+      mergeCommit: request.mergeCommit,
+    });
   }
 
   #assertCleanWorktree(worktreePath: string, label: string): void {

@@ -25,6 +25,7 @@ import {
 function git(cwd: string, ...arguments_: string[]): string {
   return execFileSync("git", ["-C", cwd, ...arguments_], {
     encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
   }).trim();
 }
@@ -166,6 +167,40 @@ function createCandidateFixture(root: string) {
     ),
   );
   return { ...fixture, candidateCommit: candidate.commit };
+}
+
+function cleanupRequest(
+  fixture: ReturnType<typeof createCandidateFixture>,
+  mergeCommit: string,
+) {
+  return {
+    runId: "run-1",
+    storyId: "story-1",
+    operationId: "cleanup-story-1",
+    originalCheckout: fixture.repository,
+    integrationBranch: integrationBranchForRun("run-1"),
+    integrationWorktreePath: fixture.integrationPath,
+    storyBranch: storyBranchForRun("run-1", "story-1"),
+    storyWorktreePath: fixture.storyPath,
+    candidateCommit: fixture.candidateCommit,
+    reviewedIntegrationHead: fixture.integrationHead,
+    mergeCommit,
+    mergeOperationId: "merge-story-1",
+    mergeSubject: "Merge candidate for story-1",
+    reviewerAgentId: "reviewer-1",
+    writerLeaseReleased: true,
+    agentClosed: true,
+    controllerLeaseCurrent: true,
+    expectedRevisionMatches: true,
+  };
+}
+
+function createMergedFixture(root: string) {
+  const fixture = createCandidateFixture(root);
+  const merged = fixture.gateway.mergeCandidate(
+    mergeRequest(fixture, fixture.candidateCommit),
+  );
+  return { ...fixture, mergeCommit: merged.mergeCommit };
 }
 
 test("creates and idempotently reuses a dedicated integration worktree", () => {
@@ -883,5 +918,164 @@ test("merge fails when integration or candidate identity changes after review", 
     );
   } finally {
     rmSync(secondRoot, { recursive: true, force: true });
+  }
+});
+
+test("removes an exact merged story worktree and branch without force", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-cleanup-"));
+  try {
+    const fixture = createMergedFixture(root);
+    writeFileSync(join(fixture.repository, "original-only.txt"), "preserve\n");
+    const originalStatus = git(fixture.repository, "status", "--porcelain=v1");
+    const request_ = cleanupRequest(fixture, fixture.mergeCommit);
+
+    const removed = fixture.gateway.cleanupStoryWorkspace(request_);
+    assert.equal(removed.status, "removed");
+    assert.equal(removed.worktreeAbsent, true);
+    assert.equal(removed.branchAbsent, true);
+    assert.equal(existsSync(fixture.storyPath), false);
+    assert.throws(() =>
+      git(fixture.repository, "rev-parse", request_.storyBranch),
+    );
+    assert.equal(
+      git(
+        fixture.repository,
+        "merge-base",
+        "--is-ancestor",
+        fixture.candidateCommit,
+        request_.integrationBranch,
+      ),
+      "",
+    );
+    assert.equal(
+      git(fixture.repository, "status", "--porcelain=v1"),
+      originalStatus,
+    );
+
+    const existing = fixture.gateway.cleanupStoryWorkspace(request_);
+    assert.equal(existing.status, "existing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovers cleanup after worktree removal but before branch deletion", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-cleanup-"));
+  try {
+    const fixture = createMergedFixture(root);
+    git(fixture.repository, "worktree", "remove", fixture.storyPath);
+    assert.equal(existsSync(fixture.storyPath), false);
+    assert.equal(
+      git(
+        fixture.repository,
+        "rev-parse",
+        storyBranchForRun("run-1", "story-1"),
+      ),
+      fixture.candidateCommit,
+    );
+
+    const recovered = fixture.gateway.cleanupStoryWorkspace(
+      cleanupRequest(fixture, fixture.mergeCommit),
+    );
+    assert.equal(recovered.status, "recovered");
+    assert.throws(() =>
+      git(
+        fixture.repository,
+        "rev-parse",
+        storyBranchForRun("run-1", "story-1"),
+      ),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup rejects tracked, untracked, and ignored worktree content", () => {
+  const cases = ["tracked", "untracked", "ignored"] as const;
+  for (const kind of cases) {
+    const root = mkdtempSync(join(tmpdir(), `agentworks-cleanup-${kind}-`));
+    try {
+      const fixture = createMergedFixture(root);
+      if (kind === "tracked") {
+        writeFileSync(join(fixture.storyPath, "candidate.txt"), "changed\n");
+      } else if (kind === "untracked") {
+        writeFileSync(join(fixture.storyPath, "valuable.txt"), "preserve\n");
+      } else {
+        writeFileSync(
+          join(fixture.repository, ".git", "info", "exclude"),
+          "ignored-output.txt\n",
+        );
+        writeFileSync(
+          join(fixture.storyPath, "ignored-output.txt"),
+          "preserve\n",
+        );
+      }
+      assert.throws(
+        () =>
+          fixture.gateway.cleanupStoryWorkspace(
+            cleanupRequest(fixture, fixture.mergeCommit),
+          ),
+        /worktree is not clean/u,
+      );
+      assert.equal(existsSync(fixture.storyPath), true);
+      assert.equal(
+        git(
+          fixture.repository,
+          "rev-parse",
+          storyBranchForRun("run-1", "story-1"),
+        ),
+        fixture.candidateCommit,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("cleanup requires released lease, closed agent, current fence, and merge ancestry", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-cleanup-"));
+  try {
+    const fixture = createMergedFixture(root);
+    const allowed = cleanupRequest(fixture, fixture.mergeCommit);
+    for (const denied of [
+      { ...allowed, writerLeaseReleased: false },
+      { ...allowed, agentClosed: false },
+      { ...allowed, controllerLeaseCurrent: false },
+      { ...allowed, expectedRevisionMatches: false },
+    ]) {
+      assert.throws(() => fixture.gateway.cleanupStoryWorkspace(denied));
+    }
+
+    git(fixture.integrationPath, "reset", "--hard", fixture.integrationHead);
+    assert.throws(
+      () => fixture.gateway.cleanupStoryWorkspace(allowed),
+      /merge ancestry proof is missing/u,
+    );
+    assert.equal(existsSync(fixture.storyPath), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup refuses unregistered replacement content after interrupted removal", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-cleanup-"));
+  try {
+    const fixture = createMergedFixture(root);
+    git(fixture.repository, "worktree", "remove", fixture.storyPath);
+    mkdirSync(fixture.storyPath);
+    writeFileSync(join(fixture.storyPath, "valuable.txt"), "preserve\n");
+    assert.throws(
+      () =>
+        fixture.gateway.cleanupStoryWorkspace(
+          cleanupRequest(fixture, fixture.mergeCommit),
+        ),
+      /Unregistered content exists/u,
+    );
+    assert.equal(
+      readFileSync(join(fixture.storyPath, "valuable.txt"), "utf8"),
+      "preserve\n",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

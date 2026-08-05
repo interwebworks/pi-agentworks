@@ -153,6 +153,7 @@ export interface CleanupEligibilityRequest {
   readonly worktreeClean: boolean;
   readonly storyMergedIntoIntegration: boolean;
   readonly writerLeaseReleased: boolean;
+  readonly agentClosed: boolean;
   readonly worktreeBelongsToRun: boolean;
 }
 
@@ -175,6 +176,9 @@ export function assessCleanupEligibility(
   }
   if (!request.writerLeaseReleased) {
     reasons.push("the writer lease is still active");
+  }
+  if (!request.agentClosed) {
+    reasons.push("the writer agent is not closed");
   }
   if (!request.worktreeBelongsToRun) {
     reasons.push("the worktree does not belong to this run");

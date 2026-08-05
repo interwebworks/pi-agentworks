@@ -75,7 +75,9 @@ A merge requires all of the following evidence:
 - the operation carries the current controller fencing token and expected revision.
 
 Routine cleanup never uses force.
-A worktree can be removed only when clean, merged by ancestry proof, free of a writer lease, and associated with the expected branch and run.
+A story worktree can be removed only when its exact controller-owned merge remains in integration ancestry, its writer lease is released, its agent is closed, its branch/path/HEAD registration belongs to the run, and status contains no tracked, untracked, ignored, conflict, or submodule changes.
+After non-force worktree removal is verified, branch deletion uses an atomic expected-object compare-and-delete so concurrent advancement is preserved rather than deleted.
+Unregistered replacement content at a recovered cleanup path always blocks branch deletion.
 
 ## Controller authority and persistence
 

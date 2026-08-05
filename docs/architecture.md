@@ -148,7 +148,9 @@ Each commit contains exact run, story, base, integration, and operation trailers
 Merge eligibility requires an independent approved reviewer result, successful required checks, a clean exact-candidate story worktree, the expected branch HEAD, and an unchanged integration base since review or a renewed review after rebasing.
 The controller preflights a two-parent merge tree, suppresses custom merge drivers and branch merge options, and creates a fixed-identity merge commit whose parents, tree, full operation message, and clean integration worktree are verified afterward.
 A retry can finish an exact interrupted pre-commit merge only when `MERGE_HEAD` and the index tree equal the reviewed candidate and preflight tree; after commit it accepts only the exact operation-owned merge.
-Cleanup requires merge ancestry proof and a clean worktree.
+Story cleanup revalidates the exact controller-owned two-parent merge and operation message, proves that merge remains an ancestor of the current integration branch, requires the writer lease released and agent closed, and refuses tracked, untracked, ignored, locked, prunable, mismatched, or unregistered worktree content.
+The controller removes the registered worktree without force, verifies filesystem and registry absence, then atomically compare-and-deletes only the exact expected story branch ref.
+A retry can continue after worktree removal or return an already-absent result only while the immutable merge proof remains valid.
 Agentworks does not use force removal for routine cleanup.
 
 ## Recovery

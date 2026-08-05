@@ -91,6 +91,34 @@ export interface MergeCandidateResult {
   readonly tree: string;
 }
 
+export interface CleanupStoryWorkspaceRequest {
+  readonly runId: string;
+  readonly storyId: string;
+  readonly operationId: string;
+  readonly originalCheckout: string;
+  readonly integrationBranch: string;
+  readonly integrationWorktreePath: string;
+  readonly storyBranch: string;
+  readonly storyWorktreePath: string;
+  readonly candidateCommit: string;
+  readonly reviewedIntegrationHead: string;
+  readonly mergeCommit: string;
+  readonly mergeOperationId: string;
+  readonly mergeSubject: string;
+  readonly reviewerAgentId: string;
+  readonly writerLeaseReleased: boolean;
+  readonly agentClosed: boolean;
+  readonly controllerLeaseCurrent: boolean;
+  readonly expectedRevisionMatches: boolean;
+}
+
+export interface CleanupStoryWorkspaceResult {
+  readonly status: "removed" | "recovered" | "existing";
+  readonly worktreeAbsent: boolean;
+  readonly branchAbsent: boolean;
+  readonly mergeCommit: string;
+}
+
 export interface GitWorkspaceGateway {
   listWorktrees(originalCheckout: string): readonly GitWorktreeRecord[];
   createIntegrationWorkspace(
@@ -103,4 +131,7 @@ export interface GitWorkspaceGateway {
     request: CreateCandidateCommitRequest,
   ): CandidateCommitResult;
   mergeCandidate(request: MergeCandidateRequest): MergeCandidateResult;
+  cleanupStoryWorkspace(
+    request: CleanupStoryWorkspaceRequest,
+  ): CleanupStoryWorkspaceResult;
 }

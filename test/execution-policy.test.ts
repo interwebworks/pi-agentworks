@@ -186,10 +186,11 @@ test("cleanup requires cleanliness, ancestry proof, ownership, and released writ
     worktreeClean: false,
     storyMergedIntoIntegration: false,
     writerLeaseReleased: false,
+    agentClosed: false,
     worktreeBelongsToRun: false,
   });
   assert.equal(denied.allowed, false);
-  assert.equal(denied.reasons.length, 4);
+  assert.equal(denied.reasons.length, 5);
 
   const allowed = assessCleanupEligibility({
     controllerLeaseCurrent: true,
@@ -197,6 +198,7 @@ test("cleanup requires cleanliness, ancestry proof, ownership, and released writ
     worktreeClean: true,
     storyMergedIntoIntegration: true,
     writerLeaseReleased: true,
+    agentClosed: true,
     worktreeBelongsToRun: true,
   });
   assert.deepEqual(allowed, { allowed: true, reasons: [] });
