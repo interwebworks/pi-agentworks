@@ -142,7 +142,10 @@ Agentworks does not use force removal for routine cleanup.
 ## Recovery
 
 Controller state records Herdr workspace, tab, pane, Pi session, branch, worktree, process, and last acknowledged sequence identities.
-On reconnect, the extension queries controller state and live Herdr state before changing anything.
+Each run publishes an atomically replaced, strictly validated discovery descriptor beside its private token, SQLite database, and socket in a user-only runtime directory.
+Startup checks database integrity and acquires the fenced writer lease before recovering a socket; only an explicit connection-refused result permits removal of a stale socket.
+Lease renewal republishes expiration and fencing metadata, while graceful shutdown removes discovery and the owned socket but preserves the database and token for restart.
+On reconnect, the extension validates the descriptor and token, then queries controller state and live Herdr state before changing anything.
 Missing panes become disconnected.
 The user can restore a recoverable session or explicitly abandon it.
 Unmerged worktrees are never deleted during recovery.
