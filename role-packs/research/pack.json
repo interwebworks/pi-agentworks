@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "id": "research",
+  "name": "Research",
+  "description": "Roles for investigative research: a research analyst advisor, a lead researcher who produces the deliverable, and an independent fact-checker.",
+  "domains": ["research", "investigation", "analysis"],
+  "requiresPacks": ["general-delivery"],
+  "roles": [
+    {
+      "id": "research-analyst",
+      "label": "Research Analyst",
+      "description": "Advises on research questions, sources, and method without producing the final deliverable.",
+      "authority": "advisor",
+      "required": false,
+      "taskKinds": ["method", "sourcing", "research"],
+      "responsibilities": [
+        "Frame the research questions and candidate sources",
+        "Flag weak sourcing or unsupported conclusions"
+      ],
+      "promptFile": "prompts/research-analyst.md",
+      "tools": ["read", "grep", "find", "ls", "web-search", "web-fetch"],
+      "controllerActions": ["report-status", "contact-manager"],
+      "writePolicy": "read-only",
+      "networkAccess": "required",
+      "defaultThinking": "high"
+    },
+    {
+      "id": "lead-researcher",
+      "label": "Lead Researcher",
+      "description": "Investigates the assigned question and writes the research deliverable within an isolated worktree.",
+      "authority": "worker",
+      "required": false,
+      "taskKinds": ["investigation", "synthesis", "research"],
+      "responsibilities": [
+        "Gather and cite verifiable sources for the assigned question",
+        "Write the deliverable to the brief and acceptance criteria",
+        "Escalate when sources conflict or cannot be verified"
+      ],
+      "promptFile": "prompts/lead-researcher.md",
+      "tools": [
+        "read",
+        "write",
+        "edit",
+        "grep",
+        "find",
+        "ls",
+        "web-search",
+        "web-fetch"
+      ],
+      "controllerActions": ["report-status", "contact-manager", "submit-work"],
+      "writePolicy": "story-writer",
+      "networkAccess": "required",
+      "defaultThinking": "high"
+    },
+    {
+      "id": "fact-checker",
+      "label": "Fact Checker",
+      "description": "Independently verifies the claims and citations in a completed research deliverable.",
+      "authority": "reviewer",
+      "required": false,
+      "taskKinds": ["review", "verification", "research"],
+      "responsibilities": [
+        "Verify each material claim against its cited source",
+        "Report an explicit approve or reject decision with evidence"
+      ],
+      "promptFile": "prompts/fact-checker.md",
+      "tools": ["read", "grep", "find", "ls", "web-search", "web-fetch"],
+      "controllerActions": [
+        "report-status",
+        "contact-manager",
+        "submit-review"
+      ],
+      "writePolicy": "read-only",
+      "networkAccess": "required",
+      "defaultThinking": "high"
+    }
+  ]
+}

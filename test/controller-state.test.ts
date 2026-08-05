@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assessAgentLiveness,
+  CONTROLLER_STATE_SCHEMA_VERSION,
   createAgentState,
   createRunState,
   createStoryState,
@@ -51,9 +52,9 @@ function agent(): AgentState {
 }
 
 test("LOW and NORMAL plans wait for approval while HIGH becomes ready", () => {
-  assert.equal(run().schemaVersion, 1);
-  assert.equal(story().schemaVersion, 1);
-  assert.equal(agent().schemaVersion, 1);
+  assert.equal(run().schemaVersion, CONTROLLER_STATE_SCHEMA_VERSION);
+  assert.equal(story().schemaVersion, CONTROLLER_STATE_SCHEMA_VERSION);
+  assert.equal(agent().schemaVersion, CONTROLLER_STATE_SCHEMA_VERSION);
   assert.equal(
     transitionRun(run("LOW"), { type: "plan-prepared", at: 1_001 }).status,
     "awaiting-approval",

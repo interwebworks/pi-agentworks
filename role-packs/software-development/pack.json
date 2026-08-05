@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "id": "software-development",
+  "name": "Software Development",
+  "description": "Roles for building and changing software: an architect advisor, backend and frontend developers, a test engineer, and an independent code reviewer.",
+  "domains": ["software", "engineering", "code", "development"],
+  "requiresPacks": ["general-delivery"],
+  "roles": [
+    {
+      "id": "software-architect",
+      "label": "Software Architect",
+      "description": "Advises on architecture, boundaries, and technology choices without modifying project files.",
+      "authority": "advisor",
+      "required": false,
+      "taskKinds": ["architecture", "design", "software"],
+      "responsibilities": [
+        "Recommend module boundaries and technology choices",
+        "Flag architectural risk in proposed stories"
+      ],
+      "promptFile": "prompts/software-architect.md",
+      "tools": ["read", "grep", "find", "ls"],
+      "controllerActions": ["report-status", "contact-manager"],
+      "writePolicy": "read-only",
+      "networkAccess": "disabled",
+      "defaultThinking": "high"
+    },
+    {
+      "id": "backend-developer",
+      "label": "Backend Developer",
+      "description": "Implements server-side and systems stories within an isolated worktree.",
+      "authority": "worker",
+      "required": false,
+      "taskKinds": ["backend", "api", "systems", "software"],
+      "responsibilities": [
+        "Implement the assigned backend story",
+        "Cover new logic with tests and run the validation commands",
+        "Escalate blockers and material deviations"
+      ],
+      "promptFile": "prompts/backend-developer.md",
+      "tools": ["read", "write", "edit", "grep", "find", "ls", "bash"],
+      "controllerActions": ["report-status", "contact-manager", "submit-work"],
+      "writePolicy": "story-writer",
+      "networkAccess": "disabled",
+      "defaultThinking": "medium"
+    },
+    {
+      "id": "frontend-developer",
+      "label": "Frontend Developer",
+      "description": "Implements user-interface and client stories within an isolated worktree.",
+      "authority": "worker",
+      "required": false,
+      "taskKinds": ["frontend", "ui", "client", "software"],
+      "responsibilities": [
+        "Implement the assigned frontend story",
+        "Cover new behavior with tests and run the validation commands",
+        "Escalate blockers and material deviations"
+      ],
+      "promptFile": "prompts/frontend-developer.md",
+      "tools": ["read", "write", "edit", "grep", "find", "ls", "bash"],
+      "controllerActions": ["report-status", "contact-manager", "submit-work"],
+      "writePolicy": "story-writer",
+      "networkAccess": "disabled",
+      "defaultThinking": "medium"
+    },
+    {
+      "id": "test-engineer",
+      "label": "Test Engineer",
+      "description": "Builds automated tests and validation for assigned stories within an isolated worktree.",
+      "authority": "worker",
+      "required": false,
+      "taskKinds": ["testing", "quality", "software"],
+      "responsibilities": [
+        "Write automated tests that encode the acceptance criteria",
+        "Make the validation commands deterministic and runnable",
+        "Escalate untestable requirements"
+      ],
+      "promptFile": "prompts/test-engineer.md",
+      "tools": ["read", "write", "edit", "grep", "find", "ls", "bash"],
+      "controllerActions": ["report-status", "contact-manager", "submit-work"],
+      "writePolicy": "story-writer",
+      "networkAccess": "disabled",
+      "defaultThinking": "medium"
+    },
+    {
+      "id": "code-reviewer",
+      "label": "Code Reviewer",
+      "description": "Independently reviews completed software stories against acceptance criteria and quality gates.",
+      "authority": "reviewer",
+      "required": false,
+      "taskKinds": ["review", "software"],
+      "responsibilities": [
+        "Verify the story meets its acceptance criteria and passes validation",
+        "Report an explicit approve or reject decision with evidence"
+      ],
+      "promptFile": "prompts/code-reviewer.md",
+      "tools": ["read", "grep", "find", "ls", "bash"],
+      "controllerActions": [
+        "report-status",
+        "contact-manager",
+        "submit-review"
+      ],
+      "writePolicy": "read-only",
+      "networkAccess": "disabled",
+      "defaultThinking": "high"
+    }
+  ]
+}

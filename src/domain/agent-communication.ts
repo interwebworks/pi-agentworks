@@ -75,13 +75,13 @@ export type OperationProgressMessage =
       revision: number | null;
     };
 
-export type HeartbeatMessage = {
+export interface HeartbeatMessage {
   type: "heartbeat";
   runId: string;
   agentId: string;
   elapsedMs: number;
   revision: number | null;
-};
+}
 
 export type SupervisorMessage =
   | {
@@ -165,7 +165,11 @@ export function createSessionShutdown(
 
 export function parseSessionShutdownMessage(text: string): string | null {
   try {
-    const { type, runId, agentId } = JSON.parse(text) as any;
+    const { type, runId, agentId } = JSON.parse(text) as {
+      type?: unknown;
+      runId?: unknown;
+      agentId?: unknown;
+    };
     if (
       typeof type === "string" &&
       type === "session_shutdown" &&

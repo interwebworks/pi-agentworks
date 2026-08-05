@@ -93,20 +93,3 @@ export const AgentExtensionResponseSchema = Type.Union([
   AgentExtensionSuccessResponseSchema,
   AgentExtensionErrorSchema,
 ]);
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const InvalidControllerProtocolMessageErrorClass = class extends Error {
-  readonly issues: readonly string[];
-  constructor(issues: readonly string[]) {
-    super(`Invalid controller protocol message:\n- ${issues.join("\n- ")}`);
-    this.name = "InvalidControllerProtocolMessageError";
-    this.issues = issues;
-  }
-};
-
-export function assertAgentHelloPayload(_: unknown): void {}
-export function parseAgentExtensionRequest(
-  _value: unknown,
-): AgentCommExtensionRequest {
-  throw new Error("Not yet implemented");
-}

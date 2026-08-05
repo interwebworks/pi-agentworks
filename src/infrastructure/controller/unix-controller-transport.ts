@@ -33,7 +33,6 @@ import {
   type ControllerRequest,
   type ControllerResponse,
 } from "../../application/protocol/controller-protocol.ts";
-import type { AgentHelloRequest } from "../../application/protocol/controller-protocol-extension.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_CONNECTIONS = 32;

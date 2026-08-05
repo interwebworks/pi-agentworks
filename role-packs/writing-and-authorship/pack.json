@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "id": "writing-and-authorship",
+  "name": "Writing and Authorship",
+  "description": "Roles for producing written work: a content strategist advisor, an author, and an independent editor.",
+  "domains": ["writing", "authorship", "content", "editorial"],
+  "requiresPacks": ["general-delivery"],
+  "roles": [
+    {
+      "id": "content-strategist",
+      "label": "Content Strategist",
+      "description": "Advises on audience, structure, and message without writing the deliverable.",
+      "authority": "advisor",
+      "required": false,
+      "taskKinds": ["strategy", "outline", "writing"],
+      "responsibilities": [
+        "Define audience, purpose, and structure for the piece",
+        "Flag gaps between the brief and the proposed outline"
+      ],
+      "promptFile": "prompts/content-strategist.md",
+      "tools": ["read", "grep", "find", "ls"],
+      "controllerActions": ["report-status", "contact-manager"],
+      "writePolicy": "read-only",
+      "networkAccess": "disabled",
+      "defaultThinking": "medium"
+    },
+    {
+      "id": "author",
+      "label": "Author",
+      "description": "Writes the assigned piece within an isolated worktree.",
+      "authority": "worker",
+      "required": false,
+      "taskKinds": ["drafting", "writing", "authorship"],
+      "responsibilities": [
+        "Draft the assigned piece to the brief and acceptance criteria",
+        "Revise in response to editorial review",
+        "Escalate unclear scope or missing source material"
+      ],
+      "promptFile": "prompts/author.md",
+      "tools": ["read", "write", "edit", "grep", "find", "ls"],
+      "controllerActions": ["report-status", "contact-manager", "submit-work"],
+      "writePolicy": "story-writer",
+      "networkAccess": "disabled",
+      "defaultThinking": "medium"
+    },
+    {
+      "id": "editor",
+      "label": "Editor",
+      "description": "Independently reviews a completed piece for accuracy, clarity, and fit to the brief.",
+      "authority": "reviewer",
+      "required": false,
+      "taskKinds": ["review", "editing", "writing"],
+      "responsibilities": [
+        "Check the piece against the brief and acceptance criteria",
+        "Report an explicit approve or reject decision with specific edits"
+      ],
+      "promptFile": "prompts/editor.md",
+      "tools": ["read", "grep", "find", "ls"],
+      "controllerActions": [
+        "report-status",
+        "contact-manager",
+        "submit-review"
+      ],
+      "writePolicy": "read-only",
+      "networkAccess": "disabled",
+      "defaultThinking": "medium"
+    }
+  ]
+}

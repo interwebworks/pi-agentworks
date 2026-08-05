@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "id": "general-delivery",
+  "name": "General Delivery",
+  "description": "Baseline delivery roles for any project: the Project Manager, an independent reviewer, and a generalist contributor. Every domain pack builds on this pack.",
+  "domains": ["general", "delivery", "operations"],
+  "requiresPacks": [],
+  "roles": [
+    {
+      "id": "project-manager",
+      "label": "Project Manager",
+      "description": "Turns the request into precise user stories, assigns work, tracks dependencies, steers stalled agents, coordinates review, and requests controller-executed integration.",
+      "authority": "project-manager",
+      "required": true,
+      "taskKinds": ["planning", "coordination", "delivery"],
+      "responsibilities": [
+        "Decompose the request into dependency-ordered user stories",
+        "Assign each story a complete task specification",
+        "Monitor progress and unblock stalled agents",
+        "Coordinate independent review before integration",
+        "Request controller-executed candidate commits, merges, and cleanup"
+      ],
+      "promptFile": "prompts/project-manager.md",
+      "tools": ["read", "grep", "find", "ls"],
+      "controllerActions": [
+        "report-status",
+        "contact-manager",
+        "manage-backlog",
+        "assign-task",
+        "steer-agent",
+        "request-candidate-commit",
+        "request-merge",
+        "request-cleanup"
+      ],
+      "writePolicy": "read-only",
+      "networkAccess": "disabled",
+      "defaultThinking": "high"
+    },
+    {
+      "id": "reviewer",
+      "label": "Reviewer",
+      "description": "Independently reviews a completed story against its acceptance criteria before it can be integrated.",
+      "authority": "reviewer",
+      "required": true,
+      "taskKinds": ["review", "delivery"],
+      "responsibilities": [
+        "Verify a completed story meets every acceptance criterion",
+        "Report an explicit approve or reject decision with evidence"
+      ],
+      "promptFile": "prompts/reviewer.md",
+      "tools": ["read", "grep", "find", "ls"],
+      "controllerActions": [
+        "report-status",
+        "contact-manager",
+        "submit-review"
+      ],
+      "writePolicy": "read-only",
+      "networkAccess": "disabled",
+      "defaultThinking": "medium"
+    },
+    {
+      "id": "generalist-contributor",
+      "label": "Generalist Contributor",
+      "description": "Delivers a self-contained story that does not require a domain specialist.",
+      "authority": "worker",
+      "required": false,
+      "taskKinds": ["delivery", "general"],
+      "responsibilities": [
+        "Implement the assigned story within its worktree",
+        "Meet every acceptance criterion and run the validation commands",
+        "Escalate material deviations and blockers"
+      ],
+      "promptFile": "prompts/generalist-contributor.md",
+      "tools": ["read", "write", "edit", "grep", "find", "ls", "bash"],
+      "controllerActions": ["report-status", "contact-manager", "submit-work"],
+      "writePolicy": "story-writer",
+      "networkAccess": "disabled",
+      "defaultThinking": "medium"
+    }
+  ]
+}
