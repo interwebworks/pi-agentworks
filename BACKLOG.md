@@ -28,7 +28,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 ## P2 - Git isolation
 
 - [x] Implement canonical, read-only repository inspection with worktree/common-dir identity, offline default-branch evidence, credential-redacted remotes, object format, and additive protected-branch patterns.
-- [ ] Implement the Project Manager integration worktree lifecycle.
+- [x] Implement deterministic Project Manager integration branch/worktree creation with exact base evidence, idempotent attachment recovery, original-checkout preservation, and disabled repository hooks/filter commands.
 - [ ] Implement one branch and worktree per writable story.
 - [ ] Implement writer leases and connect the tested merge, review-invalidation, and cleanup policies to real Git evidence.
 - [ ] Make the controller the sole Git mutator, including candidate commits requested by agents.

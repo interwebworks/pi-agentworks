@@ -52,6 +52,10 @@ The controller is the sole Git mutator.
 Project Manager and worker agents can request operations but cannot create worktrees, stage, commit, merge, reset, remove worktrees, delete branches, or push.
 Read-only Git inspection remains available inside the sandbox because Git metadata is mounted read-only.
 
+Controller-created branches use deterministic run/story names and exact immutable base-commit evidence.
+Integration worktree creation is idempotent across interrupted branch and attachment phases, rejects existing unregistered paths or mismatched branches, and verifies the registered worktree/branch/HEAD tuple after Git returns.
+Mutating Git commands disable repository hooks, filesystem monitors, file-protocol expansion, and configured clean/smudge/process filters so an untrusted repository cannot turn checkout into controller-code execution.
+
 After a writer reports completion, the controller verifies the worktree and creates a candidate commit.
 Review targets an exact story commit and an exact integration-base commit.
 Any change to either identity invalidates approval.
