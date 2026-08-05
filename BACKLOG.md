@@ -17,7 +17,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 - [x] Implement the versioned run, story, agent, review, recovery, and liveness state model with guarded transitions.
 - [x] Implement the SQLite repository with migrations, WAL, strict persisted-state validation, transactional revisions and events, bounded cursors, idempotency records, and fenced controller leases.
-- [ ] Implement the authenticated, bounded Unix socket protocol.
+- [x] Implement the versioned, authenticated, identity-bound, sequence-checked, and bounded Unix socket protocol with private socket permissions and typed client/server adapters.
 - [ ] Implement controller startup, independent supervision, writer lease, fencing, reconnection, shutdown, and crash recovery.
 - [ ] Add idempotency and kill-point recovery tests for every external side-effect phase.
 

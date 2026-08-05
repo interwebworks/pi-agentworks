@@ -97,7 +97,8 @@ Recovery recreates a pane only when controller state, Pi session metadata, workt
 ## Liveness and alerts
 
 Idle is not synonymous with stalled.
-An incomplete assignment enters attention only when Pi is idle, no approval or supervisor request is pending, no recent operation or heartbeat indicates progress, and the quiet threshold has elapsed.
+An incomplete assignment enters attention only when Pi is idle, no approval or supervisor request is pending, no recent meaningful operation or lifecycle change indicates progress, and the quiet threshold has elapsed.
+Heartbeats establish process life but do not reset the meaningful-progress clock.
 The Project Manager may send a `.` nudge after the controller revalidates that state.
 
 Nudges are bounded to three attempts with increasing delays.

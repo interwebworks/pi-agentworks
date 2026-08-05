@@ -108,7 +108,9 @@ The adapter validates returned pane IDs before launching any process.
 The controller creates a random run token and a user-only Unix socket.
 Child processes receive only the socket path, token, run ID, agent ID, and role-safe environment.
 The child bridge sends versioned messages for session-ready, state, operation, heartbeat, supervisor-message, completion, failure, and shutdown.
-The controller rejects unknown versions, invalid tokens, oversized frames, duplicate sequence numbers, and agent/run mismatches.
+Transport uses four-byte big-endian length-prefixed JSON with bounded frame size, queued frames, JSON depth, JSON nodes, connections, and idle time.
+The socket and its directory are user-private, an existing path is never replaced implicitly, and cleanup removes only the exact socket inode created by the server.
+The controller uses constant-time token-digest comparison and rejects unknown versions, invalid tokens, oversized frames, duplicate sequence numbers, and agent/run mismatches.
 
 The child bridge is dormant outside an Agentworks launch environment.
 Child mode does not register the parent management tool.
