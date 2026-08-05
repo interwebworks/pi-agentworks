@@ -37,7 +37,7 @@ Agentworks selects only roles germane to the requested work.
 Users can install additional packs without changing Agentworks source.
 
 Every team includes a Project Manager.
-The Project Manager converts the request into precise user stories, assigns work, monitors dependencies, steers stalled agents, coordinates review, merges approved branches, and reports decisions.
+The Project Manager converts the request into precise user stories, assigns work, monitors dependencies, steers stalled agents, coordinates review, requests controller-executed integration of approved branches, and reports decisions.
 The parent Pi session can tune the Project Manager during a run.
 
 ## Task contract
@@ -55,7 +55,8 @@ Only one writing agent owns a story worktree at a time.
 Read-only specialists may inspect a story worktree.
 
 A reviewer must approve a completed story before integration.
-The Project Manager merges approved story branches into the integration worktree.
+The Project Manager requests integration of approved story branches.
+The controller is the sole Git mutator and performs candidate commits, approved merges into the integration worktree, and verified cleanup.
 Agentworks verifies the merge and a clean story worktree before removing that worktree.
 Blocked, failed, conflicted, dirty, or unmerged worktrees remain intact and trigger an alert.
 Agentworks never force-pushes, discards unmerged work, or merges into the default or a protected branch without explicit user approval.
@@ -87,7 +88,8 @@ Agentworks therefore uses Pi's supported non-capturing right-side overlay rather
 
 ## Controller and recovery
 
-A local controller owns the authoritative state in SQLite and exposes an authenticated Unix socket.
+A separately supervised local controller owns the authoritative state in SQLite and exposes an authenticated Unix socket.
+It uses a writer lease, fencing token, expected revisions, and idempotency keys so stale or duplicate requests cannot repeat external effects.
 The management pane and Pi overlay are authoritative views of controller state.
 Parent, Project Manager, and worker processes report through the controller rather than scraping terminal text.
 
@@ -102,7 +104,9 @@ Nudges are bounded and followed by escalation rather than an infinite prompt loo
 
 ## Security requirements
 
-Roles receive strict tool allowlists.
+Roles receive strict tool allowlists, but prompts, tools, and cwd are not treated as a sandbox.
+Every child runs inside an approved OS-enforced sandbox that mounts the host root and Git metadata read-only while exposing only the assigned worktree and dedicated runtime paths as writable.
+The first production sandbox is Linux Bubblewrap, and Agentworks fails closed when it is unavailable.
 Read-only roles cannot write.
 Writers can modify only their assigned worktree.
 Sensitive environment variables are not forwarded by default.

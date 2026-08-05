@@ -62,17 +62,22 @@ The child bridge adapts Pi lifecycle events into controller reports.
 
 `HerdrGateway` creates, lays out, focuses, labels, restores, and closes tabs and panes.
 
-`GitWorkspaceGateway` creates branches and worktrees, inspects cleanliness and ancestry, merges approved branches, and removes only verified worktrees.
+`GitWorkspaceGateway` is the sole Git mutator and creates branches, worktrees, candidate commits, approved merges, and verified cleanup.
+The Project Manager and workers can request Git operations but cannot execute mutating Git commands directly.
 
-`PiAgentLauncher` starts an interactive Pi agent with an explicit role prompt, task specification, model, tool allowlist, session name, environment allowlist, and controller endpoint.
+`SandboxGateway` enforces the child filesystem, Git metadata, environment, and network boundary outside the model process.
+The first production adapter uses Linux Bubblewrap and fails closed when its required capabilities are unavailable.
+
+`PiAgentLauncher` starts an interactive Pi agent inside the approved sandbox with an explicit role prompt, task specification, model, tool allowlist, session name, environment allowlist, and controller endpoint.
 
 `NotificationGateway` emits Herdr visual and audio alerts with deduplication.
 
 ## Authoritative state
 
 SQLite is the machine source of truth.
-The controller is the only writer.
-Clients send commands with an expected run revision.
+The controller is the only database writer and runs with WAL, foreign keys, schema migrations, integrity checks, and corruption quarantine.
+A single controller lease and fencing token prevent stale controllers from mutating state or external resources.
+Clients send commands with an expected run revision and idempotency key.
 Successful state changes increment the revision and append an event in the same transaction.
 The management pane and Pi overlay subscribe to snapshots and events.
 Terminal output is never parsed to infer task completion.
@@ -100,6 +105,7 @@ The child bridge sends versioned messages for session-ready, state, operation, h
 The controller rejects unknown versions, invalid tokens, oversized frames, duplicate sequence numbers, and agent/run mismatches.
 
 The child bridge is dormant outside an Agentworks launch environment.
+Child mode does not register the parent management tool.
 This prevents recursively creating teams in ordinary Pi sessions.
 
 ## Liveness
@@ -117,6 +123,10 @@ The Project Manager integration branch also lives in a worktree.
 Every write-capable story has one active writer lease.
 Commands resolve canonical repository and worktree paths before execution.
 
+Child sandboxes mount the host root and Git metadata read-only while mounting only the assigned worktree and narrowly scoped runtime paths read-write.
+Tool restrictions and cwd are defense in depth rather than the security boundary.
+The controller creates candidate commits after writer completion so review and merge operate on exact immutable commit identities.
+
 Merge eligibility requires an approved reviewer result, successful required checks, a clean story worktree, the expected branch HEAD, and an unchanged integration base since review or a renewed review after rebasing.
 Cleanup requires merge ancestry proof and a clean worktree.
 Agentworks does not use force removal for routine cleanup.
@@ -128,8 +138,11 @@ On reconnect, the extension queries controller state and live Herdr state before
 Missing panes become disconnected.
 The user can restore a recoverable session or explicitly abandon it.
 Unmerged worktrees are never deleted during recovery.
+Controller recovery is idempotent at every external side-effect boundary, including worktree creation, pane creation, child registration, candidate commit, review, merge, and cleanup.
 
 ## Test strategy
+
+The full threat model and adversarial release gates are defined in [security-model.md](security-model.md).
 
 Domain policy uses pure unit tests.
 Controller persistence and transactions use temporary SQLite databases.

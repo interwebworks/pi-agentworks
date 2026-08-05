@@ -46,6 +46,7 @@ The maximum includes the Project Manager and reviewers.
 
 - [Product specification](PRODUCT_SPEC.md)
 - [Architecture](docs/architecture.md)
+- [Security model](docs/security-model.md)
 - [Canonical backlog](BACKLOG.md)
 
 ## Development
@@ -62,7 +63,9 @@ Runtime dependencies remain minimal and Pi-provided packages are declared as pee
 
 Agentworks launches processes with explicit argument arrays and role-specific tool permissions.
 It does not forward sensitive environment variables by default.
+It requires an OS-enforced child sandbox and does not mistake prompts, tool lists, or cwd for security boundaries.
 It never runs an agent in the repository's original checkout.
+The controller is the sole Git mutator, and agent sandboxes receive read-only Git metadata.
 It does not delete a worktree until review, merge, cleanliness, and ancestry checks all pass.
 It does not merge into a default or protected branch without explicit user approval.
 
