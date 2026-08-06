@@ -14,6 +14,8 @@ import type {
 import {
   createRunState,
   createStoryState,
+  transitionRun,
+  transitionStory,
 } from "../../domain/controller-state.ts";
 import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
 import { buildDashboardViewModel } from "../../application/tui/dashboard-view-model.ts";
@@ -254,7 +256,7 @@ export function createDiscoveredParentManagementGateway(
     await supervisor.ensureRunning();
     const client = await clientFactory(runId);
     try {
-      const run = createRunState({
+      const draftRun = createRunState({
         id: runId,
         title: task,
         complexity: input.mode ?? "NORMAL",
@@ -265,7 +267,11 @@ export function createDiscoveredParentManagementGateway(
         integrationWorktree: `${runtimeRoot}/${runId}/integration-worktree`,
         createdAt: now,
       });
-      const story = createStoryState({
+      const run = transitionRun(draftRun, {
+        type: "plan-prepared",
+        at: now,
+      });
+      const draftStory = createStoryState({
         id: `${runId}-story-1`,
         runId,
         title: task,
@@ -273,21 +279,30 @@ export function createDiscoveredParentManagementGateway(
         worktreePath: `${runtimeRoot}/${runId}/story-1-worktree`,
         createdAt: now,
       });
+      const story = transitionStory(draftStory, {
+        type: "story-prepared",
+        complexity: run.complexity,
+        at: now,
+      });
       const events: readonly ControllerEventInput[] = [
         {
           eventId: randomUUID(),
-          type: "run-created",
+          type: "run-plan-prepared",
           entityType: "run",
           entityId: runId,
-          payload: { title: task, complexity: run.complexity },
+          payload: {
+            title: task,
+            complexity: run.complexity,
+            status: run.status,
+          },
           occurredAt: now,
         },
         {
           eventId: randomUUID(),
-          type: "story-planned",
+          type: "story-prepared",
           entityType: "story",
           entityId: story.id,
-          payload: { title: task },
+          payload: { title: task, status: story.status },
           occurredAt: now,
         },
       ];
