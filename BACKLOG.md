@@ -137,7 +137,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 - [x] Prove local `pi install /absolute/path/to/agentworks` installation in a disposable project.
 - [x] Rename the distributable npm package to `pi-agentworks`.
-- [ ] Prepare Git and npm package metadata for Pi package-list distribution.
+- [x] Set repository, homepage, issue tracker, author, and Pi package metadata for `interwebworks/pi-agentworks`.
+- [ ] Publish `pi-agentworks` to npm and add a release tag.
 - [ ] Document installation, updates, configuration, custom role packs, recovery, and uninstall.
 - [ ] Replace `pi-herdr-subagent-panes.ts` after Agentworks passes live validation.
 - [ ] Uninstall `pi-subagents` and remove its configuration only after Agentworks replacement validation.
