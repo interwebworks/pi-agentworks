@@ -146,13 +146,29 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
       snapshot.run,
       snapshot,
     );
-    // The reviewer agent is launched; the story stays awaiting-review. The
-    // reviewer's identity is recorded on the story when the review resolves.
+    // Persist the reviewer assignment immediately so the next orchestration
+    // tick cannot launch a duplicate reviewer while the review is in flight.
+    // The review transition still records the same identity and validates the
+    // exact candidate/base heads before approval.
+    const assigned = Object.freeze({
+      ...story,
+      reviewerAgentId: launch.agent.id,
+      updatedAt: this.#clock(),
+    });
     return Object.freeze({
       run: snapshot.run,
-      stories: snapshot.stories,
+      stories: this.#replaceStory(snapshot, assigned),
       agents: this.#upsertAgent(snapshot, launch.agent),
-      events: launch.events,
+      events: [
+        ...launch.events,
+        this.#event(
+          "reviewer-assigned",
+          "story",
+          story.id,
+          { reviewerAgentId: launch.agent.id },
+          assigned.updatedAt,
+        ),
+      ],
     });
   }
 

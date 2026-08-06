@@ -180,6 +180,9 @@ function schemaIssues(value: unknown): string[] {
 }
 
 export function encodeAgentMessage(message: AgentMessage): string {
+  if (!Check(AgentMessageSchema, message)) {
+    throw new InvalidAgentMessageError(schemaIssues(message));
+  }
   const encoded = JSON.stringify(message);
   if (encoded.includes("\n")) {
     throw new InvalidAgentMessageError([
@@ -229,6 +232,11 @@ export function readAgentMessageFrames(
 ): ReadAgentMessageFramesResult {
   const lines = buffer.split("\n");
   const rest = lines.pop() ?? "";
+  if (Buffer.byteLength(rest, "utf8") > MAX_ENCODED_BYTES) {
+    throw new InvalidAgentMessageError([
+      `partial message exceeds ${String(MAX_ENCODED_BYTES)} bytes`,
+    ]);
+  }
   const messages = lines
     .filter((line) => line.length > 0)
     .map((line) => decodeAgentMessage(line));

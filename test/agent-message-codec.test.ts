@@ -143,6 +143,18 @@ test("rejects an unexpected extra property", () => {
   assert.throws(() => decodeAgentMessage(text), InvalidAgentMessageError);
 });
 
+test("rejects an invalid message at encode time", () => {
+  const invalid = {
+    protocolVersion: 1,
+    type: "heartbeat",
+    runId: "run-1",
+    agentId: "agent-1",
+    elapsedMs: -1,
+    revision: null,
+  } as AgentMessage;
+  assert.throws(() => encodeAgentMessage(invalid), InvalidAgentMessageError);
+});
+
 test("rejects an oversize payload", () => {
   const text = JSON.stringify({
     protocolVersion: 1,
@@ -184,4 +196,11 @@ test("frames two-and-a-half messages, decoding two and returning the rest", () =
   );
   assert.deepEqual(messages[1], heartbeat("run-1", "agent-1", 200, null));
   assert.equal(rest, partial);
+});
+
+test("rejects an oversized unterminated frame", () => {
+  assert.throws(
+    () => readAgentMessageFrames("x".repeat(65 * 1024)),
+    InvalidAgentMessageError,
+  );
 });

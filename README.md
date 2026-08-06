@@ -118,7 +118,7 @@ Implementation progress is tracked canonically in [BACKLOG.md](BACKLOG.md); this
 - **Structured agent lifecycle/operation/result/blocker communication** and disconnected-pane detection with resumable session restoration (P6).
 - **The htop-style management dashboard** — independent scrolling/sorting, color-coded states, mouse/keyboard focus, and approval/steering/pause/resume/close actions (P7).
 - **The parent Pi extension's real behavior** — `/agentworks` and the `agentworks` tool are registered (see [Installation](#installation)) but not yet wired to the controller; the persistent right-side overlay, narrow-terminal fallback, and run restoration on Pi restart are not yet implemented (P8).
-- **Orchestration** — dependency-aware story scheduling, idle/nudge handling, reviewer approval renewal, Project Manager merge requests, and terminal run cleanup (P9).
+- **Orchestration** — dependency-aware scheduling, concurrency caps, controller-side writer/reviewer launches, reviewed merge requests, run completion, and safe cleanup are implemented in the core and covered by tests (P9). Remaining P9 work is bounded idle `.` nudging and renewed-review handling, plus composition into the live controller/parent surfaces.
 - **Distribution polish** — this document plus package metadata (P10, in progress), replacing `pi-herdr-subagent-panes.ts` and retiring `pi-subagents` only after live validation, and migrating any still-useful concepts from the prior architect/worker definitions.
 - **Live end-to-end proof** — LOW/NORMAL/HIGH scenario tests, sandbox-escape negative tests, Herdr layout tests at 1/4/6/9/12/16 agents, and a fully green formatting/lint/typecheck/unit/integration/packaging/E2E suite (P11).
 

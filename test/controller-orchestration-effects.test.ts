@@ -260,14 +260,16 @@ test("assign-story launches a writer and marks the story assigned", async () => 
   );
 });
 
-test("assign-reviewer launches a reviewer without changing story status", async () => {
+test("assign-reviewer persists the assignment without changing story status", async () => {
   const git = new RecordingGit();
   const story = storyAt("approved"); // any awaiting-review-ish story is fine
   const result = await effects(git).execute(
     { type: "assign-reviewer", storyId: "story-1" },
     snapshot(story),
   );
-  assert.equal(first(result.stories).status, story.status);
+  const assigned = first(result.stories);
+  assert.equal(assigned.status, story.status);
+  assert.equal(assigned.reviewerAgentId, "reviewer-1");
   assert.equal(
     result.agents.some((a) => a.id === "reviewer-1"),
     true,
