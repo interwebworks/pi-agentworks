@@ -51,6 +51,9 @@ test("parent extension delegates launch commands and tool actions to its gateway
   await commands.get("agentworks")?.handler("NORMAL ship it", {
     ui: { notify: (message: string) => notices.push(message) },
   });
+  await commands.get("agentworks")?.handler("status run-1", {
+    ui: { notify: (message: string) => notices.push(message) },
+  });
   const result = await tools.get("agentworks")?.execute("call-1", {
     action: "status",
     runId: "run-1",
@@ -59,7 +62,8 @@ test("parent extension delegates launch commands and tool actions to its gateway
   assert.deepEqual(requests, [
     { action: "launch", mode: "NORMAL", task: "ship it" },
     { action: "status", runId: "run-1" },
+    { action: "status", runId: "run-1" },
   ]);
-  assert.deepEqual(notices, ["handled launch"]);
+  assert.deepEqual(notices, ["handled launch", "handled status"]);
   assert.deepEqual(result?.content, [{ type: "text", text: "handled status" }]);
 });

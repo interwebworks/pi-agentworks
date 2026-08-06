@@ -95,6 +95,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 ## P8 - Parent Pi extension
 
 - [x] Register `/agentworks` and argument forms for LOW, NORMAL, and HIGH.
+- [x] Route `/agentworks status <runId>` through the authenticated parent read surface.
 - [x] Register the model-callable `agentworks` management tool.
 - [ ] Implement the persistent right-side overlay todo and run-status view.
 - [ ] Implement narrow-terminal fallback, hide/show, focus, and management shortcuts.

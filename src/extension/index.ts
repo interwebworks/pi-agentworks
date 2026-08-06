@@ -70,15 +70,16 @@ export function installParentExtension(
 ): void {
   pi.registerCommand("agentworks", {
     description:
-      "Launch or inspect an Agentworks run. Usage: /agentworks [LOW|NORMAL|HIGH] <task>",
+      "Launch or inspect an Agentworks run. Usage: /agentworks [LOW|NORMAL|HIGH] <task> or /agentworks status <runId>",
     handler(args, ctx) {
-      const { mode, task } = parseAgentworksCommand(args);
+      const { action, mode, task, runId } = parseAgentworksCommand(args);
       if (gateway !== null) {
         return gateway
           .execute({
-            action: "launch",
+            action: action ?? "launch",
             ...(mode === null ? {} : { mode }),
             ...(task.length === 0 ? {} : { task }),
+            ...(runId === undefined ? {} : { runId }),
           })
           .catch(gatewayFailure)
           .then((result) => {
@@ -87,9 +88,11 @@ export function installParentExtension(
       }
       const modeLabel = mode ?? "(default)";
       ctx.ui.notify(
-        task.length > 0
-          ? `Agentworks: would launch a ${modeLabel} run for "${task}", but this is not yet wired to the controller runtime.`
-          : "Agentworks: not yet wired to the controller runtime. Provide a task, e.g. /agentworks NORMAL build the thing.",
+        action === "status"
+          ? "Agentworks: status requires a run id, e.g. /agentworks status run-123."
+          : task.length > 0
+            ? `Agentworks: would launch a ${modeLabel} run for "${task}", but this is not yet wired to the controller runtime.`
+            : "Agentworks: not yet wired to the controller runtime. Provide a task, e.g. /agentworks NORMAL build the thing.",
         "info",
       );
       return Promise.resolve();

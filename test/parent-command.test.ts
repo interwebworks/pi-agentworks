@@ -46,6 +46,20 @@ test("parseAgentworksCommand: a bad-mode-looking first word is treated as task t
   });
 });
 
+test("parseAgentworksCommand: status optionally accepts a run id", () => {
+  assert.deepEqual(parseAgentworksCommand("status run-123"), {
+    action: "status",
+    mode: null,
+    task: "",
+    runId: "run-123",
+  });
+  assert.deepEqual(parseAgentworksCommand("STATUS"), {
+    action: "status",
+    mode: null,
+    task: "",
+  });
+});
+
 test("parseAgentworksToolInput: valid action with no optional fields", () => {
   const input = parseAgentworksToolInput({ action: "status" });
   assert.equal(input.action, "status");

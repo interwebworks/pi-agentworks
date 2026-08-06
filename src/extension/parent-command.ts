@@ -10,8 +10,10 @@ export type {
 } from "../application/ports/parent-management.ts";
 
 export interface ParsedAgentworksCommand {
+  readonly action?: "status";
   readonly mode: ComplexityMode | null;
   readonly task: string;
+  readonly runId?: string;
 }
 
 /**
@@ -27,6 +29,15 @@ export function parseAgentworksCommand(
 ): ParsedAgentworksCommand {
   const trimmed = argsLine.trim();
   if (trimmed.length === 0) return Object.freeze({ mode: null, task: "" });
+  const statusMatch = /^status(?:\s+(\S+))?$/iu.exec(trimmed);
+  if (statusMatch !== null) {
+    return Object.freeze({
+      action: "status",
+      mode: null,
+      task: "",
+      ...(statusMatch[1] === undefined ? {} : { runId: statusMatch[1] }),
+    });
+  }
 
   const firstSpaceIndex = trimmed.search(/\s/u);
   const firstToken =
