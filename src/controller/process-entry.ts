@@ -31,6 +31,9 @@ export interface ControllerOrchestrationExecutor {
 
 export interface ControllerProcessDependencies {
   readonly orchestration?: ControllerOrchestrationExecutor;
+  readonly orchestrationFactory?: (
+    runtime: ControllerRuntime,
+  ) => ControllerOrchestrationExecutor | undefined;
 }
 
 export interface ControllerProcessConfiguration {
@@ -182,6 +185,15 @@ function isEmptyObject(payload: JsonValue): boolean {
   );
 }
 
+export function resolveControllerOrchestrationExecutor(
+  runtime: ControllerRuntime,
+  dependencies: ControllerProcessDependencies,
+): ControllerOrchestrationExecutor | undefined {
+  return (
+    dependencies.orchestration ?? dependencies.orchestrationFactory?.(runtime)
+  );
+}
+
 export async function executeInjectedOrchestration(
   clientKind: "parent" | "management" | "child",
   payload: JsonValue,
@@ -253,6 +265,7 @@ export async function runControllerProcess(
   dependencies: ControllerProcessDependencies = {},
 ): Promise<number> {
   let stopping = false;
+  let orchestrationExecutor = dependencies.orchestration;
   let resolveCompletion: ((exitCode: number) => void) | null = null;
   const completion = new Promise<number>((resolve) => {
     resolveCompletion = resolve;
@@ -407,7 +420,7 @@ export async function runControllerProcess(
             request.clientKind,
             request.payload,
             runtime.currentWrite(),
-            dependencies.orchestration,
+            orchestrationExecutor,
           );
         }
         case "orchestration.plan": {
@@ -504,6 +517,15 @@ export async function runControllerProcess(
   });
 
   await runtime.start();
+  try {
+    orchestrationExecutor = resolveControllerOrchestrationExecutor(
+      runtime,
+      dependencies,
+    );
+  } catch (error) {
+    await runtime.shutdown({ releaseLease: true });
+    throw error;
+  }
   const onTerminate = (): void => {
     void requestStop(0, true);
   };

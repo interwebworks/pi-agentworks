@@ -123,6 +123,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Add controller agent identity and environment launch-configuration resolvers with explicit runtime paths/endpoints.
 - [x] Add a complete-dependency production orchestration composition factory wiring preparation, resources, secure launcher, effects, and loop.
 - [x] Add an optional parent-only controller orchestration executor injection with current fenced-write forwarding and a default not-configured gate.
+- [x] Add a lazy controller-process composition hook that can construct the executor after runtime startup and shuts down if construction fails.
 - [ ] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.

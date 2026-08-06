@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   executeInjectedOrchestration,
+  resolveControllerOrchestrationExecutor,
   type ControllerOrchestrationExecutor,
 } from "../src/controller/process-entry.ts";
 import type { FencedWrite } from "../src/application/ports/controller-repository.ts";
+import type { ControllerRuntime } from "../src/infrastructure/controller/controller-runtime.ts";
 
 const write: FencedWrite = {
   ownerId: "controller",
@@ -26,6 +28,24 @@ test("injected orchestration entrypoint forwards current fenced write to executo
     { accepted: true },
   );
   assert.deepEqual(received, write);
+});
+
+test("process dependency factory is lazy and can supply the executor", () => {
+  const executor: ControllerOrchestrationExecutor = {
+    execute: () => Promise.resolve({ accepted: true }),
+  };
+  const runtime = {} as unknown as ControllerRuntime;
+  let called = false;
+  assert.equal(
+    resolveControllerOrchestrationExecutor(runtime, {
+      orchestrationFactory: (current) => {
+        called = current === runtime;
+        return executor;
+      },
+    }),
+    executor,
+  );
+  assert.equal(called, true);
 });
 
 test("orchestration entrypoint stays fail closed without injection or parent identity", async () => {
