@@ -97,6 +97,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Register `/agentworks` and argument forms for LOW, NORMAL, and HIGH.
 - [x] Route `/agentworks status <runId>` through the authenticated parent read surface.
 - [x] Register the model-callable `agentworks` management tool.
+- [x] Add a bounded parent run-status widget and footer indicator after successful status/launch reads.
 - [ ] Implement the persistent right-side overlay todo and run-status view.
 - [ ] Implement narrow-terminal fallback, hide/show, focus, and management shortcuts.
 - [ ] Restore active runs when Pi restarts.

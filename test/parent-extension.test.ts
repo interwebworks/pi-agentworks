@@ -22,6 +22,8 @@ test("parent extension delegates launch commands and tool actions to its gateway
     }
   >();
   const notices: string[] = [];
+  const statuses: string[] = [];
+  const widgets: string[][] = [];
   const requests: AgentworksToolInput[] = [];
   const gateway: ParentManagementGateway = {
     execute(input) {
@@ -48,12 +50,17 @@ test("parent extension delegates launch commands and tool actions to its gateway
   } as unknown as ExtensionAPI;
 
   installParentExtension(api, gateway);
-  await commands.get("agentworks")?.handler("NORMAL ship it", {
-    ui: { notify: (message: string) => notices.push(message) },
-  });
-  await commands.get("agentworks")?.handler("status run-1", {
-    ui: { notify: (message: string) => notices.push(message) },
-  });
+  const ui = {
+    notify: (message: string) => notices.push(message),
+    setStatus: (_key: string, text: string | undefined) => {
+      if (text !== undefined) statuses.push(text);
+    },
+    setWidget: (_key: string, content: string[] | undefined) => {
+      if (content !== undefined) widgets.push(content);
+    },
+  };
+  await commands.get("agentworks")?.handler("NORMAL ship it", { ui });
+  await commands.get("agentworks")?.handler("status run-1", { ui });
   const result = await tools.get("agentworks")?.execute("call-1", {
     action: "status",
     runId: "run-1",
@@ -65,5 +72,10 @@ test("parent extension delegates launch commands and tool actions to its gateway
     { action: "status", runId: "run-1" },
   ]);
   assert.deepEqual(notices, ["handled launch", "handled status"]);
+  assert.deepEqual(statuses, [
+    "Agentworks • handled launch",
+    "Agentworks • handled status",
+  ]);
+  assert.deepEqual(widgets, [["handled launch"], ["handled status"]]);
   assert.deepEqual(result?.content, [{ type: "text", text: "handled status" }]);
 });

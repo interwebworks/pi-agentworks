@@ -1,4 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   installChildBridge,
   installChildLockdown,
@@ -64,6 +67,20 @@ function gatewayFailure(error: unknown): ParentManagementResult {
   };
 }
 
+function updateParentStatusWidget(
+  ui: ExtensionUIContext,
+  result: ParentManagementResult,
+): void {
+  const lines = result.text
+    .split("\n")
+    .slice(0, 4)
+    .map((line) => (line.length > 120 ? `${line.slice(0, 117)}...` : line));
+  const headline = lines[0] ?? "idle";
+  const marker = result.notificationType === "error" ? "!" : "•";
+  ui.setStatus("agentworks", `Agentworks ${marker} ${headline}`);
+  ui.setWidget("agentworks-status", lines, { placement: "belowEditor" });
+}
+
 export function installParentExtension(
   pi: ExtensionAPI,
   gateway: ParentManagementGateway | null = null,
@@ -83,6 +100,7 @@ export function installParentExtension(
           })
           .catch(gatewayFailure)
           .then((result) => {
+            updateParentStatusWidget(ctx.ui, result);
             ctx.ui.notify(result.text, result.notificationType ?? "info");
           });
       }
