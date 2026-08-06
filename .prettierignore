@@ -1,0 +1,4 @@
+.claude/
+coverage/
+dist/
+node_modules/

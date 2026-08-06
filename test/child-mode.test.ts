@@ -22,14 +22,22 @@ type FakeHandler = (...arguments_: unknown[]) => unknown;
 
 function fakeExtensionApi() {
   const handlers = new Map<string, FakeHandler[]>();
+  const commands = new Map<string, unknown>();
+  const tools = new Map<string, unknown>();
   const api = {
     on(name: string, handler: FakeHandler) {
       const registered = handlers.get(name) ?? [];
       registered.push(handler);
       handlers.set(name, registered);
     },
+    registerCommand(name: string, options: unknown) {
+      commands.set(name, options);
+    },
+    registerTool(tool: { name: string }) {
+      tools.set(tool.name, tool);
+    },
   } as unknown as ExtensionAPI;
-  return { api, handlers };
+  return { api, handlers, commands, tools };
 }
 
 async function invoke(
@@ -77,7 +85,7 @@ async function closeSocketFixture(
   rmSync(fixture.root, { recursive: true, force: true });
 }
 
-test("ordinary Pi sessions leave the Agentworks extension completely dormant", () => {
+test("ordinary Pi sessions register only the parent /agentworks surface, no child-mode event handlers", () => {
   assert.equal(resolveChildModeConfiguration({}), null);
   assert.equal(
     resolveChildModeConfiguration({ AGENTWORKS_CHILD_MODE: "0" }),
@@ -90,6 +98,8 @@ test("ordinary Pi sessions leave the Agentworks extension completely dormant", (
     const fake = fakeExtensionApi();
     agentworks(fake.api);
     assert.equal(fake.handlers.size, 0);
+    assert.deepEqual([...fake.commands.keys()], ["agentworks"]);
+    assert.deepEqual([...fake.tools.keys()], ["agentworks"]);
   } finally {
     if (previous === undefined) delete process.env.AGENTWORKS_CHILD_MODE;
     else process.env.AGENTWORKS_CHILD_MODE = previous;
