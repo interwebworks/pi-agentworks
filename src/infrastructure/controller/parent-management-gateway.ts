@@ -199,7 +199,7 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
 /** Build a parent client factory from authenticated runtime discovery. */
 export function createDiscoveredParentClientFactory(
   runtimeRoot: string,
-  clientId = randomUUID(),
+  clientId?: string,
 ): ParentControllerClientFactory {
   return async (runId) => {
     const discovered: DiscoveredControllerRuntime | null =
@@ -213,7 +213,7 @@ export function createDiscoveredParentClientFactory(
       socketPath: discovered.descriptor.socketPath,
       runId,
       authToken: discovered.authToken,
-      clientId,
+      clientId: clientId ?? randomUUID(),
       clientKind: "parent",
       agentId: null,
     });

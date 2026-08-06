@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { ControllerParentManagementGateway } from "../src/infrastructure/controller/parent-management-gateway.ts";
+import {
+  ControllerParentManagementGateway,
+  createDiscoveredParentClientFactory,
+  createDiscoveredParentManagementGateway,
+} from "../src/infrastructure/controller/parent-management-gateway.ts";
 import {
   createAgentState,
   createRunState,
@@ -88,6 +95,38 @@ test("status reads the controller snapshot and events into dashboard data", asyn
   assert.match(result.text, /Stories: none/u);
   assert.match(result.text, /Next: none/u);
   assert.match(result.text, /Attention:\n\s{2}! agent-1: needs approval/u);
+});
+
+test("discovered parent launch supports a subsequent status request", async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-parent-gateway-"));
+  let runId: string | undefined;
+  try {
+    const gateway = createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      process.cwd(),
+    );
+    const launched = await gateway.execute({
+      action: "launch",
+      mode: "HIGH",
+      task: "verify parent launch",
+    });
+    assert.match(launched.text, /created in planning state/u);
+    runId = /Agentworks run (\S+) created/u.exec(launched.text)?.[1];
+    assert.ok(runId);
+    const status = await gateway.execute({ action: "status", runId });
+    assert.match(status.text, /HIGH/u);
+  } finally {
+    if (runId !== undefined) {
+      const client =
+        await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+      try {
+        await client.request({ action: "controller.shutdown", payload: {} });
+      } finally {
+        client.close();
+      }
+    }
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
 });
 
 test("unsupported parent actions remain explicitly gated", async () => {

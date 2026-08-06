@@ -16,6 +16,7 @@ import {
   type ParentManagementResult,
 } from "./parent-command.ts";
 import { createDiscoveredParentManagementGateway } from "../infrastructure/controller/parent-management-gateway.ts";
+import { resolveAgentworksRuntimeRoot } from "../infrastructure/controller/runtime-root.ts";
 
 /**
  * Agentworks package entrypoint.
@@ -45,17 +46,16 @@ export default function agentworks(pi: ExtensionAPI): void {
 
 /**
  * Registers the parent-Pi surface: the `/agentworks` command and the
- * model-callable `agentworks` tool. Neither is wired to the controller
- * runtime yet — both report a clear "not yet wired" stub until the
- * controller-launch slice lands.
+ * model-callable `agentworks` tool. Parent sessions use the private default
+ * runtime root unless an explicit runtime-root override is configured.
  */
 function createParentGateway(
   environment: ChildModeEnvironment,
 ): ParentManagementGateway | null {
-  const runtimeRoot = environment.AGENTWORKS_RUNTIME_ROOT;
-  return runtimeRoot === undefined
-    ? null
-    : createDiscoveredParentManagementGateway(runtimeRoot, process.cwd());
+  return createDiscoveredParentManagementGateway(
+    resolveAgentworksRuntimeRoot(environment),
+    process.cwd(),
+  );
 }
 
 function gatewayFailure(error: unknown): ParentManagementResult {
