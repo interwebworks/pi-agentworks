@@ -52,6 +52,16 @@ async function invoke(
   return result;
 }
 
+async function invokeEvent(
+  handlers: ReadonlyMap<string, readonly FakeHandler[]>,
+  name: string,
+  event: unknown,
+): Promise<void> {
+  for (const handler of handlers.get(name) ?? []) {
+    await handler(event, {});
+  }
+}
+
 async function socketFixture(): Promise<{
   readonly root: string;
   readonly socketPath: string;
@@ -205,7 +215,16 @@ test("child bridge authenticates before any model turn and closes on shutdown", 
 
   assert.deepEqual(
     [...fake.handlers.keys()],
-    ["session_start", "before_agent_start", "tool_call", "session_shutdown"],
+    [
+      "session_start",
+      "before_agent_start",
+      "agent_start",
+      "turn_start",
+      "tool_execution_start",
+      "agent_settled",
+      "tool_call",
+      "session_shutdown",
+    ],
   );
   await assert.rejects(
     invoke(fake.handlers, "before_agent_start"),
@@ -214,8 +233,25 @@ test("child bridge authenticates before any model turn and closes on shutdown", 
   await invoke(fake.handlers, "session_start");
   await invoke(fake.handlers, "before_agent_start");
   assert.equal(await invoke(fake.handlers, "tool_call"), undefined);
-  assert.deepEqual(actions, ["connect", "child.hello", "agent.message"]);
+  await invokeEvent(fake.handlers, "agent_start", {});
+  await invokeEvent(fake.handlers, "turn_start", {
+    timestamp: Date.now(),
+  });
+  await invokeEvent(fake.handlers, "tool_execution_start", {
+    toolName: "bash",
+  });
+  await invokeEvent(fake.handlers, "agent_settled", {});
+  assert.deepEqual(actions, [
+    "connect",
+    "child.hello",
+    "agent.message",
+    "agent.message",
+    "agent.message",
+    "agent.message",
+    "agent.message",
+  ]);
   await invoke(fake.handlers, "session_shutdown");
+  assert.equal(actions.at(-1), "agent.message");
   assert.equal(closes, 1);
   await assert.rejects(
     invoke(fake.handlers, "before_agent_start"),

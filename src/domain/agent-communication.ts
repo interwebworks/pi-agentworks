@@ -143,6 +143,54 @@ export function sessionShutdown(
   });
 }
 
+export function operationStarted(
+  runId: string,
+  agentId: string,
+  taskId: string | null = null,
+): OperationStartedMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "operation-started",
+    runId,
+    agentId,
+    taskId,
+  });
+}
+
+export function operationProgress(
+  runId: string,
+  agentId: string,
+  output: string | null,
+  taskId: string | null = null,
+): OperationProgressMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "operation-progress",
+    runId,
+    agentId,
+    taskId,
+    output,
+  });
+}
+
+export function operationCompleted(
+  runId: string,
+  agentId: string,
+  success: boolean,
+  revision: number | null = null,
+  taskId: string | null = null,
+): OperationCompletedMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "operation-completed",
+    runId,
+    agentId,
+    taskId,
+    success,
+    revision,
+  });
+}
+
 export function heartbeat(
   runId: string,
   agentId: string,

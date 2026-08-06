@@ -12,6 +12,10 @@ import { isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { JsonValue } from "../application/ports/controller-repository.ts";
 import {
+  heartbeat,
+  operationCompleted,
+  operationProgress,
+  operationStarted,
   sessionShutdown,
   sessionStarted,
   type AgentMessage,
@@ -235,6 +239,7 @@ export function installChildBridge(
   let client: ChildControllerClient | null = null;
   let authenticated = false;
   let sessionId: string | null = null;
+  let operationStartedAt: number | null = null;
 
   const sendMessage = async (
     nextClient: ChildControllerClient,
@@ -244,7 +249,20 @@ export function installChildBridge(
     await nextClient.request({ action: "agent.message", payload });
   };
 
+  const reportMessage = async (message: AgentMessage): Promise<void> => {
+    const activeClient = client;
+    if (!authenticated || activeClient === null) return;
+    try {
+      await sendMessage(activeClient, message);
+    } catch {
+      authenticated = false;
+      client = null;
+      activeClient.close();
+    }
+  };
+
   pi.on("session_start", async (_event, context) => {
+    operationStartedAt = null;
     authenticated = false;
     sessionId = randomUUID();
     client?.close();
@@ -298,6 +316,41 @@ export function installChildBridge(
     }
   });
 
+  pi.on("agent_start", () => {
+    operationStartedAt = Date.now();
+    void reportMessage(
+      operationStarted(configuration.runId, configuration.agentId),
+    );
+  });
+
+  pi.on("turn_start", (event) => {
+    const startedAt = operationStartedAt ?? event.timestamp;
+    void reportMessage(
+      heartbeat(
+        configuration.runId,
+        configuration.agentId,
+        Math.max(0, event.timestamp - startedAt),
+      ),
+    );
+  });
+
+  pi.on("tool_execution_start", (event) => {
+    void reportMessage(
+      operationProgress(
+        configuration.runId,
+        configuration.agentId,
+        `tool:${event.toolName}`,
+      ),
+    );
+  });
+
+  pi.on("agent_settled", () => {
+    void reportMessage(
+      operationCompleted(configuration.runId, configuration.agentId, true),
+    );
+    operationStartedAt = null;
+  });
+
   pi.on("tool_call", () =>
     authenticated
       ? undefined
@@ -310,6 +363,7 @@ export function installChildBridge(
 
   pi.on("session_shutdown", async () => {
     authenticated = false;
+    operationStartedAt = null;
     const closingClient = client;
     const closingSessionId = sessionId;
     sessionId = null;
