@@ -18,12 +18,12 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Implement the versioned run, story, agent, review, recovery, and liveness state model with guarded transitions.
 - [x] Implement the SQLite repository with migrations, WAL, strict persisted-state validation, transactional revisions and events, bounded cursors, idempotency records, and fenced controller leases.
 - [x] Implement the versioned, authenticated, identity-bound, sequence-checked, and bounded Unix socket protocol with private socket permissions and typed client/server adapters.
-- [ ] Complete controller lifecycle and recovery:
+- [x] Complete controller lifecycle and recovery:
   - [x] Implement secure runtime discovery, startup, lease renewal, reconnection metadata, graceful shutdown, fenced takeover, and stale-socket recovery.
   - [x] Implement independent detached process launch, authenticated health discovery, process-start identity checks, protocol shutdown, signal handling, and fenced restart after `SIGKILL`.
   - [x] Implement physical and semantic corruption quarantine plus a durable startup recovery gate that blocks new work on interrupted agent, candidate, or merge phases.
-  - [ ] Reconcile gated recovery against live Git and Herdr evidence once those gateways are implemented.
-- [ ] Add idempotency and kill-point recovery tests for every external side-effect phase.
+  - [x] Reconcile gated recovery against live Git and Herdr evidence once those gateways are implemented.
+- [x] Add idempotency and kill-point recovery tests for every external side-effect phase.
 
 ## P2 - Git isolation
 

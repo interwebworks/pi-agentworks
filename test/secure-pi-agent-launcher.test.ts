@@ -400,3 +400,39 @@ test("launch refuses stale authority, pane mismatch, tool widening, and missing 
     rmSync(missing.root, { recursive: true, force: true });
   }
 });
+
+test("relaunch after a kill point reuses the private artifacts idempotently", async () => {
+  const current = fixture();
+  try {
+    const first = await current.launcher.launch(current.request);
+    // Simulates a crash after artifacts were written but before the agent was
+    // confirmed: the artifacts already exist on the retry and must be reused.
+    const second = await current.launcher.launch(current.request);
+    assert.equal(second.rolePromptPath, first.rolePromptPath);
+    assert.equal(second.taskPromptPath, first.taskPromptPath);
+    assert.equal(
+      second.controllerCapabilityPath,
+      first.controllerCapabilityPath,
+    );
+    assert.equal(second.rolePromptSha256, first.rolePromptSha256);
+    assert.equal(second.taskPromptSha256, first.taskPromptSha256);
+    assert.equal(second.commandSha256, first.commandSha256);
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("relaunch fails closed when a private artifact was altered after a kill point", async () => {
+  const current = fixture();
+  try {
+    const first = await current.launcher.launch(current.request);
+    writeFileSync(first.rolePromptPath, "tampered role prompt\n");
+    await assert.rejects(current.launcher.launch(current.request), (error) => {
+      assert.ok(error instanceof SecurePiAgentLaunchError);
+      assert.match(error.message, /different launch content/u);
+      return true;
+    });
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
