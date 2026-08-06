@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import agentworks from "../src/extension/index.ts";
+import { decodeAgentMessage } from "../src/domain/agent-message-codec.ts";
 import {
   ChildBridgeConfigurationError,
   ChildBridgeUnavailableError,
@@ -221,6 +222,7 @@ test("child bridge authenticates before any model turn and closes on shutdown", 
       "agent_start",
       "turn_start",
       "tool_execution_start",
+      "tool_execution_end",
       "agent_settled",
       "tool_call",
       "session_shutdown",
@@ -257,6 +259,58 @@ test("child bridge authenticates before any model turn and closes on shutdown", 
     invoke(fake.handlers, "before_agent_start"),
     ChildBridgeUnavailableError,
   );
+});
+
+test("child operation errors emit blocker and failed-result messages", async () => {
+  const fake = fakeExtensionApi();
+  const messages: ReturnType<typeof decodeAgentMessage>[] = [];
+  installChildBridge(
+    fake.api,
+    {
+      runId: "run-1",
+      agentId: "agent-1",
+      controllerSocketPath: "/runtime/controller.sock",
+      controllerAuthToken: "A".repeat(43),
+    },
+    () => ({
+      connect: () => Promise.resolve(),
+      request(input) {
+        if (input.action === "agent.message") {
+          messages.push(decodeAgentMessage(JSON.stringify(input.payload)));
+        }
+        return Promise.resolve({
+          runId: "run-1",
+          agentId: "agent-1",
+          revision: 7,
+          status: "launching",
+        });
+      },
+      close: () => undefined,
+    }),
+  );
+
+  await invoke(fake.handlers, "session_start");
+  await invokeEvent(fake.handlers, "agent_start", {});
+  await invokeEvent(fake.handlers, "tool_execution_end", {
+    toolName: "bash",
+    isError: true,
+  });
+  await invokeEvent(fake.handlers, "agent_settled", {});
+
+  assert.deepEqual(
+    messages.map((message) => message.type),
+    [
+      "session-started",
+      "operation-started",
+      "agent-blocked",
+      "operation-completed",
+    ],
+  );
+  const completed = messages.find(
+    (message) => message.type === "operation-completed",
+  );
+  assert.ok(completed);
+  assert.equal(completed.success, false);
 });
 
 test("default bridge performs a real per-agent authenticated socket hello", async () => {

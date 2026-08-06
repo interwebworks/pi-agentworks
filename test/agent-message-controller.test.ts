@@ -16,6 +16,7 @@ import {
 } from "../src/domain/controller-state.ts";
 import type {
   CommitResult,
+  ControllerEventInput,
   ControllerRepository,
   ControllerSnapshot,
   FencedWrite,
@@ -26,6 +27,7 @@ class FakeRepository implements ControllerRepository {
   snapshot: ControllerSnapshot;
   commitCount = 0;
   lastWrite: FencedWrite | null = null;
+  lastEvents: readonly ControllerEventInput[] = [];
 
   constructor(agent: AgentState) {
     const run: RunState = createRunState({
@@ -75,9 +77,11 @@ class FakeRepository implements ControllerRepository {
   commitSnapshot(input: {
     write: FencedWrite;
     agents: readonly AgentState[];
+    events: readonly ControllerEventInput[];
   }): CommitResult {
     this.commitCount += 1;
     this.lastWrite = input.write;
+    this.lastEvents = input.events;
     this.snapshot = {
       ...this.snapshot,
       revision: this.snapshot.revision + 1,
@@ -120,7 +124,12 @@ test("agent message controller commits a fenced heartbeat transition", () => {
     { ownerId: "controller", fencingToken: 4, now: 3 },
     "request-1",
   );
-  assert.deepEqual(result, { revision: 2, changed: true, replayed: false });
+  assert.deepEqual(result, {
+    revision: 2,
+    changed: true,
+    replayed: false,
+    reaction: { type: "none" },
+  });
   assert.equal(repository.commitCount, 1);
   assert.deepEqual(repository.lastWrite, {
     ownerId: "controller",
@@ -128,6 +137,27 @@ test("agent message controller commits a fenced heartbeat transition", () => {
     now: 3,
   });
   assert.equal(repository.snapshot.agents[0]?.lastHeartbeatAt, 3);
+});
+
+test("blocked messages commit a supervisor attention event", () => {
+  const repository = new FakeRepository(idleAgent());
+  const result = new AgentMessageController(repository, () => 3).apply(
+    {
+      protocolVersion: 1,
+      type: "agent-blocked",
+      runId: "run-1",
+      agentId: "agent-1",
+      reason: "blocked",
+      detail: "needs approval",
+    },
+    { ownerId: "controller", fencingToken: 4, now: 3 },
+    "request-blocked",
+  );
+  assert.equal(result.reaction.type, "attention-required");
+  assert.deepEqual(
+    repository.lastEvents.map((event) => event.type),
+    ["agent-agent-blocked", "supervisor-attention-required"],
+  );
 });
 
 test("session-started without a path is acknowledged without inventing readiness", () => {
@@ -141,7 +171,12 @@ test("session-started without a path is acknowledged without inventing readiness
     { ownerId: "controller", fencingToken: 4, now: 3 },
     "request-2",
   );
-  assert.deepEqual(result, { revision: 1, changed: false, replayed: false });
+  assert.deepEqual(result, {
+    revision: 1,
+    changed: false,
+    replayed: false,
+    reaction: { type: "none" },
+  });
   assert.equal(repository.commitCount, 0);
 });
 

@@ -3,6 +3,10 @@ import {
   applyAgentMessage,
   type AgentMessageStateResult,
 } from "../../domain/agent-message-state.ts";
+import {
+  reactionForAgentMessage,
+  type SupervisorReaction,
+} from "../../domain/supervisor-reaction.ts";
 import type {
   ControllerEventInput,
   ControllerRepository,
@@ -20,6 +24,7 @@ export interface AgentMessageCommitResult {
   readonly revision: number;
   readonly changed: boolean;
   readonly replayed: boolean;
+  readonly reaction: SupervisorReaction;
 }
 
 function messageEvent(
@@ -72,14 +77,27 @@ export class AgentMessageController {
         error instanceof Error ? error.message : String(error),
       );
     }
+    const reaction = reactionForAgentMessage(message);
     if (!state.changed) {
       return Object.freeze({
         revision: snapshot.revision,
         changed: false,
         replayed: false,
+        reaction,
       });
     }
 
+    const events = [messageEvent(message, requestId, at)];
+    if (reaction.type === "attention-required") {
+      events.push({
+        eventId: `${requestId}-supervisor`,
+        type: "supervisor-attention-required",
+        entityType: "agent",
+        entityId: message.agentId,
+        payload: Object.freeze({ reason: reaction.reason }),
+        occurredAt: at,
+      });
+    }
     const result = this.#repository.commitSnapshot({
       write,
       runId: message.runId,
@@ -95,12 +113,13 @@ export class AgentMessageController {
       agents: snapshot.agents.map((candidate) =>
         candidate.id === state.agent.id ? state.agent : candidate,
       ),
-      events: [messageEvent(message, requestId, at)],
+      events,
     });
     return Object.freeze({
       revision: result.revision,
       changed: true,
       replayed: result.replayed,
+      reaction,
     });
   }
 }

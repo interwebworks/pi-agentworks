@@ -12,6 +12,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { JsonValue } from "../application/ports/controller-repository.ts";
 import {
+  agentBlocked,
   heartbeat,
   operationCompleted,
   operationProgress,
@@ -240,6 +241,7 @@ export function installChildBridge(
   let authenticated = false;
   let sessionId: string | null = null;
   let operationStartedAt: number | null = null;
+  let operationFailureReason: string | null = null;
 
   const sendMessage = async (
     nextClient: ChildControllerClient,
@@ -263,6 +265,7 @@ export function installChildBridge(
 
   pi.on("session_start", async (_event, context) => {
     operationStartedAt = null;
+    operationFailureReason = null;
     authenticated = false;
     sessionId = randomUUID();
     client?.close();
@@ -318,6 +321,7 @@ export function installChildBridge(
 
   pi.on("agent_start", () => {
     operationStartedAt = Date.now();
+    operationFailureReason = null;
     void reportMessage(
       operationStarted(configuration.runId, configuration.agentId),
     );
@@ -344,11 +348,29 @@ export function installChildBridge(
     );
   });
 
-  pi.on("agent_settled", () => {
+  pi.on("tool_execution_end", (event) => {
+    if (!event.isError) return;
+    operationFailureReason = `tool ${event.toolName} reported an error`.slice(
+      0,
+      4096,
+    );
     void reportMessage(
-      operationCompleted(configuration.runId, configuration.agentId, true),
+      agentBlocked(
+        configuration.runId,
+        configuration.agentId,
+        "blocked",
+        operationFailureReason,
+      ),
+    );
+  });
+
+  pi.on("agent_settled", () => {
+    const success = operationFailureReason === null;
+    void reportMessage(
+      operationCompleted(configuration.runId, configuration.agentId, success),
     );
     operationStartedAt = null;
+    operationFailureReason = null;
   });
 
   pi.on("tool_call", () =>
@@ -364,6 +386,7 @@ export function installChildBridge(
   pi.on("session_shutdown", async () => {
     authenticated = false;
     operationStartedAt = null;
+    operationFailureReason = null;
     const closingClient = client;
     const closingSessionId = sessionId;
     sessionId = null;

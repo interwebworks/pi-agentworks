@@ -253,6 +253,7 @@ export async function runControllerProcess(
               accepted: true,
               changed: result.changed,
               replayed: result.replayed,
+              reaction: result.reaction,
               revision: result.revision,
               type: message.type,
             });
