@@ -135,7 +135,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P10 - Distribution and migration
 
-- [ ] Make local `pi install /absolute/path/to/agentworks` installation pass.
+- [x] Prove local `pi install /absolute/path/to/agentworks` installation in a disposable project.
 - [ ] Prepare Git and npm package metadata for Pi package-list distribution.
 - [ ] Document installation, updates, configuration, custom role packs, recovery, and uninstall.
 - [ ] Replace `pi-herdr-subagent-panes.ts` after Agentworks passes live validation.

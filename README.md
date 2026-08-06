@@ -21,7 +21,7 @@ Local development installation uses Pi's package mechanism:
 pi install /home/user/Development/agentworks
 ```
 
-Use an absolute path. The same package manifest is designed for future Git or npm installation once Agentworks ships:
+Use an absolute path. This local installation path has been verified in a disposable Pi project. The same package manifest is designed for future Git or npm installation once Agentworks ships:
 
 ```bash
 pi install git:github.com/OWNER/agentworks@VERSION
