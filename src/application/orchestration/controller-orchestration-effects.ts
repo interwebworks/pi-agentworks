@@ -165,7 +165,8 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
     if (
       story.reviewedIntegrationHead === null ||
       story.reviewerAgentId === null ||
-      story.assignedAgentId === null
+      story.assignedAgentId === null ||
+      story.candidateStoryHead === null
     ) {
       throw new ControllerOrchestrationEffectsError(
         `story ${storyId} is not ready to merge (missing review or writer evidence)`,
@@ -182,7 +183,7 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
       reviewedIntegrationHead: story.reviewedIntegrationHead,
       storyBranch: story.branchName,
       storyWorktreePath: story.worktreePath,
-      candidateCommit: facts.candidateCommit,
+      candidateCommit: story.candidateStoryHead,
       writerAgentId: story.assignedAgentId,
       reviewerAgentId: story.reviewerAgentId,
       requesterRole: facts.requesterRole,
@@ -225,7 +226,11 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
   ): OrchestrationEffectResult {
     const story = this.#story(storyId, snapshot);
     const run = snapshot.run;
-    if (story.mergeHead === null || story.reviewedIntegrationHead === null) {
+    if (
+      story.mergeHead === null ||
+      story.reviewedIntegrationHead === null ||
+      story.candidateStoryHead === null
+    ) {
       throw new ControllerOrchestrationEffectsError(
         `story ${storyId} cannot be cleaned up before it is merged`,
       );
@@ -240,7 +245,7 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
       integrationWorktreePath: run.integrationWorktree,
       storyBranch: story.branchName,
       storyWorktreePath: story.worktreePath,
-      candidateCommit: facts.candidateCommit,
+      candidateCommit: story.candidateStoryHead,
       reviewedIntegrationHead: story.reviewedIntegrationHead,
       mergeCommit: story.mergeHead,
       mergeOperationId: facts.mergeOperationId,

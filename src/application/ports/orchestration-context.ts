@@ -2,15 +2,18 @@ import type { RunState, StoryState } from "../../domain/controller-state.ts";
 
 /**
  * Runtime facts the merge/cleanup Git operations require that are NOT derivable
- * from the persisted snapshot: the candidate commit the writer produced, the
- * live controller-lease/fence status, protected-branch policy, and operation
- * identities/subjects. The controller runtime — which owns leases, fencing, and
- * candidate bookkeeping — supplies these; keeping them behind a port lets the
- * effects adapter stay pure and fully testable.
+ * from the persisted snapshot: live controller-lease/fence status, protected-
+ * branch policy, and operation identities/subjects. The candidate commit and
+ * merge commit are NOT included here — they are already durable on the story
+ * (`candidateStoryHead` is the exact commit `createCandidateCommit` produced;
+ * `mergeHead` is the exact commit `mergeCandidate` produced), so the effects
+ * adapter reads them straight off `StoryState` instead of duplicating them
+ * through this port. The controller runtime — which owns leases and fencing —
+ * supplies what remains; keeping it behind a port lets the effects adapter stay
+ * pure and fully testable.
  */
 export interface MergeFacts {
   readonly operationId: string;
-  readonly candidateCommit: string;
   readonly requesterRole: string;
   readonly subject: string;
   readonly requiredChecksPassed: boolean;
@@ -23,8 +26,6 @@ export interface MergeFacts {
 
 export interface CleanupFacts {
   readonly operationId: string;
-  readonly candidateCommit: string;
-  readonly mergeCommit: string;
   readonly mergeOperationId: string;
   readonly mergeSubject: string;
   readonly writerLeaseReleased: boolean;

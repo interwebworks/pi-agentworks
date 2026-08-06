@@ -62,7 +62,6 @@ class RecordingGit implements GitWorkspaceGateway {
 
 const mergeFacts = {
   operationId: "merge-op-1",
-  candidateCommit: "cand-1",
   requesterRole: "project-manager",
   subject: "Merge story-1",
   requiredChecksPassed: true,
@@ -75,8 +74,6 @@ const mergeFacts = {
 
 const cleanupFacts = {
   operationId: "cleanup-op-1",
-  candidateCommit: "cand-1",
-  mergeCommit: "merge-xyz",
   mergeOperationId: "merge-op-1",
   mergeSubject: "Merge story-1",
   writerLeaseReleased: true,
@@ -220,7 +217,7 @@ test("request-merge assembles the exact merge request and merges the story", asy
   assert.equal(request.reviewedIntegrationHead, "beef1");
   assert.equal(request.storyBranch, "agentworks/r1/story-1");
   assert.equal(request.storyWorktreePath, "/wt/r1/story-1");
-  assert.equal(request.candidateCommit, "cand-1");
+  assert.equal(request.candidateCommit, "cafe1");
   assert.equal(request.writerAgentId, "writer-1");
   assert.equal(request.reviewerAgentId, "reviewer-1");
   assert.equal(request.requesterRole, "project-manager");
@@ -240,6 +237,7 @@ test("request-cleanup assembles the cleanup request from merged state", async ()
   );
   const request = git.cleanup;
   assert.ok(request);
+  assert.equal(request.candidateCommit, "cafe1");
   assert.equal(request.mergeCommit, "merge-xyz");
   assert.equal(request.reviewedIntegrationHead, "beef1");
   assert.equal(request.reviewerAgentId, "reviewer-1");
