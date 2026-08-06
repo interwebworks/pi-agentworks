@@ -36,6 +36,29 @@ export interface ControllerProcessDependencies {
   ) => ControllerOrchestrationExecutor | undefined;
 }
 
+export type ControllerProcessCompositionProvider = (
+  runtime: ControllerRuntime,
+) => ControllerOrchestrationExecutor;
+
+export function resolveConfiguredOrchestrationProvider(
+  environment: Readonly<Record<string, string | undefined>>,
+  provider: ControllerProcessCompositionProvider | undefined,
+): ControllerProcessCompositionProvider | undefined {
+  const marker = environment.AGENTWORKS_ENABLE_LIVE_ORCHESTRATION;
+  if (marker === undefined) return undefined;
+  if (marker !== "1") {
+    throw new ControllerRuntimeError(
+      "AGENTWORKS_ENABLE_LIVE_ORCHESTRATION must be exactly 1",
+    );
+  }
+  if (provider === undefined) {
+    throw new ControllerRuntimeError(
+      "Live orchestration is enabled but no composition provider was supplied",
+    );
+  }
+  return provider;
+}
+
 export interface ControllerProcessConfiguration {
   readonly runtimeRoot: string;
   readonly runId: string;
@@ -541,7 +564,14 @@ export async function runControllerProcess(
 
 async function main(): Promise<void> {
   const configuration = parseArguments(process.argv.slice(2));
-  process.exitCode = await runControllerProcess(configuration);
+  const orchestrationFactory = resolveConfiguredOrchestrationProvider(
+    process.env,
+    undefined,
+  );
+  process.exitCode = await runControllerProcess(
+    configuration,
+    orchestrationFactory === undefined ? {} : { orchestrationFactory },
+  );
 }
 
 const invokedPath = process.argv[1];

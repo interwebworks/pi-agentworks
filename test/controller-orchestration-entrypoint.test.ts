@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   executeInjectedOrchestration,
+  resolveConfiguredOrchestrationProvider,
   resolveControllerOrchestrationExecutor,
   type ControllerOrchestrationExecutor,
 } from "../src/controller/process-entry.ts";
@@ -28,6 +29,36 @@ test("injected orchestration entrypoint forwards current fenced write to executo
     { accepted: true },
   );
   assert.deepEqual(received, write);
+});
+
+test("configured orchestration provider requires an exact enablement marker and provider", () => {
+  const provider = () => ({
+    execute: () => Promise.resolve({ accepted: true }),
+  });
+  assert.equal(resolveConfiguredOrchestrationProvider({}, provider), undefined);
+  assert.equal(
+    resolveConfiguredOrchestrationProvider(
+      { AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1" },
+      provider,
+    ),
+    provider,
+  );
+  assert.throws(
+    () =>
+      resolveConfiguredOrchestrationProvider(
+        { AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "yes" },
+        provider,
+      ),
+    /must be exactly 1/u,
+  );
+  assert.throws(
+    () =>
+      resolveConfiguredOrchestrationProvider(
+        { AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1" },
+        undefined,
+      ),
+    /no composition provider/u,
+  );
 });
 
 test("process dependency factory is lazy and can supply the executor", () => {
