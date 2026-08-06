@@ -78,19 +78,19 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P8 - Parent Pi extension
 
-- [ ] Register `/agentworks` and argument forms for LOW, NORMAL, and HIGH.
-- [ ] Register the model-callable `agentworks` management tool.
+- [x] Register `/agentworks` and argument forms for LOW, NORMAL, and HIGH.
+- [x] Register the model-callable `agentworks` management tool.
 - [ ] Implement the persistent right-side overlay todo and run-status view.
 - [ ] Implement narrow-terminal fallback, hide/show, focus, and management shortcuts.
 - [ ] Restore active runs when Pi restarts.
 
 ## P9 - Orchestration
 
-- [ ] Implement dependency-aware story scheduling and complexity concurrency caps.
+- [x] Implement dependency-aware story scheduling and complexity concurrency caps.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
-- [ ] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
-- [ ] Implement terminal run completion and safe worktree cleanup.
+- [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
+- [x] Implement terminal run completion and safe worktree cleanup.
 
 ## P10 - Distribution and migration
 
