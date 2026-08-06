@@ -120,6 +120,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Implement private session/config directory and immutable child-capability allocation with ownership/path validation.
 - [x] Add a Herdr pane allocator over the agents-tab lifecycle with final pane/cwd/token verification and release support.
 - [x] Compose Git, Herdr pane, private session, endpoint, and launch settings into an atomic resource provisioner with rollback.
+- [x] Add controller agent identity and environment launch-configuration resolvers with explicit runtime paths/endpoints.
 - [ ] Implement the production composition root and execute planned orchestration actions.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
