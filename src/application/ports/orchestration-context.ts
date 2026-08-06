@@ -1,4 +1,5 @@
-import type { RunState, StoryState } from "../../domain/controller-state.ts";
+import type { StoryState } from "../../domain/controller-state.ts";
+import type { ControllerSnapshot } from "./controller-repository.ts";
 
 /**
  * Runtime facts the merge/cleanup Git operations require that are NOT derivable
@@ -35,6 +36,6 @@ export interface CleanupFacts {
 }
 
 export interface OrchestrationContext {
-  mergeFacts(story: StoryState, run: RunState): MergeFacts;
-  cleanupFacts(story: StoryState, run: RunState): CleanupFacts;
+  mergeFacts(story: StoryState, snapshot: ControllerSnapshot): MergeFacts;
+  cleanupFacts(story: StoryState, snapshot: ControllerSnapshot): CleanupFacts;
 }

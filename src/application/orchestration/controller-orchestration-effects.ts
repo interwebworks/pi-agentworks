@@ -172,7 +172,7 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
         `story ${storyId} is not ready to merge (missing review or writer evidence)`,
       );
     }
-    const facts = this.#context.mergeFacts(story, run);
+    const facts = this.#context.mergeFacts(story, snapshot);
     const result = this.#git.mergeCandidate({
       runId: run.id,
       storyId: story.id,
@@ -235,7 +235,7 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
         `story ${storyId} cannot be cleaned up before it is merged`,
       );
     }
-    const facts = this.#context.cleanupFacts(story, run);
+    const facts = this.#context.cleanupFacts(story, snapshot);
     this.#git.cleanupStoryWorkspace({
       runId: run.id,
       storyId: story.id,
