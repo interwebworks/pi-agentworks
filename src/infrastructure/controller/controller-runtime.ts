@@ -26,6 +26,7 @@ import {
 import type {
   ControllerLease,
   ControllerRepository,
+  FencedWrite,
 } from "../../application/ports/controller-repository.ts";
 import {
   assertControllerDatabaseNotQuarantined,
@@ -567,6 +568,18 @@ export class ControllerRuntime {
       throw new ControllerRuntimeError("Controller runtime is not running");
     }
     return this.#authToken;
+  }
+
+  /** Return the current fenced write authority for controller-owned mutations. */
+  currentWrite(now = this.#clock()): FencedWrite {
+    if (this.#state !== "running" || this.#lease === null) {
+      throw new ControllerRuntimeError("Controller runtime is not running");
+    }
+    return Object.freeze({
+      ownerId: this.#lease.ownerId,
+      fencingToken: this.#lease.fencingToken,
+      now: safeTimestamp(now, "controller write time"),
+    });
   }
 
   assertReadyForWork(): void {

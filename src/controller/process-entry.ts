@@ -1,4 +1,8 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  AgentMessageController,
+  AgentMessageControllerError,
+} from "../application/controller/agent-message-controller.ts";
 import type {
   ControllerEventCursor,
   JsonValue,
@@ -241,13 +245,25 @@ export async function runControllerProcess(
               configuration.runId,
               agent.id,
             );
-            return toJsonValue({ accepted: true, type: message.type });
+            const result = new AgentMessageController(
+              runtime.repository,
+              Date.now,
+            ).apply(message, runtime.currentWrite(), request.requestId);
+            return toJsonValue({
+              accepted: true,
+              changed: result.changed,
+              replayed: result.replayed,
+              revision: result.revision,
+              type: message.type,
+            });
           } catch (error) {
             const code =
               error instanceof InvalidAgentMessageRouteError &&
               error.message.includes("identity does not match")
                 ? "identity-mismatch"
-                : "invalid-message";
+                : error instanceof AgentMessageControllerError
+                  ? "invalid-state"
+                  : "invalid-message";
             throw new ControllerRequestError(
               code,
               error instanceof Error

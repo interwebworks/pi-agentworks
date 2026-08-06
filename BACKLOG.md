@@ -69,7 +69,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Define the versioned message model and bounded codec.
   - [x] Carry authenticated session-start/session-shutdown messages through the child/controller RPC boundary.
   - [x] Define the fail-closed reducer for lifecycle, progress, heartbeat, completion, and blocker messages.
-  - [ ] Wire the reducer into durable controller commits and supervisor reactions.
+  - [x] Wire the reducer into fenced durable controller commits for authenticated `agent.message` requests.
+  - [ ] Add supervisor reactions and child operation/progress/result/blocker emission.
   - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
   - [x] Add deterministic pane-loss assessment and restoration planning.
