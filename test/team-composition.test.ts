@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   composeTeam,
+  selectStoryReviewer,
+  selectStoryWorker,
   TeamCompositionError,
   type ComposableRole,
 } from "../src/domain/team-composition.ts";
@@ -196,4 +198,118 @@ test("is deterministic across repeated composition", async () => {
     roles,
   });
   assert.deepEqual(ids(first), ids(second));
+});
+
+test("selectStoryWorker picks the worker whose role best matches the story", async () => {
+  const roles = await builtinRoles();
+  const team = composeTeam({
+    taskText: "build backend api and frontend ui",
+    mode: "HIGH",
+    roles,
+  });
+  const backendStory = { taskKinds: ["backend", "api"] };
+  const worker = selectStoryWorker(backendStory, team, roles);
+  assert.equal(worker?.runtimeId, "software-development/backend-developer");
+
+  const frontendStory = { taskKinds: ["frontend", "ui"] };
+  const frontendWorker = selectStoryWorker(frontendStory, team, roles);
+  assert.equal(
+    frontendWorker?.runtimeId,
+    "software-development/frontend-developer",
+  );
+});
+
+test("selectStoryWorker falls back deterministically when nothing matches", () => {
+  const team = {
+    mode: "NORMAL" as const,
+    maximumAgents: 8,
+    members: [
+      {
+        runtimeId: "p/pm",
+        authority: "project-manager" as const,
+        reason: "required" as const,
+        matchedKinds: [],
+      },
+      {
+        runtimeId: "p/rev",
+        authority: "reviewer" as const,
+        reason: "required" as const,
+        matchedKinds: [],
+      },
+      {
+        runtimeId: "p/w2",
+        authority: "worker" as const,
+        reason: "task-match" as const,
+        matchedKinds: [],
+      },
+      {
+        runtimeId: "p/w1",
+        authority: "worker" as const,
+        reason: "task-match" as const,
+        matchedKinds: [],
+      },
+    ],
+  };
+  const roles: ComposableRole[] = [
+    {
+      runtimeId: "p/w1",
+      authority: "worker",
+      writePolicy: "story-writer",
+      required: false,
+      taskKinds: ["x"],
+    },
+    {
+      runtimeId: "p/w2",
+      authority: "worker",
+      writePolicy: "story-writer",
+      required: false,
+      taskKinds: ["y"],
+    },
+  ];
+  const unrelatedStory = { taskKinds: ["nothing-declared-anywhere"] };
+  const worker = selectStoryWorker(unrelatedStory, team, roles);
+  // Both workers score zero; the tie breaks alphabetically on runtimeId.
+  assert.equal(worker?.runtimeId, "p/w1");
+});
+
+test("selectStoryWorker returns null when the team has no worker", () => {
+  const team = {
+    mode: "LOW" as const,
+    maximumAgents: 4,
+    members: [
+      {
+        runtimeId: "p/pm",
+        authority: "project-manager" as const,
+        reason: "required" as const,
+        matchedKinds: [],
+      },
+      {
+        runtimeId: "p/rev",
+        authority: "reviewer" as const,
+        reason: "required" as const,
+        matchedKinds: [],
+      },
+    ],
+  };
+  assert.equal(selectStoryWorker({ taskKinds: ["x"] }, team, []), null);
+});
+
+test("selectStoryReviewer prefers the domain-specific reviewer over the generic one", async () => {
+  const roles = await builtinRoles();
+  // Include "software" and "review" in the task text so the domain-specific
+  // code-reviewer role is actually pulled into the composed team pool.
+  const team = composeTeam({
+    taskText: "build backend api, software review, and testing",
+    mode: "HIGH",
+    roles,
+  });
+  assert.ok(
+    team.members.some(
+      (m) => m.runtimeId === "software-development/code-reviewer",
+    ),
+    "the domain reviewer must be present in the team pool for this test to be meaningful",
+  );
+  const softwareStory = { taskKinds: ["review", "software"] };
+  const reviewer = selectStoryReviewer(softwareStory, team, roles);
+  assert.equal(reviewer?.runtimeId, "software-development/code-reviewer");
 });

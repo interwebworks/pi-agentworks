@@ -183,3 +183,74 @@ export function composeTeam(request: TeamCompositionRequest): ComposedTeam {
     members: Object.freeze(ordered),
   });
 }
+
+/**
+ * The story-side input role selection needs: which task kinds the story
+ * belongs to. A `UserStory` from the story-planning domain satisfies this
+ * directly.
+ */
+export interface AssignableStory {
+  readonly taskKinds: readonly string[];
+}
+
+function taskKindOverlap(
+  storyKinds: readonly string[],
+  roleKinds: readonly string[],
+): number {
+  const storySet = new Set(storyKinds);
+  return roleKinds.filter((kind) => storySet.has(kind)).length;
+}
+
+/**
+ * Pick the best-fit team member with the given authority for a story, scoring
+ * candidates by task-kind overlap with their declared role and breaking ties
+ * on runtimeId so the choice is deterministic. Returns null when the team has
+ * no member of that authority.
+ */
+function selectByAuthority(
+  story: AssignableStory,
+  team: ComposedTeam,
+  roles: readonly ComposableRole[],
+  authority: RoleAuthority,
+): TeamMember | null {
+  const roleByRuntimeId = new Map(roles.map((role) => [role.runtimeId, role]));
+  const candidates = team.members.filter(
+    (member) => member.authority === authority,
+  );
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const sorted = [...candidates].sort((left, right) => {
+    const leftScore = taskKindOverlap(
+      story.taskKinds,
+      roleByRuntimeId.get(left.runtimeId)?.taskKinds ?? [],
+    );
+    const rightScore = taskKindOverlap(
+      story.taskKinds,
+      roleByRuntimeId.get(right.runtimeId)?.taskKinds ?? [],
+    );
+    return leftScore !== rightScore
+      ? rightScore - leftScore
+      : left.runtimeId.localeCompare(right.runtimeId);
+  });
+  return sorted.length > 0 ? (sorted[0] ?? null) : null;
+}
+
+/** Select the best-fit story-writer (authority "worker") for a story. */
+export function selectStoryWorker(
+  story: AssignableStory,
+  team: ComposedTeam,
+  roles: readonly ComposableRole[],
+): TeamMember | null {
+  return selectByAuthority(story, team, roles, "worker");
+}
+
+/** Select the best-fit reviewer (authority "reviewer") for a story. */
+export function selectStoryReviewer(
+  story: AssignableStory,
+  team: ComposedTeam,
+  roles: readonly ComposableRole[],
+): TeamMember | null {
+  return selectByAuthority(story, team, roles, "reviewer");
+}
