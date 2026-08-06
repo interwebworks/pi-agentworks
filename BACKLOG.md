@@ -122,7 +122,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Compose Git, Herdr pane, private session, endpoint, and launch settings into an atomic resource provisioner with rollback.
 - [x] Add controller agent identity and environment launch-configuration resolvers with explicit runtime paths/endpoints.
 - [x] Add a complete-dependency production orchestration composition factory wiring preparation, resources, secure launcher, effects, and loop.
-- [ ] Inject the factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
+- [x] Add an optional parent-only controller orchestration executor injection with current fenced-write forwarding and a default not-configured gate.
+- [ ] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.

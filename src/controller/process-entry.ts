@@ -6,6 +6,7 @@ import {
 import type {
   ControllerEventCursor,
   ControllerEventInput,
+  FencedWrite,
   JsonValue,
 } from "../application/ports/controller-repository.ts";
 import type {
@@ -24,7 +25,15 @@ import {
 } from "../infrastructure/controller/controller-runtime.ts";
 import { ControllerRequestError } from "../infrastructure/controller/unix-controller-transport.ts";
 
-interface ControllerProcessConfiguration {
+export interface ControllerOrchestrationExecutor {
+  execute(write: FencedWrite): Promise<JsonValue>;
+}
+
+export interface ControllerProcessDependencies {
+  readonly orchestration?: ControllerOrchestrationExecutor;
+}
+
+export interface ControllerProcessConfiguration {
   readonly runtimeRoot: string;
   readonly runId: string;
   readonly ownerId: string;
@@ -173,6 +182,33 @@ function isEmptyObject(payload: JsonValue): boolean {
   );
 }
 
+export async function executeInjectedOrchestration(
+  clientKind: "parent" | "management" | "child",
+  payload: JsonValue,
+  write: FencedWrite,
+  executor: ControllerOrchestrationExecutor | undefined,
+): Promise<JsonValue> {
+  if (clientKind !== "parent") {
+    throw new ControllerRequestError(
+      "forbidden",
+      "Only a parent client can execute orchestration",
+    );
+  }
+  if (!isEmptyObject(payload)) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Orchestration execution payload must be empty",
+    );
+  }
+  if (executor === undefined) {
+    throw new ControllerRequestError(
+      "not-configured",
+      "Live orchestration effects are not configured",
+    );
+  }
+  return executor.execute(write);
+}
+
 function parseRunInitializationPayload(payload: JsonValue): {
   readonly run: RunState;
   readonly stories: readonly StoryState[];
@@ -214,6 +250,7 @@ function parseRunInitializationPayload(payload: JsonValue): {
 
 export async function runControllerProcess(
   configuration: ControllerProcessConfiguration,
+  dependencies: ControllerProcessDependencies = {},
 ): Promise<number> {
   let stopping = false;
   let resolveCompletion: ((exitCode: number) => void) | null = null;
@@ -366,9 +403,11 @@ export async function runControllerProcess(
           return toJsonValue(result);
         }
         case "orchestration.execute": {
-          throw new ControllerRequestError(
-            "not-configured",
-            "Live orchestration effects are not configured",
+          return executeInjectedOrchestration(
+            request.clientKind,
+            request.payload,
+            runtime.currentWrite(),
+            dependencies.orchestration,
           );
         }
         case "orchestration.plan": {
