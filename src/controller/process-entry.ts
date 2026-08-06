@@ -5,8 +5,14 @@ import {
 } from "../application/controller/agent-message-controller.ts";
 import type {
   ControllerEventCursor,
+  ControllerEventInput,
   JsonValue,
 } from "../application/ports/controller-repository.ts";
+import type {
+  AgentState,
+  RunState,
+  StoryState,
+} from "../domain/controller-state.ts";
 import {
   decodeAuthenticatedAgentMessage,
   InvalidAgentMessageRouteError,
@@ -166,6 +172,45 @@ function isEmptyObject(payload: JsonValue): boolean {
   );
 }
 
+function parseRunInitializationPayload(payload: JsonValue): {
+  readonly run: RunState;
+  readonly stories: readonly StoryState[];
+  readonly agents: readonly AgentState[];
+  readonly events: readonly ControllerEventInput[];
+} {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    Object.keys(payload).length !== 4
+  ) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Run initialization payload is invalid",
+    );
+  }
+  const record = payload as Readonly<Record<string, JsonValue>>;
+  if (
+    record.run === null ||
+    typeof record.run !== "object" ||
+    Array.isArray(record.run) ||
+    !Array.isArray(record.stories) ||
+    !Array.isArray(record.agents) ||
+    !Array.isArray(record.events)
+  ) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Run initialization payload is invalid",
+    );
+  }
+  return {
+    run: record.run as unknown as RunState,
+    stories: record.stories,
+    agents: record.agents,
+    events: record.events,
+  };
+}
+
 export async function runControllerProcess(
   configuration: ControllerProcessConfiguration,
 ): Promise<number> {
@@ -295,6 +340,29 @@ export async function runControllerProcess(
               null,
             recovery: runtime.descriptor?.recovery ?? null,
           });
+        }
+        case "run.initialize": {
+          if (request.clientKind !== "parent") {
+            throw new ControllerRequestError(
+              "forbidden",
+              "Only a parent client can initialize a run",
+            );
+          }
+          const initialization = parseRunInitializationPayload(request.payload);
+          if (initialization.run.id !== configuration.runId) {
+            throw new ControllerRequestError(
+              "invalid-payload",
+              "Run initialization id does not match the controller run",
+            );
+          }
+          const result = runtime.repository.initializeRun({
+            write: runtime.currentWrite(),
+            idempotencyKey:
+              request.idempotencyKey ?? `run-initialize-${configuration.runId}`,
+            request: request.payload,
+            ...initialization,
+          });
+          return toJsonValue(result);
         }
         case "snapshot.get": {
           if (!isEmptyObject(request.payload)) {

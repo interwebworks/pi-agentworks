@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import type {
+  ControllerEventInput,
   ControllerEventRecord,
   ControllerSnapshot,
   JsonValue,
@@ -9,6 +11,11 @@ import type {
   ParentManagementRequest,
   ParentManagementResult,
 } from "../../application/ports/parent-management.ts";
+import {
+  createRunState,
+  createStoryState,
+} from "../../domain/controller-state.ts";
+import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
 import { buildDashboardViewModel } from "../../application/tui/dashboard-view-model.ts";
 import type { ControllerClientRequest } from "./unix-controller-transport.ts";
 import { UnixControllerClient } from "./unix-controller-transport.ts";
@@ -25,6 +32,10 @@ export interface ParentControllerClient {
 export type ParentControllerClientFactory = (
   runId: string,
 ) => ParentControllerClient | Promise<ParentControllerClient>;
+
+export type ParentLaunchHandler = (
+  input: ParentManagementRequest,
+) => Promise<ParentManagementResult>;
 
 export class ParentManagementGatewayError extends Error {
   constructor(message: string) {
@@ -79,14 +90,28 @@ function requiredRunId(input: ParentManagementRequest): string {
 
 export class ControllerParentManagementGateway implements ParentManagementGateway {
   readonly #clientFactory: ParentControllerClientFactory;
+  readonly #launchHandler: ParentLaunchHandler | null;
 
-  constructor(clientFactory: ParentControllerClientFactory) {
+  constructor(
+    clientFactory: ParentControllerClientFactory,
+    launchHandler: ParentLaunchHandler | null = null,
+  ) {
     this.#clientFactory = clientFactory;
+    this.#launchHandler = launchHandler;
   }
 
   async execute(
     input: ParentManagementRequest,
   ): Promise<ParentManagementResult> {
+    if (input.action === "launch") {
+      if (this.#launchHandler === null) {
+        return Object.freeze({
+          text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
+          notificationType: "warning",
+        });
+      }
+      return this.#launchHandler(input);
+    }
     if (input.action !== "status") {
       return Object.freeze({
         text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
@@ -103,7 +128,8 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
         await client.request({
           action: "events.read",
           payload: {
-            after: { revision: 0, eventIndex: -1 },
+            revision: 0,
+            eventIndex: -1,
             limit: 256,
           },
         }),
@@ -154,4 +180,95 @@ export function createDiscoveredParentClientFactory(
     await client.connect();
     return client;
   };
+}
+
+function launchRunId(input: ParentManagementRequest): string {
+  return (
+    input.runId ?? `run-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`
+  );
+}
+
+function launchTask(input: ParentManagementRequest): string {
+  const task = input.task?.trim() ?? "";
+  if (task.length === 0) {
+    throw new ParentManagementGatewayError("launch requires a non-empty task");
+  }
+  return task;
+}
+
+/** Compose the parent surface with detached controller startup and run creation. */
+export function createDiscoveredParentManagementGateway(
+  runtimeRoot: string,
+  repositoryRoot: string,
+): ParentManagementGateway {
+  const clientFactory = createDiscoveredParentClientFactory(runtimeRoot);
+  const launch = async (
+    input: ParentManagementRequest,
+  ): Promise<ParentManagementResult> => {
+    const runId = launchRunId(input);
+    const task = launchTask(input);
+    const now = Date.now();
+    const root = resolve(repositoryRoot);
+    const supervisor = new DetachedControllerSupervisor({
+      runtimeRoot,
+      runId,
+    });
+    await supervisor.ensureRunning();
+    const client = await clientFactory(runId);
+    try {
+      const run = createRunState({
+        id: runId,
+        title: task,
+        complexity: input.mode ?? "NORMAL",
+        repositoryRoot: root,
+        originalCheckout: root,
+        baseBranch: "main",
+        integrationBranch: `agentworks/${runId}/integration`,
+        integrationWorktree: `${runtimeRoot}/${runId}/integration-worktree`,
+        createdAt: now,
+      });
+      const story = createStoryState({
+        id: `${runId}-story-1`,
+        runId,
+        title: task,
+        branchName: `agentworks/${runId}/story-1`,
+        worktreePath: `${runtimeRoot}/${runId}/story-1-worktree`,
+        createdAt: now,
+      });
+      const events: readonly ControllerEventInput[] = [
+        {
+          eventId: randomUUID(),
+          type: "run-created",
+          entityType: "run",
+          entityId: runId,
+          payload: { title: task, complexity: run.complexity },
+          occurredAt: now,
+        },
+        {
+          eventId: randomUUID(),
+          type: "story-planned",
+          entityType: "story",
+          entityId: story.id,
+          payload: { title: task },
+          occurredAt: now,
+        },
+      ];
+      await client.request({
+        action: "run.initialize",
+        idempotencyKey: `run-initialize-${runId}`,
+        payload: {
+          run,
+          stories: [story],
+          agents: [],
+          events,
+        } as unknown as JsonValue,
+      });
+      return Object.freeze({
+        text: `Agentworks run ${runId} created in planning state for "${task}".`,
+      });
+    } finally {
+      client.close();
+    }
+  };
+  return new ControllerParentManagementGateway(clientFactory, launch);
 }

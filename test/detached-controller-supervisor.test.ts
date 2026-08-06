@@ -12,6 +12,11 @@ import {
   ControllerRemoteError,
   UnixControllerClient,
 } from "../src/infrastructure/controller/unix-controller-transport.ts";
+import {
+  createRunState,
+  createStoryState,
+} from "../src/domain/controller-state.ts";
+import type { JsonValue } from "../src/application/ports/controller-repository.ts";
 
 function createSupervisor(root: string): DetachedControllerSupervisor {
   return new DetachedControllerSupervisor({
@@ -95,6 +100,73 @@ test("detached process serves core read actions and protects shutdown authority"
         error instanceof ControllerRemoteError && error.code === "forbidden",
     );
     managementClient.close();
+    const parentClient = new UnixControllerClient({
+      socketPath: discovered.descriptor.socketPath,
+      runId: "run-1",
+      authToken: discovered.authToken,
+      clientId: "parent-1",
+      clientKind: "parent",
+      agentId: null,
+    });
+    await parentClient.connect();
+    const now = Date.now();
+    const run = createRunState({
+      id: "run-1",
+      title: "Initialize me",
+      complexity: "NORMAL",
+      repositoryRoot: "/repo",
+      originalCheckout: "/repo",
+      baseBranch: "main",
+      integrationBranch: "agentworks/run-1/integration",
+      integrationWorktree: "/worktree/integration",
+      createdAt: now,
+    });
+    const story = createStoryState({
+      id: "story-1",
+      runId: "run-1",
+      title: "Initialize me",
+      branchName: "agentworks/run-1/story-1",
+      worktreePath: "/worktree/story-1",
+      createdAt: now,
+    });
+    const initialized = await parentClient.request({
+      action: "run.initialize",
+      idempotencyKey: "initialize-run-1",
+      payload: {
+        run,
+        stories: [story],
+        agents: [],
+        events: [
+          {
+            eventId: "event-run-created",
+            type: "run-created",
+            entityType: "run",
+            entityId: "run-1",
+            payload: { title: run.title },
+            occurredAt: now,
+          },
+        ],
+      } as unknown as JsonValue,
+    });
+    assert.deepEqual(initialized, {
+      revision: 1,
+      eventIds: ["event-run-created"],
+      replayed: false,
+    });
+    const initializedSnapshot = await parentClient.request({
+      action: "snapshot.get",
+      payload: {},
+    });
+    assert.ok(
+      initializedSnapshot !== null &&
+        typeof initializedSnapshot === "object" &&
+        !Array.isArray(initializedSnapshot),
+    );
+    assert.equal(
+      (initializedSnapshot as Readonly<Record<string, JsonValue>>).revision,
+      1,
+    );
+    parentClient.close();
     assert.equal((await supervisor.inspect()).status, "healthy");
   } finally {
     await supervisor.stop();

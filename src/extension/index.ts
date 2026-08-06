@@ -12,10 +12,7 @@ import {
   type ParentManagementGateway,
   type ParentManagementResult,
 } from "./parent-command.ts";
-import {
-  ControllerParentManagementGateway,
-  createDiscoveredParentClientFactory,
-} from "../infrastructure/controller/parent-management-gateway.ts";
+import { createDiscoveredParentManagementGateway } from "../infrastructure/controller/parent-management-gateway.ts";
 
 /**
  * Agentworks package entrypoint.
@@ -55,9 +52,7 @@ function createParentGateway(
   const runtimeRoot = environment.AGENTWORKS_RUNTIME_ROOT;
   return runtimeRoot === undefined
     ? null
-    : new ControllerParentManagementGateway(
-        createDiscoveredParentClientFactory(runtimeRoot),
-      );
+    : createDiscoveredParentManagementGateway(runtimeRoot, process.cwd());
 }
 
 function gatewayFailure(error: unknown): ParentManagementResult {

@@ -11,6 +11,7 @@ import type {
   JsonValue,
 } from "../src/application/ports/controller-repository.ts";
 import type { ParentControllerClient } from "../src/infrastructure/controller/parent-management-gateway.ts";
+import type { ControllerClientRequest } from "../src/infrastructure/controller/unix-controller-transport.ts";
 
 function snapshot(): ControllerSnapshot {
   const run = createRunState({
@@ -37,10 +38,12 @@ function snapshot(): ControllerSnapshot {
 
 class FakeClient implements ParentControllerClient {
   readonly requests: string[] = [];
+  readonly payloads: JsonValue[] = [];
   closed = false;
 
-  request(input: { action: string }): Promise<JsonValue> {
+  request(input: ControllerClientRequest): Promise<JsonValue> {
     this.requests.push(input.action);
+    this.payloads.push(input.payload);
     if (input.action === "snapshot.get")
       return Promise.resolve(snapshot() as unknown as JsonValue);
     return Promise.resolve([
@@ -68,6 +71,11 @@ test("status reads the controller snapshot and events into dashboard data", asyn
   const gateway = new ControllerParentManagementGateway(() => client);
   const result = await gateway.execute({ action: "status", runId: "run-1" });
   assert.deepEqual(client.requests, ["snapshot.get", "events.read"]);
+  assert.deepEqual(client.payloads[1], {
+    revision: 0,
+    eventIndex: -1,
+    limit: 256,
+  });
   assert.equal(client.closed, true);
   assert.match(result.text, /Run \[NORMAL\] - planning/u);
   assert.match(result.text, /Stories: none/u);
