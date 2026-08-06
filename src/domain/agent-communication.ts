@@ -1,190 +1,173 @@
 /**
- * Agent communication messages for lifecycle, operation, progress, and supervisor interactions.
+ * Structured messages exchanged between the controller and a child agent
+ * session over the newline-delimited transport (see agent-message-codec.ts).
  */
 
 export const AGENT_COMMS_PROTOCOL_VERSION = 1 as const;
 
-export const SESSION_STATE_READY = "ready";
-export const SESSION_STATE_LAUNCHING = "launching";
-export const SESSION_STATE_WAITING = "waiting";
-export const SESSION_STATE_BLOCKED = "blocked";
-export const SESSION_STATE_SHUTTING_DOWN = "shutting_down";
+export type BlockerReason = "idle" | "blocked" | "timeout";
+export type CompletionOutcome = "success" | "early" | "over";
 
-export const OPERATION_STATE_IDLE = "idle";
-export const OPERATION_STATE_RUNNING = "running";
-export const OPERATION_STATE_FAILED = "failed";
-export const OPERATION_STATE_COMPLETE = "complete";
-
-export type SupervisorData =
-  | {
-      type: "s";
-      runId: string;
-      agentId: string;
-      reason: "idle" | "blocked" | "timeout";
-    }
-  | {
-      type: "c";
-      runId: string;
-      agentId: string;
-      outcome: "success" | "early" | "over";
-      revision: number | null;
-    }
-  | {
-      type: "e";
-      runId: string;
-      agentId: string;
-      code: string;
-      message: string;
-    };
-
-export interface SupervisorPayload {
+export interface SessionStartedMessage {
+  readonly protocolVersion: 1;
+  readonly type: "session-started";
   readonly runId: string;
   readonly agentId: string;
-  readonly message: SupervisorData;
+  readonly sessionId: string;
 }
 
-export type SessionLifecycleMessage =
-  | { type: "session_start"; runId: string; agentId: string; sessionId: string }
-  | {
-      type: "session_shutdown";
-      runId: string;
-      agentId: string;
-      sessionId: string;
-    };
+export interface SessionShutdownMessage {
+  readonly protocolVersion: 1;
+  readonly type: "session-shutdown";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly sessionId: string;
+}
 
-export type OperationProgressMessage =
-  | {
-      type: "operation_start";
-      runId: string;
-      agentId: string;
-      taskId: string | null;
-    }
-  | {
-      type: "operation_progress";
-      runId: string;
-      agentId: string;
-      taskId: string | null;
-      output: string | null;
-    }
-  | {
-      type: "operation_complete";
-      runId: string;
-      agentId: string;
-      taskId: string | null;
-      success: boolean;
-      revision: number | null;
-    };
+export interface OperationStartedMessage {
+  readonly protocolVersion: 1;
+  readonly type: "operation-started";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly taskId: string | null;
+}
+
+export interface OperationProgressMessage {
+  readonly protocolVersion: 1;
+  readonly type: "operation-progress";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly taskId: string | null;
+  readonly output: string | null;
+}
+
+export interface OperationCompletedMessage {
+  readonly protocolVersion: 1;
+  readonly type: "operation-completed";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly taskId: string | null;
+  readonly success: boolean;
+  readonly revision: number | null;
+}
 
 export interface HeartbeatMessage {
-  type: "heartbeat";
-  runId: string;
-  agentId: string;
-  elapsedMs: number;
-  revision: number | null;
+  readonly protocolVersion: 1;
+  readonly type: "heartbeat";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly elapsedMs: number;
+  readonly revision: number | null;
 }
+
+export interface AgentBlockedMessage {
+  readonly protocolVersion: 1;
+  readonly type: "agent-blocked";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly reason: BlockerReason;
+  readonly detail: string;
+}
+
+export interface SupervisorNudgeMessage {
+  readonly protocolVersion: 1;
+  readonly type: "supervisor-nudge";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly reason: BlockerReason;
+}
+
+export interface SupervisorCompletionMessage {
+  readonly protocolVersion: 1;
+  readonly type: "supervisor-completion";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly outcome: CompletionOutcome;
+  readonly revision: number | null;
+}
+
+export interface SupervisorErrorMessage {
+  readonly protocolVersion: 1;
+  readonly type: "supervisor-error";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly code: string;
+  readonly message: string;
+}
+
+export type LifecycleMessage = SessionStartedMessage | SessionShutdownMessage;
+
+export type OperationMessage =
+  | OperationStartedMessage
+  | OperationProgressMessage
+  | OperationCompletedMessage;
 
 export type SupervisorMessage =
-  | {
-      type: "supervisor_nudge";
-      runId: string;
-      agentId: string;
-      reason: "idle" | "blocked" | "timeout";
-    }
-  | {
-      type: "supervisor_completion";
-      runId: string;
-      agentId: string;
-      outcome: "success" | "early" | "over";
-      revision: number | null;
-    }
-  | {
-      type: "supervisor_error";
-      runId: string;
-      agentId: string;
-      code: string;
-      message: string;
-    };
+  SupervisorNudgeMessage | SupervisorCompletionMessage | SupervisorErrorMessage;
 
-export type OperationResult =
-  | {
-      type: "result_for_sending";
-      runId: string;
-      agentId: string;
-      stage:
-        | "launch"
-        | "ready"
-        | "waiting"
-        | "blocked"
-        | "running"
-        | "complete"
-        | "shutting_down"
-        | "shutdown"
-        | "recovery";
-      output?: string | null;
-      elapsedMs?: number | null;
-    }
-  | {
-      type: "result_for_sending";
-      runId: string;
-      agentId: string;
-      stage: "supervisor";
-      data: SupervisorData;
-    };
-
-export type AgentCommunicationMessage =
-  | SessionLifecycleMessage
-  | OperationProgressMessage
+export type AgentMessage =
+  | LifecycleMessage
+  | OperationMessage
   | HeartbeatMessage
-  | SupervisorMessage
-  | OperationResult;
+  | AgentBlockedMessage
+  | SupervisorMessage;
 
-export function createSupervisorPayload(
-  runId: string,
-  agentId: string,
-  data: SupervisorData,
-): SupervisorPayload {
-  return {
-    runId,
-    agentId,
-    message: data,
-  };
-}
-
-export function createSessionShutdown(
+export function sessionStarted(
   runId: string,
   agentId: string,
   sessionId: string,
-): string {
-  return JSON.stringify({
-    type: "session_shutdown",
+): SessionStartedMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "session-started",
     runId,
     agentId,
     sessionId,
   });
 }
 
-export function parseSessionShutdownMessage(text: string): string | null {
-  try {
-    const { type, runId, agentId } = JSON.parse(text) as {
-      type?: unknown;
-      runId?: unknown;
-      agentId?: unknown;
-    };
-    if (
-      typeof type === "string" &&
-      type === "session_shutdown" &&
-      typeof runId === "string" &&
-      typeof agentId === "string"
-    ) {
-      return JSON.stringify({
-        type: "session_shutdown",
-        runId,
-        agentId,
-        sessionId: "ok",
-      });
-    }
-    return null;
-  } catch {
-    return null;
-  }
+export function sessionShutdown(
+  runId: string,
+  agentId: string,
+  sessionId: string,
+): SessionShutdownMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "session-shutdown",
+    runId,
+    agentId,
+    sessionId,
+  });
+}
+
+export function heartbeat(
+  runId: string,
+  agentId: string,
+  elapsedMs: number,
+  revision: number | null = null,
+): HeartbeatMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "heartbeat",
+    runId,
+    agentId,
+    elapsedMs,
+    revision,
+  });
+}
+
+export function agentBlocked(
+  runId: string,
+  agentId: string,
+  reason: BlockerReason,
+  detail: string,
+): AgentBlockedMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "agent-blocked",
+    runId,
+    agentId,
+    reason,
+    detail,
+  });
 }
