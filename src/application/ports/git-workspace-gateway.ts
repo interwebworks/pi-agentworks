@@ -119,6 +119,15 @@ export interface CleanupStoryWorkspaceResult {
   readonly mergeCommit: string;
 }
 
+export interface RollbackStoryWorkspaceRequest {
+  readonly runId: string;
+  readonly storyId: string;
+  readonly originalCheckout: string;
+  readonly storyBranch: string;
+  readonly storyWorktreePath: string;
+  readonly expectedStoryHead: string;
+}
+
 export interface GitWorkspaceGateway {
   listWorktrees(originalCheckout: string): readonly GitWorktreeRecord[];
   createIntegrationWorkspace(
@@ -134,4 +143,8 @@ export interface GitWorkspaceGateway {
   cleanupStoryWorkspace(
     request: CleanupStoryWorkspaceRequest,
   ): CleanupStoryWorkspaceResult;
+  /** Remove only a freshly provisioned, exact-head story workspace. */
+  readonly rollbackStoryWorkspace?: (
+    request: RollbackStoryWorkspaceRequest,
+  ) => void;
 }

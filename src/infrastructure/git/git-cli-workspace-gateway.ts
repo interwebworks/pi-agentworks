@@ -13,6 +13,7 @@ import type {
   GitWorkspaceResult,
   MergeCandidateRequest,
   MergeCandidateResult,
+  RollbackStoryWorkspaceRequest,
 } from "../../application/ports/git-workspace-gateway.ts";
 import {
   assessCleanupEligibility,
@@ -642,6 +643,83 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       expectedTree,
       "created",
     );
+  }
+
+  rollbackStoryWorkspace(request: RollbackStoryWorkspaceRequest): void {
+    assertSafeWorkspaceId(request.runId, "Rollback run id");
+    assertSafeWorkspaceId(request.storyId, "Rollback story id");
+    if (
+      request.storyBranch !== storyBranchForRun(request.runId, request.storyId)
+    ) {
+      throw new GitWorkspaceError(
+        "Rollback story branch does not match the story identity",
+      );
+    }
+    if (!OBJECT_ID_PATTERN.test(request.expectedStoryHead)) {
+      throw new GitWorkspaceError("Rollback story head evidence is invalid");
+    }
+    const checkout = realpathSync(resolve(request.originalCheckout));
+    const storyPath = resolve(request.storyWorktreePath);
+    const worktrees = this.listWorktrees(checkout);
+    const pathWorktree = worktrees.find((record) => record.path === storyPath);
+    if (pathWorktree !== undefined) {
+      if (
+        pathWorktree.branch !== request.storyBranch ||
+        pathWorktree.head !== request.expectedStoryHead ||
+        pathWorktree.detached ||
+        pathWorktree.bare ||
+        pathWorktree.prunable ||
+        pathWorktree.locked
+      ) {
+        throw new GitWorkspaceError(
+          "Rollback story worktree identity is invalid",
+        );
+      }
+      this.#assertCleanWorktree(storyPath, "Rollback story");
+      this.#mutate(checkout, ["worktree", "remove", "--", storyPath]);
+      if (
+        this.listWorktrees(checkout).some(
+          (record) =>
+            record.path === storyPath || record.branch === request.storyBranch,
+        ) ||
+        existsSync(storyPath)
+      ) {
+        throw new GitWorkspaceError(
+          "Git did not completely remove the rollback story worktree",
+        );
+      }
+    } else if (existsSync(storyPath)) {
+      throw new GitWorkspaceError(
+        "Unregistered content exists at the rollback worktree path",
+      );
+    }
+    const branchHead = this.#optional(checkout, [
+      "rev-parse",
+      "--verify",
+      `refs/heads/${request.storyBranch}^{commit}`,
+    ]);
+    if (branchHead !== null) {
+      if (branchHead !== request.expectedStoryHead) {
+        throw new GitWorkspaceError("Rollback branch head identity is invalid");
+      }
+      this.#mutate(checkout, [
+        "update-ref",
+        "-d",
+        `refs/heads/${request.storyBranch}`,
+        request.expectedStoryHead,
+      ]);
+      if (
+        this.#optional(checkout, [
+          "rev-parse",
+          "--verify",
+          `refs/heads/${request.storyBranch}^{commit}`,
+        ]) !== null
+      ) {
+        throw new GitWorkspaceError(
+          "Git did not delete the rollback story branch",
+        );
+      }
+    }
   }
 
   cleanupStoryWorkspace(

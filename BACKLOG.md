@@ -119,6 +119,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Compose discovered role-pack output into exact runtime-id catalog lookup.
 - [x] Define cross-system Git/Herdr/private-session/fence evidence validation with expected branch heads and ownership tokens.
 - [x] Add a Git workspace evidence adapter requiring explicit integration heads and validating returned story worktrees/branches.
+- [x] Add exact-head, non-force rollback for freshly provisioned story worktrees and branches.
 - [x] Add a Herdr/private-session evidence adapter with exact ownership checks and cleanup on stale fence evidence.
 - [x] Implement private session/config directory and immutable child-capability allocation with ownership/path validation.
 - [x] Add a Herdr pane allocator over the agents-tab lifecycle with final pane/cwd/token verification and release support.

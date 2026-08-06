@@ -501,6 +501,43 @@ test("story paths cannot overlap existing worktrees or claim another story ident
   }
 });
 
+test("rolls back a freshly provisioned exact-head story workspace without force", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-git-rollback-"));
+  try {
+    const fixture = createStoryFixture(root);
+    assert.throws(() =>
+      fixture.gateway.rollbackStoryWorkspace({
+        runId: "run-1",
+        storyId: "story-1",
+        originalCheckout: fixture.repository,
+        storyBranch: storyBranchForRun("run-1", "story-1"),
+        storyWorktreePath: fixture.storyPath,
+        expectedStoryHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
+    );
+    fixture.gateway.rollbackStoryWorkspace({
+      runId: "run-1",
+      storyId: "story-1",
+      originalCheckout: fixture.repository,
+      storyBranch: storyBranchForRun("run-1", "story-1"),
+      storyWorktreePath: fixture.storyPath,
+      expectedStoryHead: fixture.storyHead,
+    });
+    assert.equal(existsSync(fixture.storyPath), false);
+    assert.equal(
+      fixture.gateway
+        .listWorktrees(fixture.repository)
+        .some(
+          (worktree) =>
+            worktree.branch === storyBranchForRun("run-1", "story-1"),
+        ),
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("creates and recovers an exact controller-authored candidate commit", () => {
   const root = mkdtempSync(join(tmpdir(), "agentworks-candidate-"));
   try {
