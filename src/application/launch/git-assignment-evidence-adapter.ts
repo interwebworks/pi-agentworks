@@ -1,7 +1,10 @@
 import type { RunState, StoryState } from "../../domain/controller-state.ts";
 import type { GitRepositoryInspector } from "../ports/git-repository-inspector.ts";
 import type { GitWorkspaceGateway } from "../ports/git-workspace-gateway.ts";
-import type { AssignmentInfrastructureEvidence } from "./assignment-resource-evidence.ts";
+import type {
+  AssignmentInfrastructureEvidence,
+  GitAssignmentEvidence,
+} from "./assignment-resource-evidence.ts";
 import { assertAssignmentInfrastructureEvidence } from "./assignment-resource-evidence.ts";
 
 export interface ExpectedIntegrationHeadResolver {
@@ -35,19 +38,11 @@ export class GitAssignmentEvidenceAdapter {
     this.#expectedIntegrationHead = dependencies.expectedIntegrationHead;
   }
 
-  provision(
+  provisionGit(
     run: RunState,
     story: StoryState,
     expectedRevision: number,
-    agentId: string,
-    baseEvidence: Omit<
-      AssignmentInfrastructureEvidence,
-      "git" | "herdr" | "session"
-    > & {
-      readonly herdr: AssignmentInfrastructureEvidence["herdr"];
-      readonly session: AssignmentInfrastructureEvidence["session"];
-    },
-  ): AssignmentInfrastructureEvidence {
+  ): GitAssignmentEvidence {
     const inspection = this.#inspector.inspect(run.originalCheckout);
     if (inspection.repositoryRoot !== run.repositoryRoot) {
       throw new GitAssignmentEvidenceAdapterError(
@@ -84,17 +79,33 @@ export class GitAssignmentEvidenceAdapter {
         "Git workspace result does not match the story assignment",
       );
     }
+    return Object.freeze({
+      commonGitDirectory: inspection.commonGitDirectory,
+      baseBranch: run.integrationBranch,
+      expectedIntegrationHead,
+      integrationBranch: run.integrationBranch,
+      storyBranch: story.branchName,
+      expectedStoryHead: workspace.branchHead,
+      worktreePath: workspace.worktreePath,
+    });
+  }
+
+  provision(
+    run: RunState,
+    story: StoryState,
+    expectedRevision: number,
+    agentId: string,
+    baseEvidence: Omit<
+      AssignmentInfrastructureEvidence,
+      "git" | "herdr" | "session"
+    > & {
+      readonly herdr: AssignmentInfrastructureEvidence["herdr"];
+      readonly session: AssignmentInfrastructureEvidence["session"];
+    },
+  ): AssignmentInfrastructureEvidence {
     const evidence: AssignmentInfrastructureEvidence = {
       ...baseEvidence,
-      git: {
-        commonGitDirectory: inspection.commonGitDirectory,
-        baseBranch: run.integrationBranch,
-        expectedIntegrationHead,
-        integrationBranch: run.integrationBranch,
-        storyBranch: story.branchName,
-        expectedStoryHead: workspace.branchHead,
-        worktreePath: workspace.worktreePath,
-      },
+      git: this.provisionGit(run, story, expectedRevision),
     };
     assertAssignmentInfrastructureEvidence(evidence, run, story, agentId);
     return Object.freeze(evidence);
