@@ -21,6 +21,7 @@ export type StoryAgentKind = "writer" | "reviewer";
 
 export interface AssignmentRoleResolution {
   readonly role: RoleDefinition;
+  readonly runtimeId?: string;
   readonly rolePrompt: string;
 }
 
@@ -84,9 +85,12 @@ function planningStory(story: StoryState): UserStory {
   };
 }
 
-function assignableRole(role: RoleDefinition): AssignableRole {
+function assignableRole(
+  role: RoleDefinition,
+  runtimeId?: string,
+): AssignableRole {
   return {
-    runtimeId: role.id,
+    runtimeId: runtimeId ?? role.id,
     writePolicy: role.writePolicy,
     tools: role.tools,
   };
@@ -133,7 +137,7 @@ export class DeterministicAssignmentPreparation implements StoryAgentLaunchPrepa
     const task = buildAssignment({
       runId: run.id,
       story: planningStory(story),
-      role: assignableRole(role),
+      role: assignableRole(role, resolvedRole.runtimeId),
       agentId: resources.agent.id,
       repositoryRoot: run.repositoryRoot,
       branchName: story.branchName,
