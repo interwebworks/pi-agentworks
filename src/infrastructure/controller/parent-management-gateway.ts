@@ -109,8 +109,20 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
         }),
       );
       const view = buildDashboardViewModel(current, eventRows);
+      const attention = view.supervisorAttention
+        .map((item) => `  ! ${item.agentId}: ${item.reason}`)
+        .join("\n");
+      const stories = Object.entries(view.run.storyStatusCounts)
+        .filter(([, count]) => count > 0)
+        .map(([status, count]) => `${status}=${String(count)}`)
+        .join(", ");
       return Object.freeze({
-        text: JSON.stringify(view),
+        text: [
+          `${view.run.title} [${view.run.complexity}] - ${view.run.status}`,
+          `Stories: ${stories || "none"}`,
+          `Agents: ${String(view.agents.length)}`,
+          attention.length > 0 ? `Attention:\n${attention}` : "Attention: none",
+        ].join("\n"),
       });
     } finally {
       client.close();

@@ -28,7 +28,7 @@ pi install git:github.com/OWNER/agentworks@VERSION
 pi install npm:agentworks@VERSION
 ```
 
-**Current status of the installed package:** the package loads, and it registers the `/agentworks` command and the model-callable `agentworks` tool (see `src/extension/index.ts`). Neither is wired to the controller runtime yet — both currently reply with a "not yet wired" message instead of launching a run. See [Project status](#project-status--roadmap) below.
+**Current status of the installed package:** the package loads and registers the `/agentworks` command and model-callable `agentworks` tool (see `src/extension/index.ts`). When `AGENTWORKS_RUNTIME_ROOT` is present, status requests use the authenticated controller read gateway and render durable supervisor attention; launch and mutating actions remain explicitly gated until the live orchestration composition is complete. See [Project status](#project-status--roadmap) below.
 
 ## Configuration
 
@@ -117,7 +117,7 @@ Implementation progress is tracked canonically in [BACKLOG.md](BACKLOG.md); this
 - **Mode-specific TUI approvals** and Project Manager tuning/supervisor messages from the parent (P3).
 - **Structured agent lifecycle/operation/result/blocker communication** and disconnected-pane detection with resumable session restoration (P6).
 - **The htop-style management dashboard** — independent scrolling/sorting, color-coded states, mouse/keyboard focus, and approval/steering/pause/resume/close actions (P7).
-- **The parent Pi extension's real behavior** — `/agentworks` and the `agentworks` tool are registered (see [Installation](#installation)) but not yet wired to the controller; the persistent right-side overlay, narrow-terminal fallback, and run restoration on Pi restart are not yet implemented (P8).
+- **The parent Pi extension's real behavior** — status can use the authenticated controller read gateway when `AGENTWORKS_RUNTIME_ROOT` is configured, while launch/mutating actions, the persistent right-side overlay, narrow-terminal fallback, and run restoration on Pi restart remain unimplemented (P8).
 - **Orchestration** — dependency-aware scheduling, concurrency caps, controller-side writer/reviewer launches, reviewed merge requests, run completion, and safe cleanup are implemented in the core and covered by tests (P9). Remaining P9 work is bounded idle `.` nudging and renewed-review handling, plus composition into the live controller/parent surfaces.
 - **Distribution polish** — this document plus package metadata (P10, in progress), replacing `pi-herdr-subagent-panes.ts` and retiring `pi-subagents` only after live validation, and migrating any still-useful concepts from the prior architect/worker definitions.
 - **Live end-to-end proof** — LOW/NORMAL/HIGH scenario tests, sandbox-escape negative tests, Herdr layout tests at 1/4/6/9/12/16 agents, and a fully green formatting/lint/typecheck/unit/integration/packaging/E2E suite (P11).

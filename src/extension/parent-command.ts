@@ -4,7 +4,10 @@ import {
   parseComplexityMode,
   type ComplexityMode,
 } from "../domain/complexity.ts";
-export type { ParentManagementGateway } from "../application/ports/parent-management.ts";
+export type {
+  ParentManagementGateway,
+  ParentManagementResult,
+} from "../application/ports/parent-management.ts";
 
 export interface ParsedAgentworksCommand {
   readonly mode: ComplexityMode | null;

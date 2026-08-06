@@ -76,7 +76,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Project durable supervisor-attention events into the management dashboard view model.
   - [x] Add an injectable parent-management gateway boundary for command/tool delegation.
   - [x] Add a concrete authenticated parent read gateway for snapshots and bounded event retrieval.
-  - [ ] Inject the gateway into the live parent extension, render UI delivery, and support bounded supervisor directives.
+  - [x] Inject the discovered gateway into the parent extension when `AGENTWORKS_RUNTIME_ROOT` is present and render status/attention output.
+  - [ ] Wire launch/actions and bounded supervisor directives into the live controller/management UI.
   - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
   - [x] Add deterministic pane-loss assessment and restoration planning.

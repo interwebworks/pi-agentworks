@@ -10,7 +10,12 @@ import {
   parseAgentworksCommand,
   parseAgentworksToolInput,
   type ParentManagementGateway,
+  type ParentManagementResult,
 } from "./parent-command.ts";
+import {
+  ControllerParentManagementGateway,
+  createDiscoveredParentClientFactory,
+} from "../infrastructure/controller/parent-management-gateway.ts";
 
 /**
  * Agentworks package entrypoint.
@@ -23,7 +28,7 @@ import {
 export default function agentworks(pi: ExtensionAPI): void {
   const environment: ChildModeEnvironment = process.env;
   if (environment.AGENTWORKS_CHILD_MODE !== "1") {
-    installParentExtension(pi);
+    installParentExtension(pi, createParentGateway(environment));
     return;
   }
   try {
@@ -44,6 +49,26 @@ export default function agentworks(pi: ExtensionAPI): void {
  * runtime yet — both report a clear "not yet wired" stub until the
  * controller-launch slice lands.
  */
+function createParentGateway(
+  environment: ChildModeEnvironment,
+): ParentManagementGateway | null {
+  const runtimeRoot = environment.AGENTWORKS_RUNTIME_ROOT;
+  return runtimeRoot === undefined
+    ? null
+    : new ControllerParentManagementGateway(
+        createDiscoveredParentClientFactory(runtimeRoot),
+      );
+}
+
+function gatewayFailure(error: unknown): ParentManagementResult {
+  return {
+    text: `Agentworks controller request failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+    notificationType: "error",
+  };
+}
+
 export function installParentExtension(
   pi: ExtensionAPI,
   gateway: ParentManagementGateway | null = null,
@@ -60,6 +85,7 @@ export function installParentExtension(
             ...(mode === null ? {} : { mode }),
             ...(task.length === 0 ? {} : { task }),
           })
+          .catch(gatewayFailure)
           .then((result) => {
             ctx.ui.notify(result.text, result.notificationType ?? "info");
           });
@@ -90,7 +116,7 @@ export function installParentExtension(
           ? {
               text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
             }
-          : await gateway.execute(input);
+          : await gateway.execute(input).catch(gatewayFailure);
       return {
         content: [{ type: "text" as const, text: result.text }],
         details: undefined,

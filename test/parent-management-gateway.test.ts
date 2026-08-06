@@ -67,19 +67,11 @@ test("status reads the controller snapshot and events into dashboard data", asyn
   const client = new FakeClient();
   const gateway = new ControllerParentManagementGateway(() => client);
   const result = await gateway.execute({ action: "status", runId: "run-1" });
-  const view = JSON.parse(result.text) as {
-    supervisorAttention: readonly { agentId: string; reason: string }[];
-  };
   assert.deepEqual(client.requests, ["snapshot.get", "events.read"]);
   assert.equal(client.closed, true);
-  assert.deepEqual(view.supervisorAttention, [
-    {
-      agentId: "agent-1",
-      reason: "needs approval",
-      eventId: "event-1",
-      occurredAt: 2,
-    },
-  ]);
+  assert.match(result.text, /Run \[NORMAL\] - planning/u);
+  assert.match(result.text, /Stories: none/u);
+  assert.match(result.text, /Attention:\n\s{2}! agent-1: needs approval/u);
 });
 
 test("unsupported parent actions remain explicitly gated", async () => {
