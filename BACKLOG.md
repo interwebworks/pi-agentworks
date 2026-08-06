@@ -116,7 +116,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Compose discovered role-pack output into exact runtime-id catalog lookup.
 - [x] Define cross-system Git/Herdr/private-session/fence evidence validation with expected branch heads and ownership tokens.
 - [x] Add a Git workspace evidence adapter requiring explicit integration heads and validating returned story worktrees/branches.
-- [ ] Implement the composition-root provider with real Herdr pane/private session/token evidence and execute planned orchestration actions.
+- [x] Add a Herdr/private-session evidence adapter with exact ownership checks and cleanup on stale fence evidence.
+- [ ] Implement the composition-root provider with real session/token allocation and execute planned orchestration actions.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
