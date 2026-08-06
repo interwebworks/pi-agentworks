@@ -34,7 +34,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Connect exact independent-review, review-invalidation, protected-target approval, and merge policies to registered worktrees and real Git commit/tree/ancestry evidence.
 - [x] Connect no-force story cleanup to exact merge-operation ownership, integration ancestry, full tracked/untracked/ignored cleanliness, closed-agent and released-lease evidence, and atomic compare-and-delete branch removal.
 - [x] Implement controller-authored candidate commits with exact branch/worktree/base evidence, released-lease gating, conflict/submodule rejection, hostile Git-config suppression, and crash-idempotent operation trailers.
-- [ ] Prove through the sandbox and live child E2E boundary that the controller is the sole Git mutator.
+- [x] Prove through the sandbox and live child E2E boundary that the controller is the sole Git mutator.
 - [x] Prove with disposable-repository tests that the original checkout is never used as an agent cwd and remains unmodified.
 
 ## P3 - Roles, planning, and approvals
