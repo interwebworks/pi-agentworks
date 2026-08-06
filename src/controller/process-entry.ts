@@ -40,6 +40,17 @@ export type ControllerProcessCompositionProvider = (
   runtime: ControllerRuntime,
 ) => ControllerOrchestrationExecutor;
 
+export function createConfiguredControllerProcessDependencies(
+  environment: Readonly<Record<string, string | undefined>>,
+  provider: ControllerProcessCompositionProvider | undefined,
+): ControllerProcessDependencies {
+  const orchestrationFactory = resolveConfiguredOrchestrationProvider(
+    environment,
+    provider,
+  );
+  return orchestrationFactory === undefined ? {} : { orchestrationFactory };
+}
+
 export function resolveConfiguredOrchestrationProvider(
   environment: Readonly<Record<string, string | undefined>>,
   provider: ControllerProcessCompositionProvider | undefined,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createConfiguredControllerProcessDependencies,
   executeInjectedOrchestration,
   resolveConfiguredOrchestrationProvider,
   resolveControllerOrchestrationExecutor,
@@ -29,6 +30,21 @@ test("injected orchestration entrypoint forwards current fenced write to executo
     { accepted: true },
   );
   assert.deepEqual(received, write);
+});
+
+test("host dependency adapter remains dormant unless explicitly enabled", () => {
+  const provider = () => ({
+    execute: () => Promise.resolve({ accepted: true }),
+  });
+  assert.deepEqual(
+    createConfiguredControllerProcessDependencies({}, provider),
+    {},
+  );
+  const dependencies = createConfiguredControllerProcessDependencies(
+    { AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1" },
+    provider,
+  );
+  assert.equal(dependencies.orchestrationFactory, provider);
 });
 
 test("configured orchestration provider requires an exact enablement marker and provider", () => {
