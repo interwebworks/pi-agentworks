@@ -214,7 +214,7 @@ test("child bridge authenticates before any model turn and closes on shutdown", 
   await invoke(fake.handlers, "session_start");
   await invoke(fake.handlers, "before_agent_start");
   assert.equal(await invoke(fake.handlers, "tool_call"), undefined);
-  assert.deepEqual(actions, ["connect", "child.hello"]);
+  assert.deepEqual(actions, ["connect", "child.hello", "agent.message"]);
   await invoke(fake.handlers, "session_shutdown");
   assert.equal(closes, 1);
   await assert.rejects(
@@ -257,7 +257,7 @@ test("default bridge performs a real per-agent authenticated socket hello", asyn
     });
     await invoke(fake.handlers, "session_start");
     await invoke(fake.handlers, "before_agent_start");
-    assert.deepEqual(handled, ["child.hello"]);
+    assert.deepEqual(handled, ["child.hello", "agent.message"]);
     await invoke(fake.handlers, "session_shutdown");
   } finally {
     await server.close();

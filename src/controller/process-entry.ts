@@ -4,6 +4,10 @@ import type {
   JsonValue,
 } from "../application/ports/controller-repository.ts";
 import {
+  decodeAuthenticatedAgentMessage,
+  InvalidAgentMessageRouteError,
+} from "../application/protocol/agent-message-routing.ts";
+import {
   ControllerRuntime,
   ControllerRuntimeError,
 } from "../infrastructure/controller/controller-runtime.ts";
@@ -200,16 +204,10 @@ export async function runControllerProcess(
     },
     handleRequest(request) {
       if (request.clientKind === "child") {
-        if (request.action !== "child.hello") {
-          throw new ControllerRequestError(
-            "forbidden",
-            "Child clients cannot use controller administration actions",
-          );
-        }
-        if (!isEmptyObject(request.payload) || request.agentId === null) {
+        if (request.agentId === null) {
           throw new ControllerRequestError(
             "invalid-payload",
-            "Child hello payload must be empty",
+            "Child requests require an agent identity",
           );
         }
         const snapshot = runtime.repository.loadSnapshot(configuration.runId);
@@ -222,12 +220,46 @@ export async function runControllerProcess(
             "Child agent is not registered",
           );
         }
-        return toJsonValue({
-          runId: configuration.runId,
-          agentId: agent.id,
-          revision: snapshot.revision,
-          status: agent.status,
-        });
+        if (request.action === "child.hello") {
+          if (!isEmptyObject(request.payload)) {
+            throw new ControllerRequestError(
+              "invalid-payload",
+              "Child hello payload must be empty",
+            );
+          }
+          return toJsonValue({
+            runId: configuration.runId,
+            agentId: agent.id,
+            revision: snapshot.revision,
+            status: agent.status,
+          });
+        }
+        if (request.action === "agent.message") {
+          try {
+            const message = decodeAuthenticatedAgentMessage(
+              request.payload,
+              configuration.runId,
+              agent.id,
+            );
+            return toJsonValue({ accepted: true, type: message.type });
+          } catch (error) {
+            const code =
+              error instanceof InvalidAgentMessageRouteError &&
+              error.message.includes("identity does not match")
+                ? "identity-mismatch"
+                : "invalid-message";
+            throw new ControllerRequestError(
+              code,
+              error instanceof Error
+                ? error.message.slice(0, 512)
+                : "Child agent message is invalid",
+            );
+          }
+        }
+        throw new ControllerRequestError(
+          "forbidden",
+          "Child clients may only use child.hello and agent.message",
+        );
       }
       switch (request.action) {
         case "controller.ping": {

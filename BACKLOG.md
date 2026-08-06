@@ -66,7 +66,13 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Implement secure interactive Pi launch with fenced lease/revision authority, private immutable prompt artifacts, exact role/model/thinking/tool/task/session identity, dedicated Pi config/session storage, explicit single-extension loading, role-specific read-only/read-write worktree mounts, Bubblewrap/Herdr composition, and live process evidence.
 - [x] Implement dormant-by-default child bridge mode with exact environment activation, private per-agent HMAC capabilities, real-socket/private-file validation, authenticated controller hello, fresh UUID connection sequencing, controller identity-response verification, shutdown and tool lockdown on authentication failure, and zero ordinary-session registrations.
 - [ ] Implement structured lifecycle, operation, result, blocker, and supervisor communication.
+  - [x] Define the versioned message model and bounded codec.
+  - [x] Carry authenticated session-start/session-shutdown messages through the child/controller RPC boundary.
+  - [ ] Apply lifecycle and operation messages to durable controller state and supervisor reactions.
+  - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
+  - [x] Add deterministic pane-loss assessment and restoration planning.
+  - [ ] Wire restoration planning into Herdr/Pi relaunch and session resume.
 
 ## P7 - Management TUI
 

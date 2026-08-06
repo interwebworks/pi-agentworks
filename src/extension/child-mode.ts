@@ -12,6 +12,12 @@ import { isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { JsonValue } from "../application/ports/controller-repository.ts";
 import {
+  sessionShutdown,
+  sessionStarted,
+  type AgentMessage,
+} from "../domain/agent-communication.ts";
+import { encodeAgentMessage } from "../domain/agent-message-codec.ts";
+import {
   UnixControllerClient,
   type ControllerClientRequest,
 } from "../infrastructure/controller/unix-controller-transport.ts";
@@ -228,9 +234,19 @@ export function installChildBridge(
 ): void {
   let client: ChildControllerClient | null = null;
   let authenticated = false;
+  let sessionId: string | null = null;
+
+  const sendMessage = async (
+    nextClient: ChildControllerClient,
+    message: AgentMessage,
+  ): Promise<void> => {
+    const payload = JSON.parse(encodeAgentMessage(message)) as JsonValue;
+    await nextClient.request({ action: "agent.message", payload });
+  };
 
   pi.on("session_start", async (_event, context) => {
     authenticated = false;
+    sessionId = randomUUID();
     client?.close();
     const nextClient = clientFactory(configuration);
     client = nextClient;
@@ -241,6 +257,10 @@ export function installChildBridge(
         payload: {},
       });
       assertHelloResponse(response, configuration);
+      await sendMessage(
+        nextClient,
+        sessionStarted(configuration.runId, configuration.agentId, sessionId),
+      );
       authenticated = true;
     } catch (error) {
       nextClient.close();
@@ -273,9 +293,26 @@ export function installChildBridge(
         },
   );
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     authenticated = false;
-    client?.close();
+    const closingClient = client;
+    const closingSessionId = sessionId;
+    sessionId = null;
     client = null;
+    if (closingClient !== null && closingSessionId !== null) {
+      try {
+        await sendMessage(
+          closingClient,
+          sessionShutdown(
+            configuration.runId,
+            configuration.agentId,
+            closingSessionId,
+          ),
+        );
+      } catch {
+        // The controller may already be gone during shutdown.
+      }
+      closingClient.close();
+    }
   });
 }
