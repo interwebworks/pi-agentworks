@@ -6,6 +6,7 @@ import {
   createAgentState,
   createRunState,
   createStoryState,
+  isStoryState,
   InvalidStateTransitionError,
   transitionAgent,
   transitionRun,
@@ -148,6 +149,33 @@ test("a blocked run records and clears its reason when resumed", () => {
   const resumed = transitionRun(blocked, { type: "run-resumed", at: 1_004 });
   assert.equal(resumed.status, "active");
   assert.equal(resumed.blockedReason, null);
+});
+
+test("story planning metadata is durable and schema validated", () => {
+  const story = createStoryState({
+    id: "story-1",
+    runId: "run-1",
+    title: "Implement feature",
+    branchName: "agentworks/run-1/story-1",
+    worktreePath: "/worktrees/run-1/story-1",
+    planning: {
+      narrative: "Implement feature",
+      objective: "Implement feature",
+      taskKinds: ["software-development"],
+      writable: true,
+      scope: { included: ["src"], excluded: ["secrets"] },
+      technologyChoices: ["existing stack"],
+      constraints: ["stay in scope"],
+      dependencies: [],
+      deliverables: ["feature"],
+      acceptanceCriteria: ["tests pass"],
+      validation: [{ command: "npm test", expected: "passes" }],
+      escalationConditions: ["blocked"],
+    },
+    createdAt: 1_000,
+  });
+  assert.equal(story.planning?.objective, "Implement feature");
+  assert.equal(isStoryState(story), true);
 });
 
 test("a story follows prepared, assigned, candidate, review, and merge states", () => {

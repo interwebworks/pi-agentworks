@@ -58,6 +58,27 @@ export interface RunState {
   readonly updatedAt: number;
 }
 
+export interface StoryPlanningMetadata {
+  readonly narrative: string;
+  readonly objective: string;
+  readonly taskKinds: readonly string[];
+  readonly writable: boolean;
+  readonly scope: {
+    readonly included: readonly string[];
+    readonly excluded: readonly string[];
+  };
+  readonly technologyChoices: readonly string[];
+  readonly constraints: readonly string[];
+  readonly dependencies: readonly string[];
+  readonly deliverables: readonly string[];
+  readonly acceptanceCriteria: readonly string[];
+  readonly validation: readonly {
+    readonly command: string;
+    readonly expected: string;
+  }[];
+  readonly escalationConditions: readonly string[];
+}
+
 export interface StoryState {
   readonly schemaVersion: typeof CONTROLLER_STATE_SCHEMA_VERSION;
   readonly id: string;
@@ -66,6 +87,7 @@ export interface StoryState {
   readonly status: StoryStatus;
   readonly branchName: string;
   readonly worktreePath: string;
+  readonly planning?: StoryPlanningMetadata;
   readonly assignedAgentId: string | null;
   readonly candidateStoryHead: string | null;
   readonly reviewedIntegrationHead: string | null;
@@ -103,6 +125,41 @@ export interface AgentState {
 
 const NonEmptyStateString = Type.String({ minLength: 1 });
 const NullableStateString = Type.Union([Type.Null(), NonEmptyStateString]);
+const NonEmptyStateStringArray = Type.Array(NonEmptyStateString, {
+  minItems: 1,
+});
+const StoryPlanningMetadataSchema = Type.Object(
+  {
+    narrative: NonEmptyStateString,
+    objective: NonEmptyStateString,
+    taskKinds: NonEmptyStateStringArray,
+    writable: Type.Boolean(),
+    scope: Type.Object(
+      {
+        included: NonEmptyStateStringArray,
+        excluded: NonEmptyStateStringArray,
+      },
+      { additionalProperties: false },
+    ),
+    technologyChoices: NonEmptyStateStringArray,
+    constraints: NonEmptyStateStringArray,
+    dependencies: Type.Array(NonEmptyStateString),
+    deliverables: NonEmptyStateStringArray,
+    acceptanceCriteria: NonEmptyStateStringArray,
+    validation: Type.Array(
+      Type.Object(
+        {
+          command: NonEmptyStateString,
+          expected: NonEmptyStateString,
+        },
+        { additionalProperties: false },
+      ),
+      { minItems: 1 },
+    ),
+    escalationConditions: NonEmptyStateStringArray,
+  },
+  { additionalProperties: false },
+);
 const StateTimestamp = Type.Integer({ minimum: 0 });
 const RunStatusSchema = Type.Union([
   Type.Literal("planning"),
@@ -187,6 +244,7 @@ export const StoryStateSchema = Type.Object(
     status: StoryStatusSchema,
     branchName: NonEmptyStateString,
     worktreePath: NonEmptyStateString,
+    planning: Type.Optional(StoryPlanningMetadataSchema),
     assignedAgentId: NullableStateString,
     candidateStoryHead: NullableStateString,
     reviewedIntegrationHead: NullableStateString,

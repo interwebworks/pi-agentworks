@@ -277,6 +277,20 @@ export function createDiscoveredParentManagementGateway(
         title: task,
         branchName: `agentworks/${runId}/story-1`,
         worktreePath: `${runtimeRoot}/${runId}/story-1-worktree`,
+        planning: {
+          narrative: task,
+          objective: task,
+          taskKinds: ["software-development"],
+          writable: true,
+          scope: { included: ["repository"], excluded: ["secrets"] },
+          technologyChoices: ["existing repository stack"],
+          constraints: ["stay within the requested task scope"],
+          dependencies: [],
+          deliverables: [task],
+          acceptanceCriteria: [task],
+          validation: [{ command: "npm test", expected: "passes" }],
+          escalationConditions: ["blocked by missing information or access"],
+        },
         createdAt: now,
       });
       const story = transitionStory(draftStory, {
