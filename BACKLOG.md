@@ -73,7 +73,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Emit child operation-start, progress/heartbeat, and settled-completion messages from Pi lifecycle hooks.
   - [x] Emit child blocker messages and failed operation results from tool errors.
   - [x] Define durable supervisor-attention reactions for blocked/failed child messages.
-  - [ ] Dispatch supervisor attention to the parent/management surface and support bounded directives.
+  - [x] Project durable supervisor-attention events into the management dashboard view model.
+  - [ ] Wire event reads and UI delivery, plus bounded supervisor directives.
   - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
   - [x] Add deterministic pane-loss assessment and restoration planning.

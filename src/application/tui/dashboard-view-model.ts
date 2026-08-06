@@ -5,7 +5,14 @@ import type {
   StoryState,
   StoryStatus,
 } from "../../domain/controller-state.ts";
-import type { ControllerSnapshot } from "../ports/controller-repository.ts";
+import type {
+  ControllerEventRecord,
+  ControllerSnapshot,
+} from "../ports/controller-repository.ts";
+import {
+  projectSupervisorAttention,
+  type SupervisorAttentionRow,
+} from "./supervisor-attention.ts";
 
 export type AttentionLevel = "normal" | "info" | "warn" | "critical";
 
@@ -82,6 +89,7 @@ export interface DashboardViewModel {
   readonly run: RunHeader;
   readonly stories: readonly StoryRow[];
   readonly agents: readonly AgentRow[];
+  readonly supervisorAttention: readonly SupervisorAttentionRow[];
 }
 
 const STORY_STATUSES: readonly StoryStatus[] = [
@@ -138,6 +146,7 @@ function buildAgentRow(agent: AgentState): AgentRow {
 
 export function buildDashboardViewModel(
   snapshot: ControllerSnapshot,
+  events: readonly ControllerEventRecord[] = [],
 ): DashboardViewModel {
   return Object.freeze({
     revision: snapshot.revision,
@@ -150,5 +159,6 @@ export function buildDashboardViewModel(
     }),
     stories: Object.freeze(snapshot.stories.map(buildStoryRow)),
     agents: Object.freeze(snapshot.agents.map(buildAgentRow)),
+    supervisorAttention: projectSupervisorAttention(events),
   });
 }

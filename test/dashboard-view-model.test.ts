@@ -10,7 +10,10 @@ import {
   type RunState,
   type StoryState,
 } from "../src/domain/controller-state.ts";
-import type { ControllerSnapshot } from "../src/application/ports/controller-repository.ts";
+import type {
+  ControllerEventRecord,
+  ControllerSnapshot,
+} from "../src/application/ports/controller-repository.ts";
 import {
   attentionForAgent,
   attentionForStory,
@@ -223,6 +226,29 @@ test("buildDashboardViewModel projects run header, story rows, and agent rows", 
     paneId: "pane-2",
     attention: "critical",
   });
+});
+
+test("buildDashboardViewModel projects durable supervisor attention", () => {
+  const event: ControllerEventRecord = {
+    eventId: "event-1",
+    runId: "run-1",
+    revision: 4,
+    eventIndex: 1,
+    type: "supervisor-attention-required",
+    entityType: "agent",
+    entityId: "agent-2",
+    payload: { reason: "needs approval" },
+    occurredAt: 4_000,
+  };
+  const viewModel = buildDashboardViewModel(snapshot(), [event]);
+  assert.deepEqual(viewModel.supervisorAttention, [
+    {
+      eventId: "event-1",
+      agentId: "agent-2",
+      reason: "needs approval",
+      occurredAt: 4_000,
+    },
+  ]);
 });
 
 test("buildDashboardViewModel output is deeply frozen", () => {
