@@ -114,6 +114,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Add a fail-closed role catalog/selector/resource-provider resolver boundary preserving runtime role identity.
 - [x] Add controller-owned writer-lease wrapping and atomic resource rollback around complete provisioning evidence.
 - [x] Compose discovered role-pack output into exact runtime-id catalog lookup.
+- [x] Define cross-system Git/Herdr/private-session/fence evidence validation with expected branch heads and ownership tokens.
 - [ ] Implement the composition-root provider with real Git/worktree, Herdr pane, private session/token evidence and execute planned orchestration actions.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
