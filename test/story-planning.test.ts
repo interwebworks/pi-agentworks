@@ -3,8 +3,6 @@ import test from "node:test";
 import { InvalidTaskSpecificationError } from "../src/domain/task-specification.ts";
 import {
   buildAssignment,
-  deriveBranchName,
-  deriveWorktreePath,
   StoryPlanError,
   validateAndOrderStories,
   type AssignableRole,
@@ -89,28 +87,20 @@ test("rejects an empty plan", () => {
   assert.throws(() => validateAndOrderStories([]), /at least one story/u);
 });
 
-test("derives deterministic, Git-safe branch and worktree names", () => {
-  const branch = deriveBranchName("Run 01", "Story A!");
-  assert.equal(branch, "agentworks/run-01/story-a");
-  assert.equal(deriveBranchName("Run 01", "Story A!"), branch);
-
-  const worktree = deriveWorktreePath("/tmp/wt", "Run 01", "Story A!");
-  assert.equal(worktree, "/tmp/wt/run-01/story-a");
-});
-
-test("builds a valid assignment from a story, role, and Git context", () => {
+test("builds a valid assignment from a story, role, and its existing worktree", () => {
   const spec = buildAssignment({
     runId: "run-1",
     story: story({ id: "backend" }),
     role: writerRole,
     agentId: "agent-1",
     repositoryRoot: "/repo",
-    worktreeRoot: "/worktrees",
+    branchName: "agentworks/run-1/stories/backend",
+    worktreePath: "/worktrees/run-1/backend",
     baseBranch: "agentworks/run-1/integration",
   });
 
   assert.equal(spec.assignedRole, "software-development/backend-developer");
-  assert.equal(spec.branchName, "agentworks/run-1/backend");
+  assert.equal(spec.branchName, "agentworks/run-1/stories/backend");
   assert.equal(spec.worktreePath, "/worktrees/run-1/backend");
   assert.notEqual(spec.branchName, spec.baseBranch);
   assert.equal(spec.writePolicy, "story-writer");
@@ -125,7 +115,8 @@ test("rejects an assignment whose worktree is inside the repository", () => {
         role: writerRole,
         agentId: "agent-1",
         repositoryRoot: "/repo",
-        worktreeRoot: "/repo/worktrees",
+        branchName: "agentworks/run-1/stories/backend",
+        worktreePath: "/repo/worktrees/run-1/backend",
         baseBranch: "main",
       }),
     (error: unknown) => {
@@ -149,7 +140,8 @@ test("rejects a read-only role that carries write tools", () => {
         },
         agentId: "agent-2",
         repositoryRoot: "/repo",
-        worktreeRoot: "/worktrees",
+        branchName: "agentworks/run-1/stories/review",
+        worktreePath: "/worktrees/run-1/review",
         baseBranch: "main",
       }),
     /read-only assignments cannot include write or edit tools/u,

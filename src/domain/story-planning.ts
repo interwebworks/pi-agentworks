@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { RoleWritePolicy } from "./role-pack.ts";
 import {
   parseTaskSpecification,
@@ -48,8 +47,15 @@ export interface AssignmentInputs {
   readonly agentId: string;
   /** Absolute path to the original repository checkout. */
   readonly repositoryRoot: string;
-  /** Absolute path, outside the repository, where story worktrees are created. */
-  readonly worktreeRoot: string;
+  /**
+   * The branch and worktree the controller already created for this story
+   * (via `GitWorkspaceGateway.createStoryWorkspace`, named per
+   * `workspace-naming.ts`). An assignment describes work inside an existing
+   * worktree; it never invents its own branch or path naming scheme.
+   */
+  readonly branchName: string;
+  readonly worktreePath: string;
+  /** The branch this story's branch was forked from — the run's integration branch. */
   readonly baseBranch: string;
 }
 
@@ -64,31 +70,6 @@ export class StoryPlanError extends Error {
 }
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
-
-function sanitizeSegment(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/^-+|-+$/gu, "");
-}
-
-/** Deterministic, collision-free branch name for a story within a run. */
-export function deriveBranchName(runId: string, storyId: string): string {
-  return `agentworks/${sanitizeSegment(runId)}/${sanitizeSegment(storyId)}`;
-}
-
-/** Deterministic worktree path for a story, under the run's worktree root. */
-export function deriveWorktreePath(
-  worktreeRoot: string,
-  runId: string,
-  storyId: string,
-): string {
-  return path.join(
-    worktreeRoot,
-    sanitizeSegment(runId),
-    sanitizeSegment(storyId),
-  );
-}
 
 /**
  * Validate a story set and return it in dependency order. Rejects duplicate
@@ -177,12 +158,12 @@ function topologicalOrder(
 
 /**
  * Build a fully prepared, validated task specification (assignment) from a
- * story, its assigned role, and the run's Git context. Branch and worktree are
- * derived deterministically; the result is checked against the task-spec
- * contract, so an incomplete assignment throws rather than reaching an agent.
+ * story, its assigned role, and the story's already-created Git worktree. The
+ * result is checked against the task-spec contract, so an incomplete
+ * assignment throws rather than reaching an agent.
  */
 export function buildAssignment(inputs: AssignmentInputs): TaskSpecification {
-  const { runId, story, role, agentId, repositoryRoot, worktreeRoot } = inputs;
+  const { runId, story, role, agentId, repositoryRoot } = inputs;
 
   const candidate = {
     schemaVersion: 1 as const,
@@ -196,8 +177,8 @@ export function buildAssignment(inputs: AssignmentInputs): TaskSpecification {
     assignedRole: role.runtimeId,
     repositoryRoot,
     baseBranch: inputs.baseBranch,
-    branchName: deriveBranchName(runId, story.id),
-    worktreePath: deriveWorktreePath(worktreeRoot, runId, story.id),
+    branchName: inputs.branchName,
+    worktreePath: inputs.worktreePath,
     scope: {
       included: story.scope.included,
       excluded: story.scope.excluded,
