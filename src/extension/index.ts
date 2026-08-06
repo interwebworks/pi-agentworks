@@ -9,6 +9,7 @@ import {
   AgentworksToolInputSchema,
   parseAgentworksCommand,
   parseAgentworksToolInput,
+  type ParentManagementGateway,
 } from "./parent-command.ts";
 
 /**
@@ -43,12 +44,26 @@ export default function agentworks(pi: ExtensionAPI): void {
  * runtime yet — both report a clear "not yet wired" stub until the
  * controller-launch slice lands.
  */
-export function installParentExtension(pi: ExtensionAPI): void {
+export function installParentExtension(
+  pi: ExtensionAPI,
+  gateway: ParentManagementGateway | null = null,
+): void {
   pi.registerCommand("agentworks", {
     description:
       "Launch or inspect an Agentworks run. Usage: /agentworks [LOW|NORMAL|HIGH] <task>",
     handler(args, ctx) {
       const { mode, task } = parseAgentworksCommand(args);
+      if (gateway !== null) {
+        return gateway
+          .execute({
+            action: "launch",
+            ...(mode === null ? {} : { mode }),
+            ...(task.length === 0 ? {} : { task }),
+          })
+          .then((result) => {
+            ctx.ui.notify(result.text, result.notificationType ?? "info");
+          });
+      }
       const modeLabel = mode ?? "(default)";
       ctx.ui.notify(
         task.length > 0
@@ -68,17 +83,18 @@ export function installParentExtension(pi: ExtensionAPI): void {
       "launch, status, approve, reject, steer, pause, resume, focus, close. " +
       "Not yet wired to the controller runtime.",
     parameters: AgentworksToolInputSchema,
-    execute(_toolCallId, params) {
+    async execute(_toolCallId, params) {
       const input = parseAgentworksToolInput(params);
-      return Promise.resolve({
-        content: [
-          {
-            type: "text" as const,
-            text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
-          },
-        ],
+      const result =
+        gateway === null
+          ? {
+              text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
+            }
+          : await gateway.execute(input);
+      return {
+        content: [{ type: "text" as const, text: result.text }],
         details: undefined,
-      });
+      };
     },
   });
 }

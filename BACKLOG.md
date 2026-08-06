@@ -74,7 +74,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Emit child blocker messages and failed operation results from tool errors.
   - [x] Define durable supervisor-attention reactions for blocked/failed child messages.
   - [x] Project durable supervisor-attention events into the management dashboard view model.
-  - [ ] Wire event reads and UI delivery, plus bounded supervisor directives.
+  - [x] Add an injectable parent-management gateway boundary for command/tool delegation.
+  - [ ] Connect a concrete controller client for event reads/UI delivery and bounded supervisor directives.
   - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
   - [x] Add deterministic pane-loss assessment and restoration planning.
