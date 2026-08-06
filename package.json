@@ -4,6 +4,10 @@
   "description": "Role-aware interactive Pi agent teams orchestrated in Herdr panes with isolated Git worktrees.",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "PLACEHOLDER: set to the real git remote before publishing (e.g. git+https://github.com/OWNER/agentworks.git)"
+  },
   "keywords": [
     "pi-package",
     "pi",
