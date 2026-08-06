@@ -25,7 +25,7 @@ Use an absolute path. This local installation path has been verified in a dispos
 
 ```bash
 pi install git:github.com/OWNER/agentworks@VERSION
-pi install npm:agentworks@VERSION
+pi install npm:pi-agentworks@VERSION
 ```
 
 **Current status of the installed package:** the package loads and registers the `/agentworks` command and model-callable `agentworks` tool (see `src/extension/index.ts`). When `AGENTWORKS_RUNTIME_ROOT` is present, status requests use the authenticated controller read gateway and render durable supervisor attention; launch now creates a durable planning run through the authenticated controller, while agent orchestration and mutating actions remain gated until the live composition is complete. See [Project status](#project-status--roadmap) below.

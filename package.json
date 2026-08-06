@@ -1,12 +1,12 @@
 {
-  "name": "agentworks",
+  "name": "pi-agentworks",
   "version": "0.1.0",
   "description": "Role-aware interactive Pi agent teams orchestrated in Herdr panes with isolated Git worktrees.",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "PLACEHOLDER: set to the real git remote before publishing (e.g. git+https://github.com/OWNER/agentworks.git)"
+    "url": "PLACEHOLDER: set to the real git remote before publishing (e.g. git+https://github.com/OWNER/pi-agentworks.git)"
   },
   "keywords": [
     "pi-package",
