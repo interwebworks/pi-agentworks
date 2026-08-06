@@ -33,6 +33,9 @@
       "./src/extension/index.ts"
     ]
   },
+  "dependencies": {
+    "typebox": "^1.1.38"
+  },
   "scripts": {
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -48,8 +51,7 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.83.0",

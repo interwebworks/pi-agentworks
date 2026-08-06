@@ -78,6 +78,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Add a concrete authenticated parent read gateway for snapshots and bounded event retrieval.
   - [x] Inject the discovered gateway into the parent extension using the private default runtime root or explicit `AGENTWORKS_RUNTIME_ROOT`, and render status/attention output.
   - [x] Verify an installed-style parent launch reaches the controller and supports a subsequent status read with fresh authenticated client sequences.
+  - [x] Declare detached-controller runtime dependencies in production package dependencies and verify an `--omit=dev` install.
   - [x] Wire parent launch through detached controller startup and fenced durable planning-run initialization.
   - [x] Add a parent-authenticated bounded orchestration planning entrypoint for one read-only controller tick.
   - [ ] Wire effect execution, mutating actions, and bounded supervisor directives into the live controller/management UI.
