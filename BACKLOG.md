@@ -118,6 +118,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Add a Git workspace evidence adapter requiring explicit integration heads and validating returned story worktrees/branches.
 - [x] Add a Herdr/private-session evidence adapter with exact ownership checks and cleanup on stale fence evidence.
 - [x] Implement private session/config directory and immutable child-capability allocation with ownership/path validation.
+- [x] Add a Herdr pane allocator over the agents-tab lifecycle with final pane/cwd/token verification and release support.
 - [ ] Implement the composition-root provider with real Herdr allocation and execute planned orchestration actions.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
