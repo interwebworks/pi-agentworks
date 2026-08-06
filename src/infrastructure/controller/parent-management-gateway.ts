@@ -20,7 +20,10 @@ import {
 import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
 import { buildDashboardViewModel } from "../../application/tui/dashboard-view-model.ts";
 import type { ControllerClientRequest } from "./unix-controller-transport.ts";
-import { UnixControllerClient } from "./unix-controller-transport.ts";
+import {
+  ControllerRemoteError,
+  UnixControllerClient,
+} from "./unix-controller-transport.ts";
 import {
   discoverControllerRuntime,
   type DiscoveredControllerRuntime,
@@ -330,6 +333,28 @@ export function createDiscoveredParentManagementGateway(
           events,
         } as unknown as JsonValue,
       });
+      if (run.complexity === "HIGH") {
+        try {
+          await client.request({
+            action: "orchestration.execute",
+            payload: {},
+          });
+          return Object.freeze({
+            text: `Agentworks run ${runId} created and started for "${task}".`,
+          });
+        } catch (error) {
+          if (!(
+            error instanceof ControllerRemoteError &&
+            error.code === "not-configured"
+          )) {
+            throw error;
+          }
+          return Object.freeze({
+            text: `Agentworks run ${runId} created in planning state for "${task}". Live execution is not configured.`,
+            notificationType: "warning" as const,
+          });
+        }
+      }
       return Object.freeze({
         text: `Agentworks run ${runId} created in planning state for "${task}".`,
       });
