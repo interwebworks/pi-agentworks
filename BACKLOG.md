@@ -108,7 +108,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Implement dependency-aware story scheduling and complexity concurrency caps.
 - [x] Reject live orchestration execution fail-closed until the launcher/Git/runtime effects composition is injected.
 - [x] Add a typed live orchestration composition factory requiring repository, Git, launcher, context, run ID, dependency map, and clock.
-- [ ] Execute planned orchestration actions through the live controller effects composition.
+- [x] Define the story-agent launcher adapter contract with explicit assignment preparation, secure Pi launch, and durable launch evidence.
+- [ ] Implement the composition-root preparation factory and execute planned orchestration actions through the live controller effects composition.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
