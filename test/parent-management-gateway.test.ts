@@ -46,6 +46,9 @@ class FakeClient implements ParentControllerClient {
     this.payloads.push(input.payload);
     if (input.action === "snapshot.get")
       return Promise.resolve(snapshot() as unknown as JsonValue);
+    if (input.action === "orchestration.plan") {
+      return Promise.resolve({ revision: 2, actions: [] });
+    }
     return Promise.resolve([
       {
         eventId: "event-1",
@@ -70,7 +73,11 @@ test("status reads the controller snapshot and events into dashboard data", asyn
   const client = new FakeClient();
   const gateway = new ControllerParentManagementGateway(() => client);
   const result = await gateway.execute({ action: "status", runId: "run-1" });
-  assert.deepEqual(client.requests, ["snapshot.get", "events.read"]);
+  assert.deepEqual(client.requests, [
+    "snapshot.get",
+    "events.read",
+    "orchestration.plan",
+  ]);
   assert.deepEqual(client.payloads[1], {
     revision: 0,
     eventIndex: -1,
@@ -79,6 +86,7 @@ test("status reads the controller snapshot and events into dashboard data", asyn
   assert.equal(client.closed, true);
   assert.match(result.text, /Run \[NORMAL\] - planning/u);
   assert.match(result.text, /Stories: none/u);
+  assert.match(result.text, /Next: none/u);
   assert.match(result.text, /Attention:\n\s{2}! agent-1: needs approval/u);
 });
 

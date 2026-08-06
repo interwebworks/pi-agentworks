@@ -166,6 +166,13 @@ test("detached process serves core read actions and protects shutdown authority"
       (initializedSnapshot as Readonly<Record<string, JsonValue>>).revision,
       1,
     );
+    assert.deepEqual(
+      await parentClient.request({
+        action: "orchestration.plan",
+        payload: {},
+      }),
+      { runId: "run-1", revision: 1, actions: [] },
+    );
     parentClient.close();
     assert.equal((await supervisor.inspect()).status, "healthy");
   } finally {

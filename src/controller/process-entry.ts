@@ -17,6 +17,7 @@ import {
   decodeAuthenticatedAgentMessage,
   InvalidAgentMessageRouteError,
 } from "../application/protocol/agent-message-routing.ts";
+import { planOrchestration } from "../domain/orchestration.ts";
 import {
   ControllerRuntime,
   ControllerRuntimeError,
@@ -363,6 +364,47 @@ export async function runControllerProcess(
             ...initialization,
           });
           return toJsonValue(result);
+        }
+        case "orchestration.plan": {
+          if (request.clientKind !== "parent") {
+            throw new ControllerRequestError(
+              "forbidden",
+              "Only a parent client can request orchestration planning",
+            );
+          }
+          if (!isEmptyObject(request.payload)) {
+            throw new ControllerRequestError(
+              "invalid-payload",
+              "Orchestration planning payload must be empty",
+            );
+          }
+          const snapshot = runtime.repository.loadSnapshot(configuration.runId);
+          if (snapshot === null) {
+            throw new ControllerRequestError(
+              "unknown-run",
+              "Run has not been initialized",
+            );
+          }
+          const actions = planOrchestration(
+            snapshot.stories.map((story) => ({
+              id: story.id,
+              status: story.status,
+              dependencies: [],
+              reviewerAssigned: story.reviewerAgentId !== null,
+            })),
+            snapshot.run.complexity,
+          );
+          if (actions.length > 64) {
+            throw new ControllerRequestError(
+              "invalid-state",
+              "Orchestration plan exceeds the bounded action limit",
+            );
+          }
+          return toJsonValue({
+            runId: configuration.runId,
+            revision: snapshot.revision,
+            actions,
+          });
         }
         case "snapshot.get": {
           if (!isEmptyObject(request.payload)) {

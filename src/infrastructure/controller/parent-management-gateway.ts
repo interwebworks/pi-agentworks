@@ -81,6 +81,40 @@ function events(value: JsonValue): readonly ControllerEventRecord[] {
   return value as readonly ControllerEventRecord[];
 }
 
+function orchestrationPlan(value: JsonValue): readonly string[] {
+  const object = record(value, "orchestration plan");
+  if (
+    typeof object.revision !== "number" ||
+    !Number.isSafeInteger(object.revision) ||
+    !Array.isArray(object.actions) ||
+    object.actions.length > 64
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller returned an invalid orchestration plan",
+    );
+  }
+  return object.actions.map((action) => {
+    if (
+      action === null ||
+      typeof action !== "object" ||
+      Array.isArray(action)
+    ) {
+      throw new ParentManagementGatewayError(
+        "controller returned an invalid orchestration action",
+      );
+    }
+    const actionRecord = action as Readonly<Record<string, JsonValue>>;
+    const type = actionRecord.type;
+    if (typeof type !== "string" || type.length === 0 || type.length > 64) {
+      throw new ParentManagementGatewayError(
+        "controller returned an invalid orchestration action",
+      );
+    }
+    const storyId = actionRecord.storyId;
+    return typeof storyId === "string" ? `${type}:${storyId}` : type;
+  });
+}
+
 function requiredRunId(input: ParentManagementRequest): string {
   if (input.runId === undefined || input.runId.length === 0) {
     throw new ParentManagementGatewayError(`${input.action} requires a runId`);
@@ -134,6 +168,9 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
           },
         }),
       );
+      const plannedActions = orchestrationPlan(
+        await client.request({ action: "orchestration.plan", payload: {} }),
+      );
       const view = buildDashboardViewModel(current, eventRows);
       const attention = view.supervisorAttention
         .map((item) => `  ! ${item.agentId}: ${item.reason}`)
@@ -147,6 +184,7 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
           `${view.run.title} [${view.run.complexity}] - ${view.run.status}`,
           `Stories: ${stories || "none"}`,
           `Agents: ${String(view.agents.length)}`,
+          `Next: ${plannedActions.length > 0 ? plannedActions.join(", ") : "none"}`,
           attention.length > 0 ? `Attention:\n${attention}` : "Attention: none",
         ].join("\n"),
       });

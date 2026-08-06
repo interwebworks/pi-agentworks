@@ -78,7 +78,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Add a concrete authenticated parent read gateway for snapshots and bounded event retrieval.
   - [x] Inject the discovered gateway into the parent extension when `AGENTWORKS_RUNTIME_ROOT` is present and render status/attention output.
   - [x] Wire parent launch through detached controller startup and fenced durable planning-run initialization.
-  - [ ] Wire agent orchestration, mutating actions, and bounded supervisor directives into the live controller/management UI.
+  - [x] Add a parent-authenticated bounded orchestration planning entrypoint for one read-only controller tick.
+  - [ ] Wire effect execution, mutating actions, and bounded supervisor directives into the live controller/management UI.
   - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
   - [x] Add deterministic pane-loss assessment and restoration planning.
@@ -105,6 +106,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 ## P9 - Orchestration
 
 - [x] Implement dependency-aware story scheduling and complexity concurrency caps.
+- [ ] Execute planned orchestration actions through the live controller effects composition.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
