@@ -30,6 +30,10 @@ const SessionStartedSchema = Type.Object(
     runId: RunId,
     agentId: AgentId,
     sessionId: Type.String({ minLength: 1, maxLength: 256 }),
+    piSessionPath: Type.Union([
+      Type.String({ minLength: 1, maxLength: 4096 }),
+      Type.Null(),
+    ]),
   },
   { additionalProperties: false },
 );

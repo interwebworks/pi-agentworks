@@ -68,7 +68,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [ ] Implement structured lifecycle, operation, result, blocker, and supervisor communication.
   - [x] Define the versioned message model and bounded codec.
   - [x] Carry authenticated session-start/session-shutdown messages through the child/controller RPC boundary.
-  - [ ] Apply lifecycle and operation messages to durable controller state and supervisor reactions.
+  - [x] Define the fail-closed reducer for lifecycle, progress, heartbeat, completion, and blocker messages.
+  - [ ] Wire the reducer into durable controller commits and supervisor reactions.
   - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
   - [x] Add deterministic pane-loss assessment and restoration planning.

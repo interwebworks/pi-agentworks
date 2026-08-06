@@ -14,6 +14,7 @@ export interface SessionStartedMessage {
   readonly runId: string;
   readonly agentId: string;
   readonly sessionId: string;
+  readonly piSessionPath: string | null;
 }
 
 export interface SessionShutdownMessage {
@@ -116,6 +117,7 @@ export function sessionStarted(
   runId: string,
   agentId: string,
   sessionId: string,
+  piSessionPath: string | null = null,
 ): SessionStartedMessage {
   return Object.freeze({
     protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
@@ -123,6 +125,7 @@ export function sessionStarted(
     runId,
     agentId,
     sessionId,
+    piSessionPath,
   });
 }
 

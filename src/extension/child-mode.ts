@@ -257,9 +257,24 @@ export function installChildBridge(
         payload: {},
       });
       assertHelloResponse(response, configuration);
+      const contextWithSession = context as unknown as {
+        sessionManager?: { getSessionFile?: () => string };
+      };
+      let piSessionPath: string | null = null;
+      if (
+        contextWithSession.sessionManager !== undefined &&
+        typeof contextWithSession.sessionManager.getSessionFile === "function"
+      ) {
+        piSessionPath = contextWithSession.sessionManager.getSessionFile();
+      }
       await sendMessage(
         nextClient,
-        sessionStarted(configuration.runId, configuration.agentId, sessionId),
+        sessionStarted(
+          configuration.runId,
+          configuration.agentId,
+          sessionId,
+          piSessionPath,
+        ),
       );
       authenticated = true;
     } catch (error) {
