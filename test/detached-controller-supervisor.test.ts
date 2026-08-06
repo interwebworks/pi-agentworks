@@ -173,6 +173,15 @@ test("detached process serves core read actions and protects shutdown authority"
       }),
       { runId: "run-1", revision: 1, actions: [] },
     );
+    await assert.rejects(
+      parentClient.request({
+        action: "orchestration.execute",
+        payload: {},
+      }),
+      (error: unknown) =>
+        error instanceof ControllerRemoteError &&
+        error.code === "not-configured",
+    );
     parentClient.close();
     assert.equal((await supervisor.inspect()).status, "healthy");
   } finally {

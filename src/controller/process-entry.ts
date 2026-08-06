@@ -365,6 +365,12 @@ export async function runControllerProcess(
           });
           return toJsonValue(result);
         }
+        case "orchestration.execute": {
+          throw new ControllerRequestError(
+            "not-configured",
+            "Live orchestration effects are not configured",
+          );
+        }
         case "orchestration.plan": {
           if (request.clientKind !== "parent") {
             throw new ControllerRequestError(
