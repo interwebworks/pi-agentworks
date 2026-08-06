@@ -10,7 +10,10 @@ import {
   type RunState,
   type StoryState,
 } from "../src/domain/controller-state.ts";
-import { assessStartupRecovery } from "../src/domain/recovery.ts";
+import {
+  assessStartupRecovery,
+  reconcileStartupRecovery,
+} from "../src/domain/recovery.ts";
 
 function run(): RunState {
   return createRunState({
@@ -136,5 +139,96 @@ test("candidate creation and merge phases remain blocked for evidence reconcilia
         { code: "merge-interrupted", entityId: "story-merging" },
       ],
     },
+  );
+});
+
+test("reconciliation clears interrupted phases proven complete by live Git", () => {
+  const assessment = {
+    status: "reconciliation-required" as const,
+    reasons: [
+      { code: "candidate-commit-interrupted" as const, entityId: "story-a" },
+      { code: "merge-interrupted" as const, entityId: "story-b" },
+    ],
+  };
+  const reconciled = reconcileStartupRecovery(assessment, (reason) =>
+    reason.code === "candidate-commit-interrupted"
+      ? { candidatePresent: true }
+      : { mergePresent: true },
+  );
+  assert.equal(reconciled.status, "ready");
+  assert.deepEqual(
+    reconciled.reasons.map((r) => r.disposition),
+    ["resolved", "resolved"],
+  );
+});
+
+test("reconciliation keeps blocking when Git shows the effect never landed", () => {
+  const reconciled = reconcileStartupRecovery(
+    {
+      status: "reconciliation-required",
+      reasons: [{ code: "merge-interrupted", entityId: "story-b" }],
+    },
+    () => ({ mergePresent: false }),
+  );
+  assert.equal(reconciled.status, "reconciliation-required");
+  assert.equal(reconciled.reasons[0]?.disposition, "recovery-required");
+});
+
+test("missing live evidence stays unresolved and blocks conservatively", () => {
+  const reconciled = reconcileStartupRecovery(
+    {
+      status: "reconciliation-required",
+      reasons: [{ code: "candidate-commit-interrupted", entityId: "story-a" }],
+    },
+    () => ({}),
+  );
+  assert.equal(reconciled.status, "reconciliation-required");
+  assert.equal(reconciled.reasons[0]?.disposition, "unresolved");
+});
+
+test("a terminal run's stale active agent is cleared once its pane is gone", () => {
+  const reconciled = reconcileStartupRecovery(
+    {
+      status: "reconciliation-required",
+      reasons: [{ code: "terminal-run-has-active-agent", entityId: "agent-1" }],
+    },
+    () => ({ paneAlive: false }),
+  );
+  assert.equal(reconciled.status, "ready");
+  assert.equal(reconciled.reasons[0]?.disposition, "resolved");
+});
+
+test("a live agent operation still requires recovery regardless of pane state", () => {
+  for (const paneAlive of [true, false]) {
+    const reconciled = reconcileStartupRecovery(
+      {
+        status: "reconciliation-required",
+        reasons: [{ code: "agent-operation-interrupted", entityId: "agent-1" }],
+      },
+      () => ({ paneAlive }),
+    );
+    assert.equal(reconciled.status, "reconciliation-required");
+    assert.equal(reconciled.reasons[0]?.disposition, "recovery-required");
+  }
+});
+
+test("a mixed assessment is ready only when every reason resolves", () => {
+  const reconciled = reconcileStartupRecovery(
+    {
+      status: "reconciliation-required",
+      reasons: [
+        { code: "candidate-commit-interrupted", entityId: "story-a" },
+        { code: "merge-interrupted", entityId: "story-b" },
+      ],
+    },
+    (reason) =>
+      reason.code === "candidate-commit-interrupted"
+        ? { candidatePresent: true }
+        : { mergePresent: false },
+  );
+  assert.equal(reconciled.status, "reconciliation-required");
+  assert.deepEqual(
+    reconciled.reasons.map((r) => r.disposition),
+    ["resolved", "recovery-required"],
   );
 });
