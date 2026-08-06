@@ -4,6 +4,7 @@ import {
   parseComplexityMode,
   type ComplexityMode,
 } from "../domain/complexity.ts";
+export type { ParentManagementGateway } from "../application/ports/parent-management.ts";
 
 export interface ParsedAgentworksCommand {
   readonly mode: ComplexityMode | null;
@@ -97,14 +98,4 @@ export function parseAgentworksToolInput(value: unknown): AgentworksToolInput {
     );
   }
   return Object.freeze(value);
-}
-
-export interface ParentManagementResult {
-  readonly text: string;
-  readonly notificationType?: "info" | "warning" | "error";
-}
-
-/** Controller-backed parent surface injected by the composition root. */
-export interface ParentManagementGateway {
-  execute(input: AgentworksToolInput): Promise<ParentManagementResult>;
 }
