@@ -1,12 +1,5 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ControllerOrchestrationExecutor } from "../../controller/process-entry.ts";
@@ -43,6 +36,11 @@ import {
   AgentPaneRestorationController,
   type RestorationRepository,
 } from "../../application/recovery/agent-pane-restoration.ts";
+import {
+  createControllerLaunchComposition,
+  type ControllerLaunchComposition,
+  type ControllerLaunchCompositionEnvironment,
+} from "./controller-launch-composition.ts";
 
 export class ProductionOrchestrationProviderError extends Error {
   constructor(message: string) {
@@ -51,52 +49,7 @@ export class ProductionOrchestrationProviderError extends Error {
   }
 }
 
-interface ProductionEnvironment {
-  readonly AGENTWORKS_WORKSPACE_ID?: string;
-  readonly HERDR_WORKSPACE_ID?: string;
-  readonly AGENTWORKS_HERDR_PATH?: string;
-  readonly AGENTWORKS_PI_CLI_PATH?: string;
-  readonly AGENTWORKS_PI_PACKAGE_PATH?: string;
-  readonly PI_PROVIDER?: string;
-  readonly PI_MODEL?: string;
-  readonly PI_REASONING_LEVEL?: string;
-  readonly AGENTWORKS_ALLOW_HOST_NETWORK?: string;
-}
-
-function required(value: string | undefined, label: string): string {
-  if (value === undefined || value.trim().length === 0) {
-    throw new ProductionOrchestrationProviderError(`${label} is required`);
-  }
-  return value.trim();
-}
-
-function executable(name: string): string {
-  try {
-    const path = execFileSync("which", [name], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-    if (path.length === 0) throw new Error("which returned no path");
-    return realpathSync(path);
-  } catch (error) {
-    throw new ProductionOrchestrationProviderError(
-      `cannot resolve ${name}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
-function packageRootFromExecutable(path: string): string {
-  let current = dirname(path);
-  for (;;) {
-    if (existsSync(join(current, "package.json"))) return current;
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new ProductionOrchestrationProviderError(
-    `cannot find package root for ${path}`,
-  );
-}
+type ProductionEnvironment = ControllerLaunchCompositionEnvironment;
 
 function trustedPrivateSource(path: string, label: string): void {
   const status = lstatSync(path);
@@ -117,6 +70,23 @@ export function installSelectedProviderAuthentication(
   providerId: string,
   authenticationPath = join(homedir(), ".pi", "agent", "auth.json"),
 ): void {
+  const destination = join(configPath, "auth.json");
+  if (existsSync(destination)) {
+    trustedPrivateSource(destination, "private authentication configuration");
+    const existing: unknown = JSON.parse(readFileSync(destination, "utf8"));
+    if (
+      existing !== null &&
+      typeof existing === "object" &&
+      !Array.isArray(existing) &&
+      Object.keys(existing).length === 1 &&
+      (existing as Record<string, unknown>)[providerId] !== undefined
+    ) {
+      return;
+    }
+    throw new ProductionOrchestrationProviderError(
+      "private authentication configuration is not limited to the selected provider",
+    );
+  }
   const source = authenticationPath;
   if (!existsSync(source)) return;
   trustedPrivateSource(source, "global authentication configuration");
@@ -128,22 +98,7 @@ export function installSelectedProviderAuthentication(
   }
   const credential = (parsed as Record<string, unknown>)[providerId];
   if (credential === undefined) return;
-  const destination = join(configPath, "auth.json");
   const content = `${JSON.stringify({ [providerId]: credential }, null, 2)}\n`;
-  if (existsSync(destination)) {
-    trustedPrivateSource(destination, "private authentication configuration");
-    const existing: unknown = JSON.parse(readFileSync(destination, "utf8"));
-    if (
-      existing !== null &&
-      typeof existing === "object" &&
-      !Array.isArray(existing) &&
-      (existing as Record<string, unknown>)[providerId] !== undefined
-    ) {
-      return;
-    }
-    writeFileSync(destination, content, { encoding: "utf8", mode: 0o600 });
-    return;
-  }
   writeFileSync(destination, content, {
     encoding: "utf8",
     mode: 0o600,
@@ -155,8 +110,61 @@ function installSelectedModelConfiguration(
   configPath: string,
   providerId: string,
   modelId: string,
+  modelConfigurationPath = join(homedir(), ".pi", "agent", "models.json"),
 ): void {
-  const source = join(homedir(), ".pi", "agent", "models.json");
+  const destination = join(configPath, "models.json");
+  if (existsSync(destination)) {
+    trustedPrivateSource(destination, "private model configuration");
+    const existing: unknown = JSON.parse(readFileSync(destination, "utf8"));
+    if (
+      existing === null ||
+      typeof existing !== "object" ||
+      Array.isArray(existing)
+    ) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration is invalid",
+      );
+    }
+    const providers = (existing as Record<string, unknown>).providers;
+    if (
+      providers === null ||
+      typeof providers !== "object" ||
+      Array.isArray(providers) ||
+      Object.keys(providers).length !== 1 ||
+      (providers as Record<string, unknown>)[providerId] === undefined
+    ) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration differs from the selected provider",
+      );
+    }
+    const selected = (providers as Record<string, unknown>)[providerId];
+    if (
+      selected === null ||
+      typeof selected !== "object" ||
+      Array.isArray(selected)
+    ) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration has invalid selected-provider evidence",
+      );
+    }
+    const models = (selected as Record<string, unknown>).models;
+    if (
+      Array.isArray(models) &&
+      !models.some(
+        (entry) =>
+          entry !== null &&
+          typeof entry === "object" &&
+          !Array.isArray(entry) &&
+          (entry as Record<string, unknown>).id === modelId,
+      )
+    ) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration differs from the selected model",
+      );
+    }
+    return;
+  }
+  const source = modelConfigurationPath;
   if (!existsSync(source)) return;
   trustedPrivateSource(source, "global model configuration");
   const parsed: unknown = JSON.parse(readFileSync(source, "utf8"));
@@ -212,15 +220,6 @@ function installSelectedModelConfiguration(
     null,
     2,
   )}\n`;
-  const destination = join(configPath, "models.json");
-  if (existsSync(destination)) {
-    if (readFileSync(destination, "utf8") !== content) {
-      throw new ProductionOrchestrationProviderError(
-        "private model configuration changed during relaunch",
-      );
-    }
-    return;
-  }
   writeFileSync(destination, content, {
     encoding: "utf8",
     mode: 0o600,
@@ -262,36 +261,6 @@ function supportsPaneRestoration(
     repository.confirmAgentPaneRestoration !== undefined &&
     repository.readAgentPaneRestoration !== undefined
   );
-}
-
-function hostNetworkApproved(value: string | undefined): boolean {
-  if (value === undefined || value === "0") return false;
-  if (value !== "1") {
-    throw new ProductionOrchestrationProviderError(
-      "AGENTWORKS_ALLOW_HOST_NETWORK must be exactly 0 or 1",
-    );
-  }
-  return true;
-}
-
-function thinking(
-  value: string | undefined,
-): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" {
-  const selected = value ?? "high";
-  if (
-    selected !== "off" &&
-    selected !== "minimal" &&
-    selected !== "low" &&
-    selected !== "medium" &&
-    selected !== "high" &&
-    selected !== "xhigh" &&
-    selected !== "max"
-  ) {
-    throw new ProductionOrchestrationProviderError(
-      `PI_REASONING_LEVEL is invalid: ${selected}`,
-    );
-  }
-  return selected;
 }
 
 function chooseRole(
@@ -367,37 +336,26 @@ function ensureIntegrationWorkspace(
   });
 }
 
-export function createProductionOrchestrationProvider(
-  environment: ProductionEnvironment,
-  packageRoot: string,
+export function createProductionOrchestrationProviderFromComposition(
+  composition: ControllerLaunchComposition,
 ): (runtime: ControllerRuntime) => ControllerOrchestrationExecutor {
-  const workspaceId = required(
-    environment.AGENTWORKS_WORKSPACE_ID ?? environment.HERDR_WORKSPACE_ID,
-    "HERDR workspace id (AGENTWORKS_WORKSPACE_ID or HERDR_WORKSPACE_ID)",
-  );
-  const provider = required(environment.PI_PROVIDER, "PI_PROVIDER");
-  const model = required(environment.PI_MODEL, "PI_MODEL");
-  const herdr = new HerdrCliGateway({
-    herdrPath: environment.AGENTWORKS_HERDR_PATH ?? "herdr",
-  });
-  const piCliPath = environment.AGENTWORKS_PI_CLI_PATH
-    ? realpathSync(resolve(environment.AGENTWORKS_PI_CLI_PATH))
-    : executable("pi");
-  const piPackagePath = environment.AGENTWORKS_PI_PACKAGE_PATH
-    ? realpathSync(resolve(environment.AGENTWORKS_PI_PACKAGE_PATH))
-    : packageRootFromExecutable(piCliPath);
-  const agentworksPackagePath = realpathSync(resolve(packageRoot));
-  const childBridgePath = join(
-    agentworksPackagePath,
-    "src",
-    "extension",
-    "child-mode.ts",
-  );
-  const nodePath = process.execPath;
-  const launchThinking = thinking(environment.PI_REASONING_LEVEL);
-  const allowHostNetwork = hostNetworkApproved(
-    environment.AGENTWORKS_ALLOW_HOST_NETWORK,
-  );
+  if (!composition.liveOrchestration) {
+    throw new ProductionOrchestrationProviderError(
+      "live orchestration composition is disabled",
+    );
+  }
+  const workspaceId = composition.workspaceId ?? "";
+  const provider = composition.provider ?? "";
+  const model = composition.model ?? "";
+  const herdr = new HerdrCliGateway({ herdrPath: composition.herdrPath ?? "" });
+  const piCliPath = composition.piCliPath ?? "";
+  const piPackagePath = composition.piPackagePath ?? "";
+  const agentworksPackagePath = composition.agentworksPackagePath;
+  const childBridgePath = composition.childBridgePath;
+  const nodePath = composition.nodePath;
+  const launchThinking = composition.thinking ?? "high";
+  const allowHostNetwork = composition.allowHostNetwork ?? false;
+  const controllerHomePath = composition.homePath;
 
   return (runtime) =>
     createLazyProductionOrchestrationExecutor(async (write: FencedWrite) => {
@@ -435,7 +393,12 @@ export function createProductionOrchestrationProvider(
           },
           {
             scope: "user",
-            path: join(homedir(), ".config", "pi-agentworks", "role-packs"),
+            path: join(
+              controllerHomePath,
+              ".config",
+              "pi-agentworks",
+              "role-packs",
+            ),
           },
           {
             scope: "project",
@@ -511,8 +474,13 @@ export function createProductionOrchestrationProvider(
             session.configPath,
             provider,
             model,
+            join(controllerHomePath, ".pi", "agent", "models.json"),
           );
-          installSelectedProviderAuthentication(session.configPath, provider);
+          installSelectedProviderAuthentication(
+            session.configPath,
+            provider,
+            join(controllerHomePath, ".pi", "agent", "auth.json"),
+          );
           return session;
         },
         cleanup: privateSessions.cleanup.bind(privateSessions),
@@ -812,4 +780,26 @@ export function createProductionOrchestrationProvider(
         },
       };
     });
+}
+
+export function createProductionOrchestrationProvider(
+  environment: ProductionEnvironment,
+  packageRoot: string,
+): (runtime: ControllerRuntime) => ControllerOrchestrationExecutor {
+  return (runtime) => {
+    const descriptor = runtime.descriptor;
+    if (descriptor === null) {
+      throw new ProductionOrchestrationProviderError(
+        "controller runtime is not running",
+      );
+    }
+    const composition = createControllerLaunchComposition(
+      descriptor.runId,
+      environment,
+      packageRoot,
+    );
+    return createProductionOrchestrationProviderFromComposition(composition)(
+      runtime,
+    );
+  };
 }

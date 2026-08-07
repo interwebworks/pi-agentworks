@@ -43,6 +43,26 @@ export interface ControllerLease {
   readonly expiresAt: number;
 }
 
+export interface ControllerLeaseState {
+  readonly ownerId: string | null;
+  readonly fencingToken: number;
+  readonly expiresAt: number | null;
+}
+
+export interface ControllerLaunchCompositionRecord {
+  readonly runId: string;
+  readonly compositionJson: string;
+  readonly authenticationTag: string;
+  readonly boundAt: number;
+}
+
+export interface BindControllerLaunchCompositionInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly compositionJson: string;
+  readonly authenticationTag: string;
+}
+
 export interface FencedWrite {
   readonly ownerId: string;
   readonly fencingToken: number;
@@ -203,6 +223,13 @@ export interface ControllerRepository {
     runId: string,
     agentId: string,
   ): AgentPaneRestorationRecord | null;
+  bindControllerLaunchComposition?(
+    input: BindControllerLaunchCompositionInput,
+  ): ControllerLaunchCompositionRecord;
+  readControllerLaunchComposition?(
+    runId: string,
+  ): ControllerLaunchCompositionRecord | null;
+  readControllerLease?(): ControllerLeaseState;
   renewWriterLease(input: HeldWriterLeaseInput, ttlMs: number): WriterLease;
   releaseWriterLease(input: HeldWriterLeaseInput): WriterLease;
   revokeWriterLease(input: RevokeWriterLeaseInput): WriterLease;

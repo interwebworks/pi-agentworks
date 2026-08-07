@@ -57,15 +57,19 @@ Acceptance evidence:
 
 ## 3. Complete controller and pane restoration
 
-Status: The exact single-missing-pane production slice is implemented.
+Status: The exact single-missing-pane and trusted dead-controller restart slices are implemented.
 Status recovery now assesses the controller roster against strict Herdr process and metadata evidence, reserves one durable slot restoration with a private nonce, reconstructs the missing pane in that exact slot, and relaunches through the secure launcher only when the exact recorded Pi session file survives.
 The three-pane `0, missing 1, 2` case and every restoration kill point converge without moving the surviving panes or duplicating a tab, pane, process, session, worktree, or agent.
 Missing, ambiguous, stale, conflicting, and spoofed pane or session evidence fails closed.
 
-Dead-controller restart remains a separate slice.
-A status request currently refuses when no authenticated controller descriptor is active, as covered by a process-level regression test.
-The next slice must durably bind the original trusted live-composition environment to the run, then call `DetachedControllerSupervisor.ensureRunning()` from status only after database integrity, lease expiry or takeover, socket state, process-start identity, and startup recovery gates validate that exact configuration.
-Parent Pi restart, Herdr restart, and multi-pane loss remain unclaimed and untested end to end.
+SQLite schema v5 now binds one immutable HMAC-authenticated, credential-free controller composition to each initialized run.
+The evidence records the exact provider, model, thinking level, Herdr workspace, host-network policy, controller lease policy, controller home, and canonical Herdr, Pi, Node, package, controller-entry, and child-bridge paths.
+Status compares any supplied caller runtime against that evidence and never reconstructs restart authority from the current caller environment.
+A dead-controller status path opens and validates the database, verifies the authenticated composition, requires an expired or released controller lease, rejects active or indeterminate socket state, validates the recorded process-start identity, requires a ready startup-recovery assessment, and only then calls `DetachedControllerSupervisor.ensureRunning()` with the persisted composition and environment inheritance disabled.
+The restarted controller verifies the same authenticated composition before opening its socket, and production pane restoration remains lazy until status requests it.
+Process tests cover SIGKILL, pre-expiry refusal, one fenced restart, exact surviving pane/process/session/worktree/agent evidence, repeated status idempotency, caller drift, missing or unauthenticated composition, a live competing process identity, an active orphan socket, physical database corruption, and incomplete startup recovery evidence.
+
+Parent Pi restart, Herdr restart, and multi-pane loss remain unclaimed and were not run end to end.
 
 Acceptance evidence:
 
@@ -189,7 +193,8 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
 3. [x] Reconcile durable `launching` agents after failed process launch.
 4. [ ] Complete controller and pane restoration.
    - [x] Restore one exact missing slot with exact on-disk Pi session reuse and crash-idempotent reservations.
-   - [ ] Add trusted status-triggered dead-controller restart, then parent Pi and Herdr restart E2E proof.
+   - [x] Add trusted status-triggered dead-controller restart with authenticated exact-composition rebuilding.
+   - [ ] Run parent Pi and Herdr restart E2E proof.
 5. [x] Enforce the global active-agent budget.
 6. [ ] Complete repeated multi-story reviewer, merge, cleanup, and completion flow.
 7. [ ] Run the large-grid and restart E2E matrix.

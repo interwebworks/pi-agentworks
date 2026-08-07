@@ -7,12 +7,15 @@ import type {
   AgentLaunchRecord,
   AgentPaneRestorationRecord,
   BindAgentPaneRestorationInput,
+  BindControllerLaunchCompositionInput,
   CommitResult,
   CommitSnapshotInput,
   ControllerEventCursor,
   ControllerEventInput,
   ControllerEventRecord,
+  ControllerLaunchCompositionRecord,
   ControllerLease,
+  ControllerLeaseState,
   ControllerRepository,
   ControllerSnapshot,
   ConfirmAgentLaunchInput,
@@ -39,7 +42,7 @@ import {
   countOccupiedAgentSlots,
 } from "../../domain/scheduling.ts";
 
-const DATABASE_SCHEMA_VERSION = 4;
+const DATABASE_SCHEMA_VERSION = 5;
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_EVENT_READ_LIMIT = 1_000;
@@ -120,6 +123,13 @@ interface AgentPaneRestorationRow {
   readonly session_id: string;
   readonly status: string;
   readonly updated_at: number;
+}
+
+interface ControllerLaunchCompositionRow {
+  readonly run_id: string;
+  readonly composition_json: string;
+  readonly authentication_tag: string;
+  readonly bound_at: number;
 }
 
 function isActiveWriterLeaseRow(
@@ -523,6 +533,39 @@ function parseAgentPaneRestoration(
     sessionId: nonEmpty(row.session_id, "agent pane restoration session id"),
     status: row.status,
     updatedAt,
+  });
+}
+
+function parseControllerLaunchComposition(
+  row: ControllerLaunchCompositionRow,
+): ControllerLaunchCompositionRecord {
+  const composition = parseJsonObject(
+    row.composition_json,
+    "controller launch composition",
+  );
+  if (composition.runId !== row.run_id) {
+    throw new ControllerDatabaseIntegrityError(
+      "controller launch composition belongs to a different run",
+    );
+  }
+  if (!/^[0-9a-f]{64}$/u.test(row.authentication_tag)) {
+    throw new ControllerDatabaseIntegrityError(
+      "controller launch composition authentication tag is invalid",
+    );
+  }
+  if (Buffer.byteLength(row.composition_json, "utf8") > 32 * 1024) {
+    throw new ControllerDatabaseIntegrityError(
+      "controller launch composition exceeds its size limit",
+    );
+  }
+  return Object.freeze({
+    runId: row.run_id,
+    compositionJson: row.composition_json,
+    authenticationTag: row.authentication_tag,
+    boundAt: asSafeInteger(
+      row.bound_at,
+      "controller launch composition timestamp",
+    ),
   });
 }
 
@@ -1191,6 +1234,121 @@ export class SqliteControllerRepository implements ControllerRepository {
     return row === null ? null : parseAgentPaneRestoration(row);
   }
 
+  bindControllerLaunchComposition(
+    input: BindControllerLaunchCompositionInput,
+  ): ControllerLaunchCompositionRecord {
+    this.#assertOpen();
+    const runId = nonEmpty(input.runId, "controller launch composition run id");
+    if (Buffer.byteLength(input.compositionJson, "utf8") > 32 * 1024) {
+      throw new ControllerRepositoryError(
+        "controller launch composition exceeds its size limit",
+      );
+    }
+    parseJsonObject(input.compositionJson, "controller launch composition");
+    if (!/^[0-9a-f]{64}$/u.test(input.authenticationTag)) {
+      throw new ControllerRepositoryError(
+        "controller launch composition authentication tag is invalid",
+      );
+    }
+    const record = this.#transaction(() => {
+      this.#assertFence(input.write);
+      const existing = this.#controllerLaunchCompositionRow(runId);
+      if (existing !== null) {
+        if (
+          existing.composition_json !== input.compositionJson ||
+          existing.authentication_tag !== input.authenticationTag
+        ) {
+          throw new ControllerRepositoryError(
+            "controller launch composition is immutable and already differs",
+          );
+        }
+        return parseControllerLaunchComposition(existing);
+      }
+      const run = this.#database
+        .prepare("SELECT run_id FROM runs WHERE run_id = ?")
+        .get(runId) as unknown as { readonly run_id: string } | undefined;
+      if (run === undefined) {
+        throw new ControllerRepositoryError(
+          `controller launch composition references missing run ${runId}`,
+        );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO controller_launch_compositions(
+             run_id, composition_json, authentication_tag, bound_at
+           ) VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          runId,
+          input.compositionJson,
+          input.authenticationTag,
+          input.write.now,
+        );
+      const inserted = this.#controllerLaunchCompositionRow(runId);
+      if (inserted === null) {
+        throw new ControllerDatabaseIntegrityError(
+          "controller launch composition disappeared after binding",
+        );
+      }
+      return parseControllerLaunchComposition(inserted);
+    });
+    this.#protectDatabaseFiles();
+    return record;
+  }
+
+  readControllerLaunchComposition(
+    runId: string,
+  ): ControllerLaunchCompositionRecord | null {
+    this.#assertOpen();
+    const row = this.#controllerLaunchCompositionRow(
+      nonEmpty(runId, "controller launch composition run id"),
+    );
+    return row === null ? null : parseControllerLaunchComposition(row);
+  }
+
+  readControllerLease(): ControllerLeaseState {
+    this.#assertOpen();
+    const row = this.#database
+      .prepare(
+        "SELECT owner_id, fencing_token, expires_at FROM controller_lease WHERE singleton = 1",
+      )
+      .get() as unknown as LeaseRow | undefined;
+    if (row === undefined) {
+      throw new ControllerDatabaseIntegrityError(
+        "controller lease row is missing",
+      );
+    }
+    const fencingToken = asSafeInteger(
+      row.fencing_token,
+      "controller fencing token",
+    );
+    if (fencingToken < 0) {
+      throw new ControllerDatabaseIntegrityError(
+        "controller fencing token cannot be negative",
+      );
+    }
+    const expiresAt =
+      row.expires_at === null
+        ? null
+        : asSafeInteger(row.expires_at, "controller lease expiration");
+    if ((row.owner_id === null) !== (expiresAt === null)) {
+      throw new ControllerDatabaseIntegrityError(
+        "controller lease owner and expiration are inconsistent",
+      );
+    }
+    const ownerId = row.owner_id?.trim() ?? null;
+    if (row.owner_id !== null && ownerId?.length === 0) {
+      throw new ControllerDatabaseIntegrityError(
+        "controller lease owner is empty",
+      );
+    }
+    return Object.freeze({
+      ownerId,
+      fencingToken,
+      expiresAt,
+    });
+  }
+
   acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease {
     this.#assertOpen();
     const runId = nonEmpty(input.runId, "writer lease run id");
@@ -1677,6 +1835,7 @@ export class SqliteControllerRepository implements ControllerRepository {
         "foreign key check found violations",
       );
     }
+    this.readControllerLease();
     const leaseRows = this.#database
       .prepare(
         `SELECT run_id, story_id, owner_agent_id, lease_token, expires_at, updated_at
@@ -1692,6 +1851,13 @@ export class SqliteControllerRepository implements ControllerRepository {
       )
       .all() as unknown as readonly AgentLaunchRow[];
     for (const row of launchRows) parseAgentLaunch(row);
+    const compositionRows = this.#database
+      .prepare(
+        `SELECT run_id, composition_json, authentication_tag, bound_at
+         FROM controller_launch_compositions`,
+      )
+      .all() as unknown as readonly ControllerLaunchCompositionRow[];
+    for (const row of compositionRows) parseControllerLaunchComposition(row);
     const restorationRows = this.#database
       .prepare(
         `SELECT run_id, agent_id, restoration_id, operation_id, slot,
@@ -1946,6 +2112,18 @@ export class SqliteControllerRepository implements ControllerRepository {
           PRAGMA user_version = 4;
         `);
       }
+      if (version < 5) {
+        this.#database.exec(`
+          CREATE TABLE controller_launch_compositions (
+            run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+            composition_json TEXT NOT NULL CHECK (json_valid(composition_json)),
+            authentication_tag TEXT NOT NULL,
+            bound_at INTEGER NOT NULL CHECK (bound_at >= 0)
+          ) STRICT;
+
+          PRAGMA user_version = 5;
+        `);
+      }
     });
   }
 
@@ -2017,6 +2195,19 @@ export class SqliteControllerRepository implements ControllerRepository {
          WHERE run_id = ? AND agent_id = ?`,
       )
       .get(runId, agentId) as unknown as AgentPaneRestorationRow | undefined;
+    return row ?? null;
+  }
+
+  #controllerLaunchCompositionRow(
+    runId: string,
+  ): ControllerLaunchCompositionRow | null {
+    const row = this.#database
+      .prepare(
+        `SELECT run_id, composition_json, authentication_tag, bound_at
+         FROM controller_launch_compositions
+         WHERE run_id = ?`,
+      )
+      .get(runId) as unknown as ControllerLaunchCompositionRow | undefined;
     return row ?? null;
   }
 

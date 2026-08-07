@@ -142,7 +142,7 @@ test("repository enables WAL, migrates once, and protects runtime files", () => 
     database.close();
 
     assert.equal(journal.journal_mode, "wal");
-    assert.equal(version.user_version, 4);
+    assert.equal(version.user_version, 5);
     assert.equal(
       statSync(join(fixture.directory, "runtime")).mode & 0o777,
       0o700,
@@ -402,6 +402,7 @@ test("version one databases migrate writer lease tables without losing runs", ()
 
     const database = new DatabaseSync(fixture.databasePath);
     database.exec(`
+      DROP TABLE controller_launch_compositions;
       DROP TABLE agent_pane_restorations;
       DROP TABLE agent_launches;
       DROP TABLE writer_lease_events;
@@ -424,7 +425,7 @@ test("version one databases migrate writer lease tables without losing runs", ()
       )
       .get() as unknown as { readonly name: string } | undefined;
     migrated.close();
-    assert.equal(version.user_version, 4);
+    assert.equal(version.user_version, 5);
     assert.equal(leaseTable?.name, "writer_leases");
   } finally {
     reopened?.close();

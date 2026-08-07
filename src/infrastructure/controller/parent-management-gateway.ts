@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
   ControllerEventInput,
@@ -39,8 +40,21 @@ import {
 } from "./unix-controller-transport.ts";
 import {
   discoverControllerRuntime,
+  inspectControllerSocketState,
+  readControllerRuntimeAuthToken,
+  readProcessStartIdentity,
+  resolveControllerRuntimePaths,
+  type ControllerRuntimeDescriptor,
   type DiscoveredControllerRuntime,
 } from "./controller-runtime.ts";
+import { SqliteControllerRepository } from "./sqlite-controller-repository.ts";
+import { assessStartupRecovery } from "../../domain/recovery.ts";
+import {
+  assertCallerRuntimeMatchesComposition,
+  environmentFromControllerLaunchComposition,
+  verifyControllerLaunchComposition,
+  type ControllerLaunchComposition,
+} from "./controller-launch-composition.ts";
 
 export interface ParentControllerClient {
   request(input: ControllerClientRequest): Promise<JsonValue>;
@@ -338,11 +352,205 @@ function launchTask(input: ParentManagementRequest): string {
   return task;
 }
 
+interface TrustedStatusControllerEvidence {
+  readonly composition: ControllerLaunchComposition;
+  readonly lease: {
+    readonly ownerId: string | null;
+    readonly fencingToken: number;
+    readonly expiresAt: number | null;
+  };
+  readonly recovery: ReturnType<typeof assessStartupRecovery>;
+}
+
+function processStillMatches(descriptor: ControllerRuntimeDescriptor): boolean {
+  if (descriptor.processStartIdentity !== null) {
+    return (
+      readProcessStartIdentity(descriptor.processId) ===
+      descriptor.processStartIdentity
+    );
+  }
+  try {
+    process.kill(descriptor.processId, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function readTrustedStatusControllerEvidence(
+  runtimeRoot: string,
+  runId: string,
+  callerRuntime: ParentManagementRequest["runtime"],
+): TrustedStatusControllerEvidence {
+  const paths = resolveControllerRuntimePaths(runtimeRoot, runId);
+  if (!existsSync(paths.databasePath)) {
+    throw new ParentManagementGatewayError(
+      "controller database is missing and will not be recreated by status",
+    );
+  }
+  const databaseStatus = lstatSync(paths.databasePath);
+  if (
+    databaseStatus.isSymbolicLink() ||
+    !databaseStatus.isFile() ||
+    databaseStatus.nlink !== 1 ||
+    (databaseStatus.mode & 0o077) !== 0 ||
+    (typeof process.getuid === "function" &&
+      databaseStatus.uid !== process.getuid())
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller database is not one private controller-owned file",
+    );
+  }
+  const authToken = readControllerRuntimeAuthToken(runtimeRoot, runId);
+  const repository = new SqliteControllerRepository(paths.databasePath);
+  try {
+    repository.assertIntegrity();
+    const record = repository.readControllerLaunchComposition(runId);
+    if (record === null) {
+      throw new ParentManagementGatewayError(
+        "trusted immutable launch composition evidence is missing",
+      );
+    }
+    const composition = verifyControllerLaunchComposition(
+      record.compositionJson,
+      record.authenticationTag,
+      authToken,
+    );
+    if (composition.runId !== runId) {
+      throw new ParentManagementGatewayError(
+        "launch composition belongs to a different run",
+      );
+    }
+    assertCallerRuntimeMatchesComposition(callerRuntime, composition);
+    const current = repository.loadSnapshot(runId);
+    if (current === null) {
+      throw new ParentManagementGatewayError(
+        "controller run is missing from its database",
+      );
+    }
+    return Object.freeze({
+      composition,
+      lease: repository.readControllerLease(),
+      recovery: assessStartupRecovery(current),
+    });
+  } finally {
+    repository.close();
+  }
+}
+
+async function ensureTrustedStatusController(
+  runtimeRoot: string,
+  runId: string,
+  callerRuntime: ParentManagementRequest["runtime"],
+): Promise<void> {
+  const evidence = readTrustedStatusControllerEvidence(
+    runtimeRoot,
+    runId,
+    callerRuntime,
+  );
+  const inspectionSupervisor = new DetachedControllerSupervisor({
+    runtimeRoot,
+    runId,
+    startupTimeoutMs: evidence.composition.leaseTtlMs + 10_000,
+    pollIntervalMs: 25,
+  });
+  const inspection = await inspectionSupervisor.inspect();
+  const now = Date.now();
+  if (inspection.status === "healthy" && inspection.descriptor !== null) {
+    if (
+      evidence.lease.ownerId !== inspection.descriptor.ownerId ||
+      evidence.lease.fencingToken !== inspection.descriptor.fencingToken ||
+      evidence.lease.expiresAt === null ||
+      evidence.lease.expiresAt <= now
+    ) {
+      throw new ParentManagementGatewayError(
+        "live controller descriptor conflicts with its current database lease",
+      );
+    }
+    return;
+  }
+  if (inspection.status === "alive-unhealthy") {
+    throw new ParentManagementGatewayError(
+      "live competing controller failed authenticated health validation",
+    );
+  }
+  if (evidence.recovery.status !== "ready") {
+    throw new ParentManagementGatewayError(
+      `startup recovery evidence is incomplete (${evidence.recovery.reasons
+        .map((reason) => `${reason.code}:${reason.entityId}`)
+        .join(", ")})`,
+    );
+  }
+  if (
+    evidence.lease.ownerId !== null &&
+    evidence.lease.expiresAt !== null &&
+    evidence.lease.expiresAt > now
+  ) {
+    throw new ParentManagementGatewayError(
+      `stale controller lease has not expired (owner ${evidence.lease.ownerId})`,
+    );
+  }
+  if (
+    inspection.descriptor !== null &&
+    processStillMatches(inspection.descriptor)
+  ) {
+    throw new ParentManagementGatewayError(
+      "live competing controller still matches the recorded process-start identity",
+    );
+  }
+  const socketState = await inspectControllerSocketState(
+    resolveControllerRuntimePaths(runtimeRoot, runId).socketPath,
+  );
+  if (socketState === "active" || socketState === "indeterminate") {
+    throw new ParentManagementGatewayError(
+      `controller socket is ${socketState} and cannot authorize takeover`,
+    );
+  }
+  if (
+    inspection.descriptor !== null &&
+    evidence.lease.ownerId !== null &&
+    evidence.lease.ownerId !== inspection.descriptor.ownerId
+  ) {
+    throw new ParentManagementGatewayError(
+      "stale controller descriptor conflicts with lease takeover evidence",
+    );
+  }
+  const composition = evidence.composition;
+  const supervisor = new DetachedControllerSupervisor({
+    runtimeRoot,
+    runId,
+    entryPath: composition.controllerEntryPath,
+    nodePath: composition.nodePath,
+    leaseTtlMs: composition.leaseTtlMs,
+    renewIntervalMs: composition.renewIntervalMs,
+    startupTimeoutMs: composition.leaseTtlMs + 10_000,
+    pollIntervalMs: 25,
+    environment: environmentFromControllerLaunchComposition(composition),
+    inheritEnvironment: false,
+    requireLaunchComposition: true,
+  });
+  const restarted = await supervisor.ensureRunning();
+  if (!restarted.started) {
+    throw new ParentManagementGatewayError(
+      "a competing controller appeared during trusted restart",
+    );
+  }
+  if (restarted.descriptor.recovery.status !== "ready") {
+    throw new ParentManagementGatewayError(
+      "restarted controller did not pass its startup recovery gate",
+    );
+  }
+}
+
 /** Compose the parent surface with detached controller startup and run creation. */
 export interface DiscoveredParentManagementGatewayOptions {
   readonly enableLiveComposition?: boolean;
   readonly herdrPath?: string;
   readonly managementPaneLauncher?: ParentManagementPaneLauncher | null;
+  readonly controllerLeaseTtlMs?: number;
+  readonly controllerRenewIntervalMs?: number;
+  readonly controllerStartupTimeoutMs?: number;
+  readonly controllerPollIntervalMs?: number;
 }
 
 export function createDiscoveredParentManagementGateway(
@@ -430,10 +638,25 @@ export function createDiscoveredParentManagementGateway(
     const supervisor = new DetachedControllerSupervisor({
       runtimeRoot,
       runId,
+      ...(options.controllerLeaseTtlMs === undefined
+        ? {}
+        : { leaseTtlMs: options.controllerLeaseTtlMs }),
+      ...(options.controllerRenewIntervalMs === undefined
+        ? {}
+        : { renewIntervalMs: options.controllerRenewIntervalMs }),
+      ...(options.controllerStartupTimeoutMs === undefined
+        ? {}
+        : { startupTimeoutMs: options.controllerStartupTimeoutMs }),
+      ...(options.controllerPollIntervalMs === undefined
+        ? {}
+        : { pollIntervalMs: options.controllerPollIntervalMs }),
       environment: liveCompositionReady
         ? {
             AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1",
             AGENTWORKS_WORKSPACE_ID: selectedRuntime.workspaceId,
+            ...(options.herdrPath === undefined
+              ? {}
+              : { AGENTWORKS_HERDR_PATH: options.herdrPath }),
             PI_PROVIDER: selectedRuntime.provider,
             PI_MODEL: selectedRuntime.model,
             PI_REASONING_LEVEL: selectedRuntime.thinking,
@@ -529,6 +752,10 @@ export function createDiscoveredParentManagementGateway(
           events,
         } as unknown as JsonValue,
       });
+      await client.request({
+        action: "controller.launch-composition.bind",
+        payload: {},
+      });
       const managementPane = await bootstrapManagementPane(
         runId,
         run.managementPaneOrigin,
@@ -598,6 +825,11 @@ export function createDiscoveredParentManagementGateway(
       let restorationText = "";
       if (input.action === "status" && input.runId !== undefined) {
         try {
+          await ensureTrustedStatusController(
+            runtimeRoot,
+            input.runId,
+            input.runtime,
+          );
           const restoration = await requestAgentPaneRestoration(
             clientFactory,
             input.runId,
@@ -620,7 +852,7 @@ export function createDiscoveredParentManagementGateway(
           }
         } catch (error) {
           return Object.freeze({
-            text: `Agent pane restoration refused: ${
+            text: `Controller or pane restoration refused: ${
               error instanceof Error ? error.message : String(error)
             }`,
             notificationType: "error" as const,

@@ -40,8 +40,8 @@ import {
 } from "./unix-controller-transport.ts";
 
 export const CONTROLLER_RUNTIME_SCHEMA_VERSION = 1 as const;
-const DEFAULT_LEASE_TTL_MS = 15_000;
-const DEFAULT_RENEW_INTERVAL_MS = 5_000;
+export const DEFAULT_CONTROLLER_LEASE_TTL_MS = 15_000;
+export const DEFAULT_CONTROLLER_RENEW_INTERVAL_MS = 5_000;
 const STALE_SOCKET_PROBE_TIMEOUT_MS = 250;
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 
@@ -120,6 +120,12 @@ export interface DiscoveredControllerRuntime {
   readonly authToken: string;
 }
 
+export interface ControllerRuntimeStartupContext {
+  readonly repository: ControllerRepository;
+  readonly authToken: string;
+  readonly write: FencedWrite;
+}
+
 export interface ControllerRuntimeOptions {
   readonly runtimeRoot: string;
   readonly runId: string;
@@ -134,6 +140,9 @@ export interface ControllerRuntimeOptions {
   readonly serverFactory?: (
     options: UnixControllerServerOptions,
   ) => UnixControllerServer;
+  readonly validateStartup?: (
+    context: ControllerRuntimeStartupContext,
+  ) => void | Promise<void>;
   readonly authorizeIdentity: UnixControllerServerOptions["authorizeIdentity"];
   readonly handleRequest: UnixControllerServerOptions["handleRequest"];
   readonly onFatalError?: (error: Error) => void;
@@ -395,6 +404,19 @@ function removeOwnedDescriptor(descriptorPath: string, ownerId: string): void {
 
 type SocketProbeResult = "active" | "stale" | "indeterminate";
 
+export async function inspectControllerSocketState(
+  socketPath: string,
+): Promise<"absent" | SocketProbeResult> {
+  if (!existsSync(socketPath)) return "absent";
+  const status = lstatSync(socketPath);
+  if (!status.isSocket() || status.isSymbolicLink()) {
+    throw new ControllerRuntimeError(
+      "Controller socket path is not a private Unix socket",
+    );
+  }
+  return probeSocket(socketPath);
+}
+
 async function probeSocket(socketPath: string): Promise<SocketProbeResult> {
   return await new Promise<SocketProbeResult>((resolveProbe) => {
     const socket = createConnection(socketPath);
@@ -436,6 +458,15 @@ async function removeStaleSocket(socketPath: string): Promise<void> {
     );
   }
   unlinkSync(socketPath);
+}
+
+export function readControllerRuntimeAuthToken(
+  runtimeRoot: string,
+  runId: string,
+): string {
+  const paths = resolveControllerRuntimePaths(runtimeRoot, runId);
+  assertControllerDatabaseNotQuarantined(paths.quarantineMarkerPath);
+  return readExistingToken(paths.tokenPath);
 }
 
 export function discoverControllerRuntime(
@@ -485,6 +516,9 @@ export class ControllerRuntime {
   readonly #serverFactory: (
     options: UnixControllerServerOptions,
   ) => UnixControllerServer;
+  readonly #validateStartup: (
+    context: ControllerRuntimeStartupContext,
+  ) => void | Promise<void>;
   readonly #authorizeIdentity: UnixControllerServerOptions["authorizeIdentity"];
   readonly #handleRequest: UnixControllerServerOptions["handleRequest"];
   readonly #onFatalError: (error: Error) => void;
@@ -508,11 +542,11 @@ export class ControllerRuntime {
     this.#runId = options.runId;
     this.#ownerId = options.ownerId ?? randomUUID();
     this.#leaseTtlMs = positiveSafeInteger(
-      options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS,
+      options.leaseTtlMs ?? DEFAULT_CONTROLLER_LEASE_TTL_MS,
       "lease ttl",
     );
     this.#renewIntervalMs = positiveSafeInteger(
-      options.renewIntervalMs ?? DEFAULT_RENEW_INTERVAL_MS,
+      options.renewIntervalMs ?? DEFAULT_CONTROLLER_RENEW_INTERVAL_MS,
       "lease renewal interval",
     );
     if (this.#renewIntervalMs >= this.#leaseTtlMs) {
@@ -536,6 +570,7 @@ export class ControllerRuntime {
     this.#serverFactory =
       options.serverFactory ??
       ((serverOptions) => new UnixControllerServer(serverOptions));
+    this.#validateStartup = options.validateStartup ?? (() => undefined);
     this.#authorizeIdentity = options.authorizeIdentity;
     this.#handleRequest = options.handleRequest;
     this.#onFatalError = options.onFatalError ?? (() => undefined);
@@ -670,6 +705,17 @@ export class ControllerRuntime {
       this.#lease = lease;
       const authToken = createOrReadToken(this.#paths.tokenPath);
       this.#authToken = authToken;
+      await this.#validateStartup(
+        Object.freeze({
+          repository,
+          authToken,
+          write: Object.freeze({
+            ownerId: lease.ownerId,
+            fencingToken: lease.fencingToken,
+            now: startupTime,
+          }),
+        }),
+      );
       await removeStaleSocket(this.#paths.socketPath);
 
       const server = this.#serverFactory({

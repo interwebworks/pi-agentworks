@@ -26,7 +26,14 @@ import {
   ControllerRuntimeError,
 } from "../infrastructure/controller/controller-runtime.ts";
 import { ControllerRequestError } from "../infrastructure/controller/unix-controller-transport.ts";
-import { createProductionOrchestrationProvider } from "../infrastructure/controller/production-orchestration-provider.ts";
+import { createProductionOrchestrationProviderFromComposition } from "../infrastructure/controller/production-orchestration-provider.ts";
+import {
+  authenticateControllerLaunchComposition,
+  createControllerLaunchComposition,
+  sameControllerLaunchComposition,
+  verifyControllerLaunchComposition,
+  type ControllerLaunchComposition,
+} from "../infrastructure/controller/controller-launch-composition.ts";
 
 export interface ControllerOrchestrationExecutor {
   execute(write: FencedWrite): Promise<JsonValue>;
@@ -38,6 +45,8 @@ export interface ControllerProcessDependencies {
   readonly orchestrationFactory?: (
     runtime: ControllerRuntime,
   ) => ControllerOrchestrationExecutor | undefined;
+  readonly launchComposition?: ControllerLaunchComposition;
+  readonly requirePersistedLaunchComposition?: boolean;
 }
 
 export type ControllerProcessCompositionProvider = (
@@ -80,6 +89,7 @@ export interface ControllerProcessConfiguration {
   readonly ownerId: string;
   readonly leaseTtlMs?: number;
   readonly renewIntervalMs?: number;
+  readonly requireLaunchComposition?: boolean;
 }
 
 function parseArguments(
@@ -119,6 +129,7 @@ function parseArguments(
     "--owner-id",
     "--lease-ttl-ms",
     "--renew-interval-ms",
+    "--require-launch-composition",
   ]);
   if ([...values.keys()].some((name) => !allowedNames.has(name))) {
     throw new ControllerRuntimeError(
@@ -133,12 +144,21 @@ function parseArguments(
     values.get("--renew-interval-ms"),
     "renew interval",
   );
+  const requireComposition = values.get("--require-launch-composition");
+  if (requireComposition !== undefined && requireComposition !== "1") {
+    throw new ControllerRuntimeError(
+      "require launch composition must be exactly 1",
+    );
+  }
   return Object.freeze({
     runtimeRoot,
     runId,
     ownerId,
     ...(leaseTtlMs === undefined ? {} : { leaseTtlMs }),
     ...(renewIntervalMs === undefined ? {} : { renewIntervalMs }),
+    ...(requireComposition === undefined
+      ? {}
+      : { requireLaunchComposition: true }),
   });
 }
 
@@ -221,6 +241,100 @@ function isEmptyObject(payload: JsonValue): boolean {
     !Array.isArray(payload) &&
     Object.keys(payload).length === 0
   );
+}
+
+type LaunchCompositionRepository = Required<
+  Pick<
+    ControllerRuntime["repository"],
+    "bindControllerLaunchComposition" | "readControllerLaunchComposition"
+  >
+>;
+
+function launchCompositionRepository(
+  runtime: ControllerRuntime,
+): LaunchCompositionRepository {
+  const repository = runtime.repository;
+  if (
+    repository.bindControllerLaunchComposition === undefined ||
+    repository.readControllerLaunchComposition === undefined
+  ) {
+    throw new ControllerRuntimeError(
+      "Controller repository does not support launch composition evidence",
+    );
+  }
+  return repository as LaunchCompositionRepository;
+}
+
+function verifyPersistedLaunchComposition(
+  repository: ControllerRuntime["repository"],
+  authToken: string,
+  expected: ControllerLaunchComposition,
+): void {
+  if (repository.readControllerLaunchComposition === undefined) {
+    throw new ControllerRuntimeError(
+      "Controller repository does not support launch composition evidence",
+    );
+  }
+  const record = repository.readControllerLaunchComposition(expected.runId);
+  if (record === null) {
+    throw new ControllerRuntimeError(
+      "Persisted controller launch composition is missing",
+    );
+  }
+  const persisted = verifyControllerLaunchComposition(
+    record.compositionJson,
+    record.authenticationTag,
+    authToken,
+  );
+  if (!sameControllerLaunchComposition(persisted, expected)) {
+    throw new ControllerRuntimeError(
+      "Persisted controller launch composition differs from restart composition",
+    );
+  }
+}
+
+function bindLaunchComposition(
+  clientKind: "parent" | "management" | "child",
+  payload: JsonValue,
+  runtime: ControllerRuntime,
+  composition: ControllerLaunchComposition | undefined,
+): JsonValue {
+  if (clientKind !== "parent") {
+    throw new ControllerRequestError(
+      "forbidden",
+      "Only a parent client can bind launch composition evidence",
+    );
+  }
+  if (!isEmptyObject(payload)) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Launch composition binding payload must be empty",
+    );
+  }
+  if (composition === undefined) {
+    throw new ControllerRequestError(
+      "not-configured",
+      "Trusted launch composition is unavailable",
+    );
+  }
+  const authenticated = authenticateControllerLaunchComposition(
+    composition,
+    runtime.authToken,
+  );
+  const bound = launchCompositionRepository(
+    runtime,
+  ).bindControllerLaunchComposition({
+    write: runtime.currentWrite(),
+    runId: composition.runId,
+    compositionJson: authenticated.serialized,
+    authenticationTag: authenticated.authenticationTag,
+  });
+  return {
+    accepted: true,
+    runId: bound.runId,
+    boundAt: bound.boundAt,
+    authenticationTag: bound.authenticationTag,
+  };
 }
 
 export function resolveControllerOrchestrationExecutor(
@@ -542,6 +656,18 @@ export async function runControllerProcess(
   configuration: ControllerProcessConfiguration,
   dependencies: ControllerProcessDependencies = {},
 ): Promise<number> {
+  const requirePersistedLaunchComposition =
+    configuration.requireLaunchComposition === true ||
+    dependencies.requirePersistedLaunchComposition === true;
+  if (
+    requirePersistedLaunchComposition &&
+    dependencies.launchComposition === undefined
+  ) {
+    throw new ControllerRuntimeError(
+      "Restart requires exact persisted launch composition evidence",
+    );
+  }
+  const launchComposition = dependencies.launchComposition;
   let stopping = false;
   let orchestrationExecutor = dependencies.orchestration;
   let resolveCompletion: ((exitCode: number) => void) | null = null;
@@ -572,6 +698,17 @@ export async function runControllerProcess(
     ...(configuration.renewIntervalMs === undefined
       ? {}
       : { renewIntervalMs: configuration.renewIntervalMs }),
+    ...(requirePersistedLaunchComposition && launchComposition !== undefined
+      ? {
+          validateStartup(context) {
+            verifyPersistedLaunchComposition(
+              context.repository,
+              context.authToken,
+              launchComposition,
+            );
+          },
+        }
+      : {}),
     authorizeIdentity(request) {
       if (request.clientKind !== "child") return true;
       if (request.agentId === null) return false;
@@ -680,6 +817,14 @@ export async function runControllerProcess(
               null,
             recovery: runtime.descriptor?.recovery ?? null,
           });
+        }
+        case "controller.launch-composition.bind": {
+          return bindLaunchComposition(
+            request.clientKind,
+            request.payload,
+            runtime,
+            dependencies.launchComposition,
+          );
         }
         case "run.initialize": {
           if (request.clientKind !== "parent") {
@@ -842,21 +987,33 @@ export async function runControllerProcess(
 
 async function main(): Promise<void> {
   const configuration = parseArguments(process.argv.slice(2));
-  const productionProvider =
-    process.env.AGENTWORKS_ENABLE_LIVE_ORCHESTRATION === "1"
-      ? createProductionOrchestrationProvider(
-          process.env,
-          fileURLToPath(new URL("../..", import.meta.url)),
-        )
-      : undefined;
+  const launchComposition = createControllerLaunchComposition(
+    configuration.runId,
+    process.env,
+    fileURLToPath(new URL("../..", import.meta.url)),
+    {
+      ...(configuration.leaseTtlMs === undefined
+        ? {}
+        : { leaseTtlMs: configuration.leaseTtlMs }),
+      ...(configuration.renewIntervalMs === undefined
+        ? {}
+        : { renewIntervalMs: configuration.renewIntervalMs }),
+    },
+  );
+  const productionProvider = launchComposition.liveOrchestration
+    ? createProductionOrchestrationProviderFromComposition(launchComposition)
+    : undefined;
   const orchestrationFactory = resolveConfiguredOrchestrationProvider(
     process.env,
     productionProvider,
   );
-  process.exitCode = await runControllerProcess(
-    configuration,
-    orchestrationFactory === undefined ? {} : { orchestrationFactory },
-  );
+  process.exitCode = await runControllerProcess(configuration, {
+    ...(orchestrationFactory === undefined ? {} : { orchestrationFactory }),
+    launchComposition,
+    ...(configuration.requireLaunchComposition === true
+      ? { requirePersistedLaunchComposition: true }
+      : {}),
+  });
 }
 
 const invokedPath = process.argv[1];
