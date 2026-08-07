@@ -37,6 +37,7 @@ import type { AssignmentRoleSelector } from "../../application/launch/role-resou
 import type { LoadedRole } from "../role-packs/file-role-pack-repository.ts";
 import type { StoryAgentKind } from "../../application/launch/assignment-preparation.ts";
 import type { GitAssignmentEvidence } from "../../application/launch/assignment-resource-evidence.ts";
+import { composeTeam } from "../../domain/team-composition.ts";
 
 export class ProductionOrchestrationProviderError extends Error {
   constructor(message: string) {
@@ -263,7 +264,12 @@ function chooseRole(
   kind: StoryAgentKind,
   story: StoryState,
 ): string {
-  const authority = kind === "writer" ? "worker" : "reviewer";
+  const authority =
+    kind === "writer"
+      ? "worker"
+      : kind === "project-manager"
+        ? "project-manager"
+        : kind;
   const taskKinds = new Set(story.planning?.taskKinds ?? []);
   const candidates = roles
     .filter((role) => role.authority === authority)
@@ -402,10 +408,34 @@ export function createProductionOrchestrationProvider(
             Object.freeze({ ...role, networkAccess: "required" as const }),
           )
         : roles;
-      const roleCatalog = new LoadedRoleCatalog(runtimeRoles);
+      const team = composeTeam({
+        taskText: `${run.title} ${snapshot.stories
+          .flatMap((story) => story.planning?.taskKinds ?? [])
+          .join(" ")}`,
+        mode: run.complexity,
+        roles: runtimeRoles,
+      });
+      const selectedRuntimeIds = new Set(
+        team.members.map((member) => member.runtimeId),
+      );
+      const selectedRoles = runtimeRoles.filter((role) =>
+        selectedRuntimeIds.has(role.runtimeId),
+      );
+      const projectManager = team.members.find(
+        (member) => member.authority === "project-manager",
+      );
+      if (projectManager === undefined) {
+        throw new ProductionOrchestrationProviderError(
+          "composed team has no Project Manager",
+        );
+      }
+      const advisor = team.members.find(
+        (member) => member.authority === "advisor",
+      );
+      const roleCatalog = new LoadedRoleCatalog(selectedRoles);
       const roleSelector: AssignmentRoleSelector = {
         select: (kind, story) =>
-          Promise.resolve(chooseRole(runtimeRoles, kind, story)),
+          Promise.resolve(chooseRole(selectedRoles, kind, story)),
       };
       const paneLifecycle = new AgentsTabLifecycle(
         herdr,
@@ -472,6 +502,11 @@ export function createProductionOrchestrationProvider(
           ),
           join(run.integrationWorktree, ".git"),
         ],
+        projectManagerGitMetadataPaths: [
+          gitInspection.gitDirectory,
+          gitInspection.commonGitDirectory,
+          join(run.integrationWorktree, ".git"),
+        ],
         additionalReadOnlyPaths: [],
         provider,
         model,
@@ -523,6 +558,10 @@ export function createProductionOrchestrationProvider(
           },
         },
         writerLeaseTtlMs: 15_000,
+        initialTeam: {
+          projectManagerRoleRuntimeId: projectManager.runtimeId,
+          advisorRoleRuntimeId: advisor?.runtimeId ?? null,
+        },
       });
       const result = await loop.tick(write);
       return {

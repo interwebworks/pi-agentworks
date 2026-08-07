@@ -36,6 +36,7 @@ export interface EnvironmentLaunchConfigurationOptions {
   readonly childBridgePath: string;
   readonly nodePath: string;
   readonly gitMetadataPaths: readonly string[];
+  readonly projectManagerGitMetadataPaths?: readonly string[];
   readonly additionalReadOnlyPaths: readonly string[];
   readonly provider: string;
   readonly model: string;
@@ -109,7 +110,11 @@ export class EnvironmentLaunchConfigurationResolver implements AssignmentLaunchC
       agentworksPackagePath: this.#options.agentworksPackagePath,
       childBridgePath: this.#options.childBridgePath,
       nodePath: this.#options.nodePath,
-      gitMetadataPaths: this.#options.gitMetadataPaths,
+      gitMetadataPaths:
+        kind === "project-manager" &&
+        this.#options.projectManagerGitMetadataPaths !== undefined
+          ? this.#options.projectManagerGitMetadataPaths
+          : this.#options.gitMetadataPaths,
       additionalReadOnlyPaths: this.#options.additionalReadOnlyPaths,
       provider: this.#options.provider,
       model: this.#options.model,

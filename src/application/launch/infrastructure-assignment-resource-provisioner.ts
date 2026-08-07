@@ -87,6 +87,30 @@ type GitAssignmentProvisioner = Pick<
   GitAssignmentEvidenceAdapter,
   "provisionGit"
 >;
+
+function assignmentTarget(
+  kind: StoryAgentKind,
+  story: StoryState,
+  run: RunState,
+): StoryState {
+  return kind === "project-manager"
+    ? Object.freeze({
+        ...story,
+        id: `${story.id}-management`,
+        branchName: run.integrationBranch,
+        worktreePath: run.integrationWorktree,
+      })
+    : story;
+}
+function roleLabel(runtimeId: string): string {
+  const roleId = runtimeId.split("/").at(-1) ?? runtimeId;
+  return roleId
+    .split(/[-_]/u)
+    .filter((part) => part.length > 0)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
+}
+
 type HerdrAssignmentPaneProvisioner = Pick<
   HerdrAgentPaneAllocator,
   "allocate" | "release"
@@ -123,16 +147,17 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
     run: RunState,
     snapshot: ControllerSnapshot,
   ): Promise<ProvisionedAssignmentResources> {
-    const agent = await this.#agents.create(kind, role, story, run, snapshot);
+    const target = assignmentTarget(kind, story, run);
+    const agent = await this.#agents.create(kind, role, target, run, snapshot);
     const configuration = await this.#configuration.resolve(
       kind,
       role,
       agent,
-      story,
+      target,
       run,
       snapshot,
     );
-    const git = this.#git.provisionGit(run, story, snapshot.revision);
+    const git = this.#git.provisionGit(run, target, snapshot.revision, kind);
     let paneId: string | null = null;
     let session: Awaited<ReturnType<PrivateSessionProvider["create"]>> | null =
       null;
@@ -143,13 +168,24 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
         workspaceId: configuration.workspaceId,
         agentId: agent.id,
         label: role.label,
-        cwd: story.worktreePath,
+        cwd: target.worktreePath,
         expectedTabId: configuration.expectedTabId,
         expectedPaneId: configuration.expectedPaneId,
         metadataSequence: configuration.metadataSequence,
+        expectedAgents: snapshot.agents
+          .filter(
+            (existing) =>
+              existing.paneId !== null && existing.status !== "closed",
+          )
+          .map((existing) => ({
+            agentId: existing.id,
+            paneId: existing.paneId ?? "",
+            label: roleLabel(existing.roleRuntimeId),
+            cwd: existing.worktreePath,
+          })),
       });
       paneId = pane.paneId;
-      session = await this.#sessions.create(run, story, agent.id);
+      session = await this.#sessions.create(run, target, agent.id);
       const evidence: AssignmentInfrastructureEvidence = {
         git,
         herdr: { paneId, cwd: pane.cwd ?? "", tokens: pane.tokens },
@@ -159,7 +195,7 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
         controllerFenceCurrent: configuration.controllerFenceCurrent,
         expectedRevisionMatches: configuration.expectedRevisionMatches,
       };
-      assertAssignmentInfrastructureEvidence(evidence, run, story, agent.id);
+      assertAssignmentInfrastructureEvidence(evidence, run, target, agent.id);
       return Object.freeze({
         agent,
         paneId,
@@ -195,14 +231,16 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
       if (paneId !== null) {
         await this.#panes.release(paneId);
       }
-      await this.#gitRollback.rollback(
-        git,
-        run,
-        story,
-        error instanceof Error
-          ? error.message
-          : "assignment provisioning failed",
-      );
+      if (kind !== "project-manager") {
+        await this.#gitRollback.rollback(
+          git,
+          run,
+          target,
+          error instanceof Error
+            ? error.message
+            : "assignment provisioning failed",
+        );
+      }
       throw error;
     }
   }

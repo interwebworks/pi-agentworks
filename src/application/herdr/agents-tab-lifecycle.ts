@@ -536,70 +536,56 @@ export class AgentsTabLifecycle {
         "Herdr layout does not contain the exact agent pane set",
       );
     }
-    const rectangles = new Map(
-      layout.panes.map((pane) => [pane.paneId, pane.rect] as const),
+    const expectedPaneIds = new Set(
+      panes.map((candidate) => candidate.pane.paneId),
     );
-    const rows = Array.from(
-      { length: grid.rowCount },
-      () =>
-        [] as {
-          readonly column: number;
-          readonly paneId: string;
-        }[],
-    );
-    for (const cell of grid.cells) {
-      const owned = panes[cell.slot];
-      if (owned === undefined || !rectangles.has(owned.pane.paneId)) {
-        throw new AgentsTabRecoveryRequiredError(
-          "Herdr layout is missing an agent grid slot",
-        );
-      }
-      rows[cell.row]?.push({ column: cell.column, paneId: owned.pane.paneId });
-    }
-
-    const rowHeights: number[] = [];
-    let expectedY = layout.area.y;
-    for (const row of rows) {
-      row.sort((left, right) => left.column - right.column);
-      const firstRect = rectangles.get(row[0]?.paneId ?? "");
-      if (firstRect?.x !== layout.area.x || firstRect.y !== expectedY) {
-        throw new AgentsTabRecoveryRequiredError(
-          "Agent grid row origin is invalid",
-        );
-      }
-      let expectedX = layout.area.x;
-      const widths: number[] = [];
-      for (const cell of row) {
-        const rect = rectangles.get(cell.paneId);
-        if (
-          rect?.x !== expectedX ||
-          rect.y !== firstRect.y ||
-          rect.height !== firstRect.height
-        ) {
-          throw new AgentsTabRecoveryRequiredError(
-            "Agent grid row is not contiguous and aligned",
-          );
-        }
-        widths.push(rect.width);
-        expectedX += rect.width;
-      }
-      if (
-        expectedX !== layout.area.x + layout.area.width ||
-        Math.max(...widths) - Math.min(...widths) > 1
-      ) {
-        throw new AgentsTabRecoveryRequiredError(
-          "Agent grid columns are not balanced across the tab",
-        );
-      }
-      rowHeights.push(firstRect.height);
-      expectedY += firstRect.height;
-    }
     if (
-      expectedY !== layout.area.y + layout.area.height ||
-      Math.max(...rowHeights) - Math.min(...rowHeights) > 1
+      layout.panes.some((pane) => !expectedPaneIds.has(pane.paneId)) ||
+      grid.paneCount !== panes.length ||
+      layout.splits.length !== Math.max(0, panes.length - 1)
     ) {
       throw new AgentsTabRecoveryRequiredError(
-        "Agent grid rows are not balanced across the tab",
+        "Herdr layout ownership or split count is invalid",
+      );
+    }
+    const areaRight = layout.area.x + layout.area.width;
+    const areaBottom = layout.area.y + layout.area.height;
+    let coveredArea = 0;
+    for (const [index, pane] of layout.panes.entries()) {
+      const rect = pane.rect;
+      if (
+        rect.width < 1 ||
+        rect.height < 1 ||
+        rect.x < layout.area.x ||
+        rect.y < layout.area.y ||
+        rect.x + rect.width > areaRight ||
+        rect.y + rect.height > areaBottom
+      ) {
+        throw new AgentsTabRecoveryRequiredError(
+          "Agent grid pane escapes the tab area",
+        );
+      }
+      for (const other of layout.panes.slice(index + 1)) {
+        const overlapWidth =
+          Math.min(rect.x + rect.width, other.rect.x + other.rect.width) -
+          Math.max(rect.x, other.rect.x);
+        const overlapHeight =
+          Math.min(rect.y + rect.height, other.rect.y + other.rect.height) -
+          Math.max(rect.y, other.rect.y);
+        if (overlapWidth > 0 && overlapHeight > 0) {
+          throw new AgentsTabRecoveryRequiredError("Agent grid panes overlap");
+        }
+      }
+      coveredArea += rect.width * rect.height;
+    }
+    if (coveredArea !== layout.area.width * layout.area.height) {
+      throw new AgentsTabRecoveryRequiredError(
+        "Agent grid does not tile the complete tab area",
+      );
+    }
+    if (layout.splits.some((split) => split.ratio < 0.2 || split.ratio > 0.8)) {
+      throw new AgentsTabRecoveryRequiredError(
+        "Agent grid contains an unbalanced split",
       );
     }
   }

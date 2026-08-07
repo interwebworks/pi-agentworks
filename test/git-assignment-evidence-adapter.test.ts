@@ -69,6 +69,56 @@ function baseEvidence(): Omit<AssignmentInfrastructureEvidence, "git"> {
   };
 }
 
+test("Project Manager evidence binds to the existing integration worktree without creating a story workspace", () => {
+  const { run, story, inspection } = fixture();
+  let storyWorkspaceCreated = false;
+  const integrationInspection: GitRepositoryInspection = {
+    ...inspection,
+    requestedPath: run.integrationWorktree,
+    currentBranch: run.integrationBranch,
+    headCommit: "c".repeat(40),
+  };
+  const adapter = new GitAssignmentEvidenceAdapter({
+    inspector: {
+      inspect: (path) =>
+        path === run.integrationWorktree ? integrationInspection : inspection,
+      assertBranchExists: () => undefined,
+    },
+    git: {
+      listWorktrees: () => [],
+      createIntegrationWorkspace: () => {
+        throw new Error("not used");
+      },
+      createStoryWorkspace: () => {
+        storyWorkspaceCreated = true;
+        throw new Error("must not create a Project Manager story workspace");
+      },
+      createCandidateCommit: () => {
+        throw new Error("not used");
+      },
+      mergeCandidate: () => {
+        throw new Error("not used");
+      },
+      cleanupStoryWorkspace: () => {
+        throw new Error("not used");
+      },
+    },
+    expectedIntegrationHead: { resolve: () => "c".repeat(40) },
+  });
+  const target = {
+    ...story,
+    branchName: run.integrationBranch,
+    worktreePath: run.integrationWorktree,
+  };
+
+  const evidence = adapter.provisionGit(run, target, 3, "project-manager");
+
+  assert.equal(storyWorkspaceCreated, false);
+  assert.equal(evidence.storyBranch, run.integrationBranch);
+  assert.equal(evidence.worktreePath, run.integrationWorktree);
+  assert.equal(evidence.expectedStoryHead, "c".repeat(40));
+});
+
 test("Git evidence adapter provisions and validates the expected story workspace", () => {
   const { run, story, inspection } = fixture();
   let requestBranch = "";

@@ -131,6 +131,53 @@ test("assignment preparation builds a validated writer task and launch request",
   assert.equal(prepared.request.expectedRevisionMatches, true);
 });
 
+test("Project Manager preparation uses the dedicated integration worktree with read-only authority", async () => {
+  const { snapshot, story, run } = fixture();
+  const managerRole: RoleDefinition = {
+    ...role,
+    id: "project-manager",
+    label: "Project Manager",
+    authority: "project-manager",
+    tools: ["read"],
+    controllerActions: ["report-status", "assign-task", "request-merge"],
+    writePolicy: "read-only",
+  };
+  const managerAgent = createAgentState({
+    id: "manager-1",
+    runId: run.id,
+    roleRuntimeId: "general-delivery/project-manager",
+    taskId: null,
+    worktreePath: run.integrationWorktree,
+    createdAt: 1,
+  });
+  const managerResources: AssignmentLaunchResources = {
+    ...resources(snapshot),
+    agent: managerAgent,
+    writerLeaseActive: false,
+  };
+  const preparation = new DeterministicAssignmentPreparation({
+    resolveRole: () =>
+      Promise.resolve({
+        role: managerRole,
+        runtimeId: "general-delivery/project-manager",
+        rolePrompt: "Coordinate the team.",
+      }),
+    resolveResources: () => Promise.resolve(managerResources),
+  });
+
+  const prepared = await preparation.prepareProjectManager(
+    story,
+    run,
+    snapshot,
+  );
+
+  assert.equal(prepared.request.task.storyId, "story-1-management");
+  assert.equal(prepared.request.task.branchName, run.integrationBranch);
+  assert.equal(prepared.request.task.worktreePath, run.integrationWorktree);
+  assert.equal(prepared.request.task.writePolicy, "read-only");
+  assert.equal(prepared.request.writerLeaseActive, false);
+});
+
 test("assignment preparation refuses stories without durable planning metadata", async () => {
   const { snapshot, run } = fixture();
   const story = createStoryState({

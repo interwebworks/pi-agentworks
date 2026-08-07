@@ -25,7 +25,7 @@ const role: RoleCatalogEntry = {
   systemPrompt: "Build carefully.",
 };
 
-test("controller agent factory creates unique identity-bound agent state", async () => {
+test("controller agent factory creates identity-bound agent state", async () => {
   const run = createRunState({
     id: "run-1",
     title: "Ship",
@@ -74,4 +74,48 @@ test("controller agent factory creates unique identity-bound agent state", async
       createdAt: 10,
     },
   );
+});
+
+test("controller agent factory deterministically recovers a pre-persistence identity", async () => {
+  const run = createRunState({
+    id: "run-recovery",
+    title: "Ship",
+    complexity: "HIGH",
+    repositoryRoot: "/repo",
+    originalCheckout: "/repo",
+    baseBranch: "main",
+    integrationBranch: "agentworks/run-recovery/integration",
+    integrationWorktree: "/worktree/integration",
+    createdAt: 1,
+  });
+  const story = createStoryState({
+    id: "story-recovery",
+    runId: run.id,
+    title: "Story",
+    branchName: "agentworks/run-recovery/story-recovery",
+    worktreePath: "/worktree/story-recovery",
+    createdAt: 1,
+  });
+  const snapshot: ControllerSnapshot = {
+    revision: 1,
+    run,
+    stories: [story],
+    agents: [],
+  };
+  const first = await new ControllerAgentFactory(() => 10).create(
+    "writer",
+    role,
+    story,
+    run,
+    snapshot,
+  );
+  const recovered = await new ControllerAgentFactory(() => 20).create(
+    "writer",
+    role,
+    story,
+    run,
+    snapshot,
+  );
+
+  assert.equal(recovered.id, first.id);
 });

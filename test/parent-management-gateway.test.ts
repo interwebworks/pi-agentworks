@@ -131,6 +131,136 @@ test("discovered parent launch supports a subsequent status request", async () =
   }
 });
 
+test("launch creates the management dashboard beside the originating parent pane", async () => {
+  const runtimeRoot = mkdtempSync(
+    join(tmpdir(), "agentworks-management-pane-"),
+  );
+  const requests: unknown[] = [];
+  const runtime = {
+    workspaceId: "w1P",
+    origin: { tabId: "w1P:t2", paneId: "w1P:p1" },
+    provider: "local-sglang",
+    model: "Qwen/Qwen3.5-2B",
+    thinking: "off" as const,
+    allowHostNetwork: true,
+  };
+  let runId: string | undefined;
+  try {
+    const gateway = createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      process.cwd(),
+      {
+        managementPaneLauncher: {
+          ensure(request) {
+            requests.push(request);
+            return Promise.resolve({
+              paneId: "w1P:p2",
+              paneCreated: requests.length === 1,
+              dashboardStarted: requests.length === 1,
+            });
+          },
+        },
+      },
+    );
+    const result = await gateway.execute({
+      action: "launch",
+      mode: "NORMAL",
+      task: "open the management pane",
+      runtime,
+    });
+    runId = /Agentworks run (\S+) created/u.exec(result.text)?.[1];
+    assert.ok(runId);
+    assert.match(result.text, /Management pane: w1P:p2/u);
+    const status = await gateway.execute({ action: "status", runId, runtime });
+    assert.match(status.text, /Management pane: w1P:p2/u);
+    assert.deepEqual(requests, [
+      {
+        runId,
+        runtimeRoot,
+        workspaceId: "w1P",
+        parentTabId: "w1P:t2",
+        parentPaneId: "w1P:p1",
+      },
+      {
+        runId,
+        runtimeRoot,
+        workspaceId: "w1P",
+        parentTabId: "w1P:t2",
+        parentPaneId: "w1P:p1",
+      },
+    ]);
+  } finally {
+    if (runId !== undefined) {
+      const client =
+        await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+      try {
+        await client.request({ action: "controller.shutdown", payload: {} });
+      } finally {
+        client.close();
+      }
+    }
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("management pane failure prevents agents and status retries bootstrap", async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-pane-retry-"));
+  let attempts = 0;
+  let runId: string | undefined;
+  const runtime = {
+    workspaceId: "w1P",
+    origin: { tabId: "w1P:t2", paneId: "w1P:p1" },
+    provider: "local-sglang",
+    model: "Qwen/Qwen3.5-2B",
+    thinking: "off" as const,
+    allowHostNetwork: true,
+  };
+  try {
+    const gateway = createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      process.cwd(),
+      {
+        managementPaneLauncher: {
+          ensure() {
+            attempts += 1;
+            if (attempts === 1) throw new Error("split interrupted");
+            return Promise.resolve({
+              paneId: "w1P:p2",
+              paneCreated: false,
+              dashboardStarted: true,
+            });
+          },
+        },
+      },
+    );
+    const launch = await gateway.execute({
+      action: "launch",
+      mode: "NORMAL",
+      task: "retry management bootstrap",
+      runtime,
+    });
+    runId = /Agentworks run (\S+) was saved/u.exec(launch.text)?.[1];
+    assert.ok(runId);
+    assert.equal(launch.notificationType, "error");
+    assert.match(launch.text, /Retry with \/agentworks status/u);
+
+    const status = await gateway.execute({ action: "status", runId, runtime });
+    assert.match(status.text, /Management pane: w1P:p2/u);
+    assert.equal(attempts, 2);
+  } finally {
+    if (runId !== undefined) {
+      const client =
+        await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+      try {
+        await client.request({ action: "controller.shutdown", payload: {} });
+      } finally {
+        client.close();
+      }
+    }
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
 test("live launch explains that an unborn repository needs an initial commit", async () => {
   const repository = mkdtempSync(join(tmpdir(), "agentworks-unborn-repo-"));
   const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-parent-gateway-"));
@@ -139,13 +269,24 @@ test("live launch explains that an unborn repository needs an initial commit", a
     const result = await createDiscoveredParentManagementGateway(
       runtimeRoot,
       repository,
-      { enableLiveComposition: true },
+      {
+        enableLiveComposition: true,
+        managementPaneLauncher: {
+          ensure: () =>
+            Promise.resolve({
+              paneId: "w1P:p2",
+              paneCreated: true,
+              dashboardStarted: true,
+            }),
+        },
+      },
     ).execute({
       action: "launch",
       mode: "HIGH",
       task: "work in an unborn repository",
       runtime: {
         workspaceId: "w1P",
+        origin: { tabId: "w1P:t1", paneId: "w1P:p1" },
         provider: "local-sglang",
         model: "Qwen/Qwen3.5-2B",
         thinking: "off",

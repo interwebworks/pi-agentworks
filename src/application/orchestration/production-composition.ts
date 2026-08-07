@@ -6,7 +6,10 @@ import type { GitWorkspaceGateway } from "../ports/git-workspace-gateway.ts";
 import type { OrchestrationContext } from "../ports/orchestration-context.ts";
 import type { PiAgentLauncher } from "../ports/pi-agent-launcher.ts";
 import { ControllerOrchestrationEffects } from "./controller-orchestration-effects.ts";
-import { OrchestrationLoop } from "./orchestration-loop.ts";
+import {
+  OrchestrationLoop,
+  type InitialOrchestrationTeam,
+} from "./orchestration-loop.ts";
 import { DeterministicAssignmentPreparation } from "../launch/assignment-preparation.ts";
 import { ControllerOwnedAssignmentResourceProvider } from "../launch/controller-owned-resource-provider.ts";
 import type {
@@ -43,6 +46,7 @@ export interface ProductionOrchestrationCompositionDependencies {
   readonly launchConfiguration: AssignmentLaunchConfigurationResolver;
   readonly gitRollback: GitWorkspaceRollback;
   readonly writerLeaseTtlMs: number;
+  readonly initialTeam: InitialOrchestrationTeam;
 }
 
 export class ProductionOrchestrationCompositionError extends Error {
@@ -70,6 +74,21 @@ export function createProductionOrchestrationLoop(
   if (dependencies.writerLeaseTtlMs < 1) {
     throw new ProductionOrchestrationCompositionError(
       "writer lease ttl must be positive",
+    );
+  }
+  if (
+    dependencies.initialTeam.projectManagerRoleRuntimeId.trim().length === 0
+  ) {
+    throw new ProductionOrchestrationCompositionError(
+      "Project Manager runtime role id is empty",
+    );
+  }
+  if (
+    dependencies.initialTeam.advisorRoleRuntimeId !== null &&
+    dependencies.initialTeam.advisorRoleRuntimeId.trim().length === 0
+  ) {
+    throw new ProductionOrchestrationCompositionError(
+      "advisor runtime role id is empty",
     );
   }
 
@@ -111,5 +130,6 @@ export function createProductionOrchestrationLoop(
     runId: dependencies.runId,
     dependenciesByStory: dependencies.dependenciesByStory,
     clock: dependencies.clock,
+    initialTeam: dependencies.initialTeam,
   });
 }

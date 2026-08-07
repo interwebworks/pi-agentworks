@@ -150,6 +150,15 @@ class FakeEffects implements OrchestrationEffects {
     this.applied.push(action.type);
     const at = this.#now();
     switch (action.type) {
+      case "assign-project-manager":
+      case "assign-advisor": {
+        return {
+          run: snapshot.run,
+          stories: snapshot.stories,
+          agents: snapshot.agents,
+          events: [event(action.type, "run", snapshot.run.id, at)],
+        };
+      }
       case "assign-story": {
         const story = mustFind(snapshot.stories, action.storyId);
         const nextStory = transitionStory(story, {
@@ -224,6 +233,60 @@ class FakeEffects implements OrchestrationEffects {
     }
   }
 }
+
+test("HIGH initial tick launches the composed manager, advisor, and one story writer in order", async () => {
+  const fixture = createFixture();
+  try {
+    const lease = fixture.repository.acquireLease(
+      "controller-a",
+      2_000,
+      60_000,
+    );
+    const write = {
+      ownerId: "controller-a",
+      fencingToken: lease.fencingToken,
+      now: 2_000,
+    };
+    fixture.repository.initializeRun({
+      write,
+      idempotencyKey: "create-composed-run",
+      request: { command: "create-run" },
+      run: { ...activeRun(), complexity: "HIGH" },
+      stories: [readyStory()],
+      agents: plannedAgents(),
+      events: [event("run-created", "run", "run-1", 2_000)],
+    });
+    let now = 2_100;
+    const effects = new FakeEffects(() => (now += 1));
+    const loop = new OrchestrationLoop({
+      repository: fixture.repository,
+      effects,
+      runId: "run-1",
+      dependenciesByStory: new Map([["story-1", []]]),
+      clock: () => now,
+      initialTeam: {
+        projectManagerRoleRuntimeId: "general-delivery/project-manager",
+        advisorRoleRuntimeId: "software-development/software-architect",
+      },
+    });
+
+    const result = await loop.tick({ ...write, now: 2_200 });
+
+    assert.deepEqual(result.actions, [
+      { type: "assign-project-manager", storyId: "story-1" },
+      { type: "assign-advisor", storyId: "story-1" },
+      { type: "assign-story", storyId: "story-1" },
+    ]);
+    assert.deepEqual(effects.applied, [
+      "assign-project-manager",
+      "assign-advisor",
+      "assign-story",
+    ]);
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
 
 test("a ready story advances through assignment, review, and merge to run completion", async () => {
   const fixture = createFixture();

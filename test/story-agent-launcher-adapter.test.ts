@@ -81,6 +81,12 @@ test("story launcher adapter delegates prepared assignments and records launch e
     },
   };
   const preparation: StoryAgentLaunchPreparation = {
+    prepareProjectManager() {
+      return Promise.reject(new Error("not used"));
+    },
+    prepareAdvisor() {
+      return Promise.reject(new Error("not used"));
+    },
     prepareWriter() {
       const prepared: PreparedStoryAgentLaunch = {
         request,

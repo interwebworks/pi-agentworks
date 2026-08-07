@@ -11,6 +11,10 @@ export type ParentManagementAction =
 
 export interface ParentLaunchRuntime {
   readonly workspaceId: string;
+  readonly origin?: {
+    readonly tabId: string;
+    readonly paneId: string;
+  };
   readonly provider: string;
   readonly model: string;
   readonly thinking:

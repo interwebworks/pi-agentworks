@@ -229,6 +229,11 @@ export function resolveControllerOrchestrationExecutor(
   );
 }
 
+const orchestrationExecutions = new WeakMap<
+  ControllerOrchestrationExecutor,
+  Promise<JsonValue>
+>();
+
 export async function executeInjectedOrchestration(
   clientKind: "parent" | "management" | "child",
   payload: JsonValue,
@@ -253,7 +258,18 @@ export async function executeInjectedOrchestration(
       "Live orchestration effects are not configured",
     );
   }
-  return executor.execute(write);
+  const previous = orchestrationExecutions.get(executor);
+  const execution = (previous ?? Promise.resolve({}))
+    .catch(() => ({}))
+    .then(() => executor.execute(write));
+  orchestrationExecutions.set(executor, execution);
+  try {
+    return await execution;
+  } finally {
+    if (orchestrationExecutions.get(executor) === execution) {
+      orchestrationExecutions.delete(executor);
+    }
+  }
 }
 
 function parseRunInitializationPayload(payload: JsonValue): {
@@ -409,6 +425,17 @@ export async function runControllerProcess(
           "Child clients may only use child.hello and agent.message",
         );
       }
+      if (
+        request.clientKind === "management" &&
+        request.action !== "snapshot.get" &&
+        request.action !== "events.read" &&
+        request.action !== "orchestration.plan"
+      ) {
+        throw new ControllerRequestError(
+          "forbidden",
+          "Management clients may only read snapshots, events, and orchestration plans",
+        );
+      }
       switch (request.action) {
         case "controller.ping": {
           if (!isEmptyObject(request.payload)) {
@@ -459,12 +486,6 @@ export async function runControllerProcess(
           );
         }
         case "orchestration.plan": {
-          if (request.clientKind !== "parent") {
-            throw new ControllerRequestError(
-              "forbidden",
-              "Only a parent client can request orchestration planning",
-            );
-          }
           if (!isEmptyObject(request.payload)) {
             throw new ControllerRequestError(
               "invalid-payload",

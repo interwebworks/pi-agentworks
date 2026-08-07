@@ -90,8 +90,9 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P7 - Management TUI
 
-- [ ] Wire live run launch/restoration to create the right-side management pane beside the originating parent Pi pane.
-- [ ] Implement the htop-style management dashboard.
+- [x] Wire live run launch to create an authenticated, fail-closed right-side management pane beside the originating parent Pi pane.
+- [x] Implement the live polling terminal management dashboard with bounded run, story, agent, action, and attention rendering.
+- [ ] Restore the management pane and dashboard after parent Pi or Herdr restart.
 - [ ] Implement independent scrolling and sorting for stories, todos, and agents.
 - [ ] Implement color-coded run and attention states.
 - [ ] Implement mouse selection and keyboard navigation that focuses agent panes.
@@ -134,6 +135,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Add a host-supplied process dependency adapter that passes only explicitly enabled trusted providers.
 - [x] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
 - [ ] Complete live child completion/recovery proof after the first production orchestration tick.
+  - [x] Launch the initial composed Project Manager, advisor, and story writer into one incrementally reconciled `Pi Agents` tab with controller-roster ownership.
   - [x] Propagate the active parent Pi model/provider into detached composition, provision its selected private model configuration, and prove authenticated child session/operation events in a real Herdr tab.
   - [x] Temporarily retain host networking for active model access, accepting that child task tools share the widened network boundary until mediated model egress is implemented.
   - [x] Copy only the selected provider credential into each private child configuration so authenticated providers work without exposing unrelated provider credentials.

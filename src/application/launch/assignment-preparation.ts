@@ -17,7 +17,8 @@ import type {
   StoryAgentLaunchPreparation,
 } from "./story-agent-launcher-adapter.ts";
 
-export type StoryAgentKind = "writer" | "reviewer";
+export type StoryAgentKind =
+  "project-manager" | "advisor" | "writer" | "reviewer";
 
 export interface AssignmentRoleResolution {
   readonly role: RoleDefinition;
@@ -107,6 +108,22 @@ export class DeterministicAssignmentPreparation implements StoryAgentLaunchPrepa
     this.#resolver = resolver;
   }
 
+  prepareProjectManager(
+    story: StoryState,
+    run: RunState,
+    snapshot: ControllerSnapshot,
+  ): Promise<PreparedStoryAgentLaunch> {
+    return this.#prepare("project-manager", story, run, snapshot);
+  }
+
+  prepareAdvisor(
+    story: StoryState,
+    run: RunState,
+    snapshot: ControllerSnapshot,
+  ): Promise<PreparedStoryAgentLaunch> {
+    return this.#prepare("advisor", story, run, snapshot);
+  }
+
   prepareWriter(
     story: StoryState,
     run: RunState,
@@ -134,15 +151,33 @@ export class DeterministicAssignmentPreparation implements StoryAgentLaunchPrepa
       this.#resolver.resolveResources(kind, story, run, snapshot),
     ]);
     const role = resolvedRole.role;
+    const assignmentStory =
+      kind === "project-manager"
+        ? Object.freeze({
+            ...planningStory(story),
+            id: `${story.id}-management`,
+            title: `Manage: ${run.title}`,
+            objective: `Coordinate the Agentworks run and supervise delivery of: ${run.title}`,
+            writable: false,
+            deliverables: [
+              "Coordinate the team, monitor dependencies, and report material decisions or blockers",
+            ],
+          })
+        : planningStory(story);
     const task = buildAssignment({
       runId: run.id,
-      story: planningStory(story),
+      story: assignmentStory,
       role: assignableRole(role, resolvedRole.runtimeId),
       agentId: resources.agent.id,
       repositoryRoot: run.repositoryRoot,
-      branchName: story.branchName,
-      worktreePath: story.worktreePath,
-      baseBranch: run.integrationBranch,
+      branchName:
+        kind === "project-manager" ? run.integrationBranch : story.branchName,
+      worktreePath:
+        kind === "project-manager"
+          ? run.integrationWorktree
+          : story.worktreePath,
+      baseBranch:
+        kind === "project-manager" ? run.baseBranch : run.integrationBranch,
     });
     return Object.freeze({
       agent: resources.agent,

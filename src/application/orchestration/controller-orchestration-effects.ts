@@ -56,6 +56,14 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
     snapshot: ControllerSnapshot,
   ): Promise<OrchestrationEffectResult> {
     switch (action.type) {
+      case "assign-project-manager":
+        return this.#assignTeamMember(
+          "project-manager",
+          action.storyId,
+          snapshot,
+        );
+      case "assign-advisor":
+        return this.#assignTeamMember("advisor", action.storyId, snapshot);
       case "assign-story":
         return this.#assignStory(action.storyId, snapshot);
       case "assign-reviewer":
@@ -111,6 +119,28 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
       payload,
       occurredAt,
     };
+  }
+
+  async #assignTeamMember(
+    kind: "project-manager" | "advisor",
+    storyId: string,
+    snapshot: ControllerSnapshot,
+  ): Promise<OrchestrationEffectResult> {
+    const story = this.#story(storyId, snapshot);
+    const launch =
+      kind === "project-manager"
+        ? await this.#launcher.launchProjectManager(
+            story,
+            snapshot.run,
+            snapshot,
+          )
+        : await this.#launcher.launchAdvisor(story, snapshot.run, snapshot);
+    return Object.freeze({
+      run: snapshot.run,
+      stories: snapshot.stories,
+      agents: this.#upsertAgent(snapshot, launch.agent),
+      events: launch.events,
+    });
   }
 
   async #assignStory(

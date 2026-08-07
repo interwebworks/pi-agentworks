@@ -6,6 +6,7 @@ import type {
   GitAssignmentEvidence,
 } from "./assignment-resource-evidence.ts";
 import { assertAssignmentInfrastructureEvidence } from "./assignment-resource-evidence.ts";
+import type { StoryAgentKind } from "./assignment-preparation.ts";
 
 export interface ExpectedIntegrationHeadResolver {
   resolve(run: RunState, story: StoryState, expectedRevision: number): string;
@@ -42,6 +43,7 @@ export class GitAssignmentEvidenceAdapter {
     run: RunState,
     story: StoryState,
     expectedRevision: number,
+    kind: StoryAgentKind = "writer",
   ): GitAssignmentEvidence {
     const inspection = this.#inspector.inspect(run.originalCheckout);
     if (inspection.repositoryRoot !== run.repositoryRoot) {
@@ -59,6 +61,26 @@ export class GitAssignmentEvidenceAdapter {
       throw new GitAssignmentEvidenceAdapterError(
         "expected integration head is empty",
       );
+    }
+    if (kind === "project-manager") {
+      const integration = this.#inspector.inspect(run.integrationWorktree);
+      if (
+        integration.currentBranch !== run.integrationBranch ||
+        integration.headCommit !== expectedIntegrationHead
+      ) {
+        throw new GitAssignmentEvidenceAdapterError(
+          "integration worktree evidence does not match the Project Manager assignment",
+        );
+      }
+      return Object.freeze({
+        commonGitDirectory: inspection.commonGitDirectory,
+        baseBranch: run.integrationBranch,
+        expectedIntegrationHead,
+        integrationBranch: run.integrationBranch,
+        storyBranch: run.integrationBranch,
+        expectedStoryHead: expectedIntegrationHead,
+        worktreePath: run.integrationWorktree,
+      });
     }
     const workspace = this.#git.createStoryWorkspace({
       runId: run.id,

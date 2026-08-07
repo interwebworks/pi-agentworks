@@ -72,7 +72,11 @@ test("environment launch resolver returns deterministic runtime settings", async
     agentworksPackagePath: "/agentworks",
     childBridgePath: "/agentworks/bridge.ts",
     nodePath: "/usr/bin/node",
-    gitMetadataPaths: ["/repo/.git"],
+    gitMetadataPaths: ["/repo/.git", "/worktree/story-1/.git"],
+    projectManagerGitMetadataPaths: [
+      "/repo/.git",
+      "/worktree/integration/.git",
+    ],
     additionalReadOnlyPaths: [],
     provider: "openai",
     model: "gpt-5",
@@ -100,6 +104,23 @@ test("environment launch resolver returns deterministic runtime settings", async
   assert.equal(result.operationId, "writer-op");
   assert.equal(result.controllerSocketPath, "/runtime/controller.sock");
   assert.equal(result.sessionId, "00000000-0000-4000-8000-000000000001");
+  assert.deepEqual(result.gitMetadataPaths, [
+    "/repo/.git",
+    "/worktree/story-1/.git",
+  ]);
+
+  const manager = await resolver.resolve(
+    "project-manager",
+    role,
+    snapshot.agents[0] ?? ({} as never),
+    story,
+    run,
+    snapshot,
+  );
+  assert.deepEqual(manager.gitMetadataPaths, [
+    "/repo/.git",
+    "/worktree/integration/.git",
+  ]);
 });
 
 test("environment launch resolver rejects missing required paths", () => {

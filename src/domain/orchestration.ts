@@ -19,6 +19,8 @@ export interface OrchestrationStory {
 }
 
 export type OrchestrationAction =
+  | { readonly type: "assign-project-manager"; readonly storyId: string }
+  | { readonly type: "assign-advisor"; readonly storyId: string }
   | { readonly type: "assign-story"; readonly storyId: string }
   | { readonly type: "assign-reviewer"; readonly storyId: string }
   | { readonly type: "request-merge"; readonly storyId: string }

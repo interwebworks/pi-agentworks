@@ -32,6 +32,42 @@ test("injected orchestration entrypoint forwards current fenced write to executo
   assert.deepEqual(received, write);
 });
 
+test("orchestration execution is serialized per controller executor", async () => {
+  const releases: (() => void)[] = [];
+  const firstGate = new Promise<void>((resolve) => {
+    releases.push(resolve);
+  });
+  let active = 0;
+  let maximumActive = 0;
+  const order: number[] = [];
+  const executor: ControllerOrchestrationExecutor = {
+    async execute() {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      const sequence = order.length + 1;
+      order.push(sequence);
+      if (sequence === 1) await firstGate;
+      active -= 1;
+      return { sequence };
+    },
+  };
+
+  const first = executeInjectedOrchestration("parent", {}, write, executor);
+  const second = executeInjectedOrchestration("parent", {}, write, executor);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, [1]);
+  assert.equal(maximumActive, 1);
+  const releaseFirst = releases[0];
+  assert.ok(releaseFirst);
+  releaseFirst();
+
+  assert.deepEqual(await Promise.all([first, second]), [
+    { sequence: 1 },
+    { sequence: 2 },
+  ]);
+  assert.equal(maximumActive, 1);
+});
+
 test("host dependency adapter remains dormant unless explicitly enabled", () => {
   const provider = () => ({
     execute: () => Promise.resolve({ accepted: true }),

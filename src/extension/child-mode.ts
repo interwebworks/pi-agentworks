@@ -32,6 +32,7 @@ const CHILD_AUTH_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
 export interface ChildModeEnvironment {
   readonly AGENTWORKS_CHILD_MODE?: string;
+  readonly AGENTWORKS_HERDR_PATH?: string;
   readonly AGENTWORKS_RUNTIME_ROOT?: string;
   readonly AGENTWORKS_AGENT_ID?: string;
   readonly AGENTWORKS_CONTROLLER_SOCKET?: string;

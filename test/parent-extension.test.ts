@@ -60,7 +60,11 @@ test("parent extension delegates launch commands and tool actions to its gateway
     },
   };
   const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  const previousTab = process.env.HERDR_TAB_ID;
+  const previousPane = process.env.HERDR_PANE_ID;
   process.env.HERDR_WORKSPACE_ID = "w1P";
+  process.env.HERDR_TAB_ID = "w1P:t2";
+  process.env.HERDR_PANE_ID = "w1P:p1";
   await commands.get("agentworks")?.handler("NORMAL ship it", {
     ui,
     model: {
@@ -72,6 +76,10 @@ test("parent extension delegates launch commands and tool actions to its gateway
   });
   if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
   else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
+  if (previousTab === undefined) delete process.env.HERDR_TAB_ID;
+  else process.env.HERDR_TAB_ID = previousTab;
+  if (previousPane === undefined) delete process.env.HERDR_PANE_ID;
+  else process.env.HERDR_PANE_ID = previousPane;
   await commands.get("agentworks")?.handler("status run-1", { ui });
   const result = await tools.get("agentworks")?.execute("call-1", {
     action: "status",
@@ -85,6 +93,7 @@ test("parent extension delegates launch commands and tool actions to its gateway
       task: "ship it",
       runtime: {
         workspaceId: "w1P",
+        origin: { tabId: "w1P:t2", paneId: "w1P:p1" },
         provider: "local-sglang",
         model: "Qwen/Qwen3.5-2B",
         thinking: "off",

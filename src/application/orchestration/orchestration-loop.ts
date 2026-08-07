@@ -66,12 +66,18 @@ function projectStory(
   };
 }
 
+export interface InitialOrchestrationTeam {
+  readonly projectManagerRoleRuntimeId: string;
+  readonly advisorRoleRuntimeId: string | null;
+}
+
 export interface OrchestrationLoopDependencies {
   readonly repository: ControllerRepository;
   readonly effects: OrchestrationEffects;
   readonly runId: string;
   readonly dependenciesByStory: ReadonlyMap<string, readonly string[]>;
   readonly clock: () => number;
+  readonly initialTeam?: InitialOrchestrationTeam;
 }
 
 /**
@@ -86,6 +92,7 @@ export class OrchestrationLoop {
   readonly #effects: OrchestrationEffects;
   readonly #runId: string;
   readonly #dependenciesByStory: ReadonlyMap<string, readonly string[]>;
+  readonly #initialTeam: InitialOrchestrationTeam | null;
 
   // `clock` is accepted (not merely `write.now`) so callers can source
   // deterministic timestamps for anything they layer on top of a tick (e.g.
@@ -97,6 +104,7 @@ export class OrchestrationLoop {
     this.#effects = dependencies.effects;
     this.#runId = dependencies.runId;
     this.#dependenciesByStory = dependencies.dependenciesByStory;
+    this.#initialTeam = dependencies.initialTeam ?? null;
   }
 
   async tick(write: FencedWrite): Promise<OrchestrationTickResult> {
@@ -108,7 +116,26 @@ export class OrchestrationLoop {
     const projected = snapshot.stories.map((story) =>
       projectStory(story, this.#dependenciesByStory),
     );
-    const actions = planOrchestration(projected, snapshot.run.complexity);
+    const actions: OrchestrationAction[] = [];
+    const primaryStory = snapshot.stories[0];
+    if (this.#initialTeam !== null && primaryStory !== undefined) {
+      const launchedRoles = new Set(
+        snapshot.agents.map((agent) => agent.roleRuntimeId),
+      );
+      if (!launchedRoles.has(this.#initialTeam.projectManagerRoleRuntimeId)) {
+        actions.push({
+          type: "assign-project-manager",
+          storyId: primaryStory.id,
+        });
+      }
+      if (
+        this.#initialTeam.advisorRoleRuntimeId !== null &&
+        !launchedRoles.has(this.#initialTeam.advisorRoleRuntimeId)
+      ) {
+        actions.push({ type: "assign-advisor", storyId: primaryStory.id });
+      }
+    }
+    actions.push(...planOrchestration(projected, snapshot.run.complexity));
     if (actions.length === 0) {
       return Object.freeze({ actions, committed: false });
     }

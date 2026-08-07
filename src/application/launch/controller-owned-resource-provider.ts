@@ -59,15 +59,18 @@ function validateResources(
   resources: ProvisionedAssignmentResources,
   story: StoryState,
   run: RunState,
+  kind: StoryAgentKind,
 ): void {
   if (resources.agent.runId !== run.id) {
     throw new ControllerOwnedResourceProviderError(
       "agent identity does not belong to the run",
     );
   }
-  if (resources.agent.worktreePath !== story.worktreePath) {
+  const expectedWorktree =
+    kind === "project-manager" ? run.integrationWorktree : story.worktreePath;
+  if (resources.agent.worktreePath !== expectedWorktree) {
     throw new ControllerOwnedResourceProviderError(
-      "agent worktree does not match the story worktree",
+      "agent worktree does not match its assigned worktree",
     );
   }
   for (const [label, value] of [
@@ -125,7 +128,7 @@ export class ControllerOwnedAssignmentResourceProvider {
         run,
         snapshot,
       );
-      validateResources(resources, story, run);
+      validateResources(resources, story, run, kind);
       if (kind === "writer") {
         lease = this.#repository.acquireWriterLease({
           write: this.#write,

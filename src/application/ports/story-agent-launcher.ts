@@ -21,6 +21,16 @@ export interface StoryAgentLaunch {
 }
 
 export interface StoryAgentLauncher {
+  launchProjectManager(
+    story: StoryState,
+    run: RunState,
+    snapshot: ControllerSnapshot,
+  ): Promise<StoryAgentLaunch>;
+  launchAdvisor(
+    story: StoryState,
+    run: RunState,
+    snapshot: ControllerSnapshot,
+  ): Promise<StoryAgentLaunch>;
   launchWriter(
     story: StoryState,
     run: RunState,

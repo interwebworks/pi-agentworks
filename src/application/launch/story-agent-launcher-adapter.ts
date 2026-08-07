@@ -31,6 +31,16 @@ export interface PreparedStoryAgentLaunch {
  * dependency rather than an unsafe fallback.
  */
 export interface StoryAgentLaunchPreparation {
+  prepareProjectManager(
+    story: StoryState,
+    run: RunState,
+    snapshot: ControllerSnapshot,
+  ): Promise<PreparedStoryAgentLaunch>;
+  prepareAdvisor(
+    story: StoryState,
+    run: RunState,
+    snapshot: ControllerSnapshot,
+  ): Promise<PreparedStoryAgentLaunch>;
   prepareWriter(
     story: StoryState,
     run: RunState,
@@ -75,6 +85,28 @@ export class SecureStoryAgentLauncherAdapter implements StoryAgentLauncher {
     this.#clock = dependencies.clock;
   }
 
+  launchProjectManager(
+    story: StoryState,
+    run: RunState,
+    snapshot: ControllerSnapshot,
+  ): Promise<StoryAgentLaunch> {
+    return this.#launch(
+      "project-manager",
+      this.#preparation.prepareProjectManager(story, run, snapshot),
+    );
+  }
+
+  launchAdvisor(
+    story: StoryState,
+    run: RunState,
+    snapshot: ControllerSnapshot,
+  ): Promise<StoryAgentLaunch> {
+    return this.#launch(
+      "advisor",
+      this.#preparation.prepareAdvisor(story, run, snapshot),
+    );
+  }
+
   launchWriter(
     story: StoryState,
     run: RunState,
@@ -98,7 +130,7 @@ export class SecureStoryAgentLauncherAdapter implements StoryAgentLauncher {
   }
 
   async #launch(
-    kind: "writer" | "reviewer",
+    kind: "project-manager" | "advisor" | "writer" | "reviewer",
     preparedPromise: Promise<PreparedStoryAgentLaunch>,
   ): Promise<StoryAgentLaunch> {
     const prepared = await preparedPromise;
@@ -113,7 +145,7 @@ export class SecureStoryAgentLauncherAdapter implements StoryAgentLauncher {
   }
 
   #launchEvent(
-    kind: "writer" | "reviewer",
+    kind: "project-manager" | "advisor" | "writer" | "reviewer",
     agent: AgentState,
     evidence: PiAgentLaunchEvidence,
   ): ControllerEventInput {

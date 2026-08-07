@@ -228,7 +228,12 @@ class FakeAgentsHerdr {
       area: { x: 0, y: 0, width, height },
       focusedPaneId: "w1P:p0",
       panes,
-      splits: [],
+      splits: plan.splits.map((split, index) => ({
+        id: `split-${String(index)}`,
+        direction: split.direction,
+        ratio: split.ratio,
+        rect: { x: 0, y: 0, width, height },
+      })),
     });
   }
 }
@@ -322,6 +327,6 @@ test("fails closed on duplicate slots, extra panes, stale identities, and malfor
   malformed.herdr.malformedLayout = true;
   await assert.rejects(
     malformed.lifecycle.ensure(request(2)),
-    /not contiguous/u,
+    /pane escapes the tab area/u,
   );
 });

@@ -28,7 +28,15 @@ pi install git:github.com/interwebworks/pi-agentworks@VERSION
 pi install npm:pi-agentworks@VERSION
 ```
 
-**Current status of the installed package:** the package loads and registers the `/agentworks` command and model-callable `agentworks` tool (see `src/extension/index.ts`). Parent sessions use a private default runtime root under `~/.pi/agent/agentworks/runtime`; `AGENTWORKS_RUNTIME_ROOT` remains available for explicit overrides. Status requests use the authenticated controller read gateway and launch creates a durable planning run through the authenticated controller. In a Herdr/Pi session, HIGH launches pass the active parent model/provider into the first production orchestration tick; missing model/workspace context is reported as an error rather than an apparent launch. Active models temporarily retain the host network namespace, which also widens network access for that child's task tools. Each private child configuration receives only the selected provider credential. Completion, recovery, and the remaining management actions are still under live validation. See [Project status](#project-status--roadmap) below.
+**Current status of the installed package:** the package loads and registers the `/agentworks` command and model-callable `agentworks` tool (see `src/extension/index.ts`).
+Parent sessions use a private default runtime root under `~/.pi/agent/agentworks/runtime`; `AGENTWORKS_RUNTIME_ROOT` remains available for explicit overrides.
+Status requests use the authenticated controller read gateway and launch creates a durable planning run through the authenticated controller.
+In a Herdr/Pi session, HIGH launches create a fail-closed right-side management dashboard and start the composed Project Manager, advisor, and story writer in one `Pi Agents` tab.
+Missing model, workspace, origin-pane, or dashboard evidence is reported as an error rather than an apparent launch.
+Active models temporarily retain the host network namespace, which also widens network access for that child's task tools.
+Each private child configuration receives only the selected provider credential.
+Completion, restart recovery, advanced management actions, and subsequent reviewer orchestration remain under live validation.
+See [Project status](#project-status--roadmap) below.
 
 ## Configuration
 
@@ -116,7 +124,7 @@ Implementation progress is tracked canonically in [BACKLOG.md](BACKLOG.md); this
 
 - **Mode-specific TUI approvals** and Project Manager tuning/supervisor messages from the parent (P3).
 - **Structured agent lifecycle/operation/result/blocker communication** and disconnected-pane detection with resumable session restoration (P6).
-- **The htop-style management dashboard** — independent scrolling/sorting, color-coded states, mouse/keyboard focus, and approval/steering/pause/resume/close actions (P7).
+- **Advanced management controls** - the live dashboard now renders run, story, agent, next-action, and attention state, while independent scrolling/sorting, mouse/keyboard focus, and approval/steering/pause/resume/close actions remain (P7).
 - **The parent Pi extension's real behavior** — status uses the authenticated controller read gateway and launch creates a durable planning run under the private default runtime root (or `AGENTWORKS_RUNTIME_ROOT` when explicitly configured). Herdr/Pi sessions with the required environment now enable the production orchestration provider and request the first HIGH tick; the persistent right-side overlay, narrow-terminal fallback, run restoration, and full child lifecycle remain under validation (P8).
 - **Orchestration** — dependency-aware scheduling, concurrency caps, controller-side writer/reviewer launches, reviewed merge requests, run completion, and safe cleanup are implemented in the core and covered by tests (P9). Remaining P9 work is bounded idle `.` nudging and renewed-review handling, plus composition into the live controller/parent surfaces.
 - **Distribution polish** — this document plus package metadata (P10, in progress), replacing `pi-herdr-subagent-panes.ts` and retiring `pi-subagents` only after live validation, and migrating any still-useful concepts from the prior architect/worker definitions.

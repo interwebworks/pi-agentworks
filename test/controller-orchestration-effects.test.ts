@@ -88,6 +88,30 @@ const context: OrchestrationContext = {
 };
 
 const launcher: StoryAgentLauncher = {
+  launchProjectManager: () =>
+    Promise.resolve({
+      agent: createAgentState({
+        id: "manager-1",
+        runId: "r1",
+        roleRuntimeId: "general-delivery/project-manager",
+        taskId: null,
+        worktreePath: "/wt/r1/integration",
+        createdAt: 3000,
+      }),
+      events: [],
+    }),
+  launchAdvisor: (story) =>
+    Promise.resolve({
+      agent: createAgentState({
+        id: "advisor-1",
+        runId: "r1",
+        roleRuntimeId: "software-development/software-architect",
+        taskId: `advise-${story.id}`,
+        worktreePath: story.worktreePath,
+        createdAt: 3000,
+      }),
+      events: [],
+    }),
   launchWriter: (story) =>
     Promise.resolve({
       agent: createAgentState({
@@ -243,6 +267,30 @@ test("request-cleanup assembles the cleanup request from merged state", async ()
   assert.equal(request.reviewerAgentId, "reviewer-1");
   assert.equal(request.operationId, "cleanup-op-1");
   assert.equal(request.agentClosed, true);
+});
+
+test("initial team actions launch distinct manager and advisor agents without changing story ownership", async () => {
+  const git = new RecordingGit();
+  const initial = snapshot(storyAt("ready"));
+  const managerResult = await effects(git).execute(
+    { type: "assign-project-manager", storyId: "story-1" },
+    initial,
+  );
+  assert.equal(managerResult.stories[0], initial.stories[0]);
+  const manager = first(managerResult.agents);
+  assert.equal(manager.id, "manager-1");
+  assert.equal(manager.taskId, null);
+  assert.equal(manager.worktreePath, initial.run.integrationWorktree);
+
+  const advisorResult = await effects(git).execute(
+    { type: "assign-advisor", storyId: "story-1" },
+    { ...initial, agents: managerResult.agents },
+  );
+  assert.deepEqual(
+    advisorResult.agents.map((agent) => agent.id),
+    ["manager-1", "advisor-1"],
+  );
+  assert.equal(advisorResult.stories[0]?.assignedAgentId, null);
 });
 
 test("assign-story launches a writer and marks the story assigned", async () => {

@@ -54,26 +54,47 @@ export default function agentworks(pi: ExtensionAPI): void {
 function createParentGateway(
   environment: ChildModeEnvironment,
 ): ParentManagementGateway | null {
+  const configuredHerdrPath = environment.AGENTWORKS_HERDR_PATH?.trim();
+  const herdrPath =
+    configuredHerdrPath === undefined || configuredHerdrPath.length === 0
+      ? "herdr"
+      : configuredHerdrPath;
   return createDiscoveredParentManagementGateway(
     resolveAgentworksRuntimeRoot(environment),
     process.cwd(),
-    { enableLiveComposition: true },
+    {
+      enableLiveComposition: true,
+      herdrPath,
+    },
   );
 }
 
 function withLaunchRuntime(
   request: ParentManagementRequest,
-  context: Pick<ExtensionContext, "model" | "thinkingLevel">,
+  context: Pick<ExtensionContext, "model" | "thinkingLevel"> | undefined,
 ): ParentManagementRequest {
-  if (request.action !== "launch" || context.model === undefined) {
+  if (
+    (request.action !== "launch" && request.action !== "status") ||
+    context?.model === undefined
+  ) {
     return request;
   }
   const workspaceId = process.env.HERDR_WORKSPACE_ID?.trim();
   if (workspaceId === undefined || workspaceId.length === 0) return request;
+  const tabId = process.env.HERDR_TAB_ID?.trim();
+  const paneId = process.env.HERDR_PANE_ID?.trim();
+  const origin =
+    tabId === undefined ||
+    tabId.length === 0 ||
+    paneId === undefined ||
+    paneId.length === 0
+      ? undefined
+      : Object.freeze({ tabId, paneId });
   return Object.freeze({
     ...request,
     runtime: {
       workspaceId,
+      ...(origin === undefined ? {} : { origin }),
       provider: context.model.provider,
       model: context.model.id,
       thinking: context.thinkingLevel ?? "off",

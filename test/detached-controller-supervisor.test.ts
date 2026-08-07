@@ -99,7 +99,6 @@ test("detached process serves core read actions and protects shutdown authority"
       (error: unknown) =>
         error instanceof ControllerRemoteError && error.code === "forbidden",
     );
-    managementClient.close();
     const parentClient = new UnixControllerClient({
       socketPath: discovered.descriptor.socketPath,
       runId: "run-1",
@@ -182,6 +181,28 @@ test("detached process serves core read actions and protects shutdown authority"
         error instanceof ControllerRemoteError &&
         error.code === "not-configured",
     );
+    assert.deepEqual(
+      await managementClient.request({
+        action: "orchestration.plan",
+        payload: {},
+      }),
+      { runId: "run-1", revision: 1, actions: [] },
+    );
+    const managementSnapshot = await managementClient.request({
+      action: "snapshot.get",
+      payload: {},
+    });
+    assert.ok(
+      managementSnapshot !== null &&
+        typeof managementSnapshot === "object" &&
+        !Array.isArray(managementSnapshot),
+    );
+    await assert.rejects(
+      managementClient.request({ action: "controller.ping", payload: {} }),
+      (error: unknown) =>
+        error instanceof ControllerRemoteError && error.code === "forbidden",
+    );
+    managementClient.close();
     parentClient.close();
     assert.equal((await supervisor.inspect()).status, "healthy");
   } finally {

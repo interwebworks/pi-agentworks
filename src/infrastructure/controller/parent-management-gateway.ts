@@ -19,7 +19,14 @@ import {
 } from "../../domain/controller-state.ts";
 import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
 import { GitCliRepositoryInspector } from "../git/git-cli-repository-inspector.ts";
-import { buildDashboardViewModel } from "../../application/tui/dashboard-view-model.ts";
+import {
+  buildDashboardViewModel,
+  type DashboardViewModel,
+} from "../../application/tui/dashboard-view-model.ts";
+import {
+  createManagementDashboardLauncher,
+  type ParentManagementPaneLauncher,
+} from "../herdr/management-dashboard-launcher.ts";
 import {
   integrationBranchForRun,
   storyBranchForRun,
@@ -125,6 +132,37 @@ function orchestrationPlan(value: JsonValue): readonly string[] {
   });
 }
 
+export interface ControllerDashboardData {
+  readonly view: DashboardViewModel;
+  readonly plannedActions: readonly string[];
+}
+
+/** Read and validate one bounded dashboard frame from an authenticated client. */
+export async function readControllerDashboard(
+  client: ParentControllerClient,
+): Promise<ControllerDashboardData> {
+  const current = snapshot(
+    await client.request({ action: "snapshot.get", payload: {} }),
+  );
+  const eventRows = events(
+    await client.request({
+      action: "events.read",
+      payload: {
+        revision: 0,
+        eventIndex: -1,
+        limit: 256,
+      },
+    }),
+  );
+  const plannedActions = orchestrationPlan(
+    await client.request({ action: "orchestration.plan", payload: {} }),
+  );
+  return Object.freeze({
+    view: buildDashboardViewModel(current, eventRows),
+    plannedActions: Object.freeze([...plannedActions]),
+  });
+}
+
 function requiredRunId(input: ParentManagementRequest): string {
   if (input.runId === undefined || input.runId.length === 0) {
     throw new ParentManagementGatewayError(`${input.action} requires a runId`);
@@ -165,23 +203,7 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
     const runId = requiredRunId(input);
     const client = await this.#clientFactory(runId);
     try {
-      const current = snapshot(
-        await client.request({ action: "snapshot.get", payload: {} }),
-      );
-      const eventRows = events(
-        await client.request({
-          action: "events.read",
-          payload: {
-            revision: 0,
-            eventIndex: -1,
-            limit: 256,
-          },
-        }),
-      );
-      const plannedActions = orchestrationPlan(
-        await client.request({ action: "orchestration.plan", payload: {} }),
-      );
-      const view = buildDashboardViewModel(current, eventRows);
+      const { view, plannedActions } = await readControllerDashboard(client);
       const attention = view.supervisorAttention
         .map((item) => `  ! ${item.agentId}: ${item.reason}`)
         .join("\n");
@@ -208,6 +230,7 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
 export function createDiscoveredParentClientFactory(
   runtimeRoot: string,
   clientId?: string,
+  clientKind: "parent" | "management" = "parent",
 ): ParentControllerClientFactory {
   return async (runId) => {
     const discovered: DiscoveredControllerRuntime | null =
@@ -222,7 +245,7 @@ export function createDiscoveredParentClientFactory(
       runId,
       authToken: discovered.authToken,
       clientId: clientId ?? randomUUID(),
-      clientKind: "parent",
+      clientKind,
       agentId: null,
     });
     await client.connect();
@@ -245,12 +268,53 @@ function launchTask(input: ParentManagementRequest): string {
 }
 
 /** Compose the parent surface with detached controller startup and run creation. */
+export interface DiscoveredParentManagementGatewayOptions {
+  readonly enableLiveComposition?: boolean;
+  readonly herdrPath?: string;
+  readonly managementPaneLauncher?: ParentManagementPaneLauncher | null;
+}
+
 export function createDiscoveredParentManagementGateway(
   runtimeRoot: string,
   repositoryRoot: string,
-  options: { readonly enableLiveComposition?: boolean } = {},
+  options: DiscoveredParentManagementGatewayOptions = {},
 ): ParentManagementGateway {
   const clientFactory = createDiscoveredParentClientFactory(runtimeRoot);
+  const managementPaneLauncher =
+    options.managementPaneLauncher === undefined
+      ? options.enableLiveComposition === true &&
+        options.herdrPath !== undefined
+        ? createManagementDashboardLauncher(options.herdrPath)
+        : null
+      : options.managementPaneLauncher;
+  const bootstrapManagementPane = async (
+    runId: string,
+    runtime: ParentManagementRequest["runtime"],
+  ): Promise<{ readonly text: string; readonly failed: boolean }> => {
+    if (managementPaneLauncher === null || runtime?.origin === undefined) {
+      return Object.freeze({ text: "", failed: false });
+    }
+    try {
+      const evidence = await managementPaneLauncher.ensure({
+        runId,
+        runtimeRoot,
+        workspaceId: runtime.workspaceId,
+        parentTabId: runtime.origin.tabId,
+        parentPaneId: runtime.origin.paneId,
+      });
+      return Object.freeze({
+        text: ` Management pane: ${evidence.paneId}.`,
+        failed: false,
+      });
+    } catch (error) {
+      return Object.freeze({
+        text: ` Management pane failed: ${
+          error instanceof Error ? error.message : String(error)
+        }. Retry with /agentworks status ${runId}.`,
+        failed: true,
+      });
+    }
+  };
   const launch = async (
     input: ParentManagementRequest,
   ): Promise<ParentManagementResult> => {
@@ -261,6 +325,15 @@ export function createDiscoveredParentManagementGateway(
     const selectedRuntime = input.runtime;
     const liveCompositionReady =
       options.enableLiveComposition === true && selectedRuntime !== undefined;
+    if (
+      liveCompositionReady &&
+      (selectedRuntime.origin === undefined || managementPaneLauncher === null)
+    ) {
+      return Object.freeze({
+        text: "Agentworks did not start because the originating Herdr pane or management dashboard launcher was unavailable.",
+        notificationType: "error" as const,
+      });
+    }
     if (input.mode === "HIGH" && liveCompositionReady) {
       try {
         const repository = new GitCliRepositoryInspector().inspect(root);
@@ -370,10 +443,20 @@ export function createDiscoveredParentManagementGateway(
           events,
         } as unknown as JsonValue,
       });
+      const managementPane = await bootstrapManagementPane(
+        runId,
+        selectedRuntime,
+      );
+      if (managementPane.failed) {
+        return Object.freeze({
+          text: `Agentworks run ${runId} was saved, but no agent was started.${managementPane.text}`,
+          notificationType: "error" as const,
+        });
+      }
       if (run.complexity === "HIGH") {
         if (!liveCompositionReady) {
           return Object.freeze({
-            text: `Agentworks run ${runId} was saved, but no agent was started because the active Pi model or Herdr workspace was unavailable to the extension.`,
+            text: `Agentworks run ${runId} was saved, but no agent was started because the active Pi model or Herdr workspace was unavailable to the extension.${managementPane.text}`,
             notificationType: "error" as const,
           });
         }
@@ -383,7 +466,7 @@ export function createDiscoveredParentManagementGateway(
             payload: {},
           });
           return Object.freeze({
-            text: `Agentworks run ${runId} created and started for "${task}".`,
+            text: `Agentworks run ${runId} created and started for "${task}".${managementPane.text}`,
           });
         } catch (error) {
           if (!(
@@ -393,17 +476,36 @@ export function createDiscoveredParentManagementGateway(
             throw error;
           }
           return Object.freeze({
-            text: `Agentworks run ${runId} created in planning state for "${task}". Live execution is not configured.`,
+            text: `Agentworks run ${runId} created in planning state for "${task}". Live execution is not configured.${managementPane.text}`,
             notificationType: "warning" as const,
           });
         }
       }
       return Object.freeze({
-        text: `Agentworks run ${runId} created in planning state for "${task}".`,
+        text: `Agentworks run ${runId} created in planning state for "${task}".${managementPane.text}`,
       });
     } finally {
       client.close();
     }
   };
-  return new ControllerParentManagementGateway(clientFactory, launch);
+  const gateway = new ControllerParentManagementGateway(clientFactory, launch);
+  return Object.freeze({
+    async execute(input: ParentManagementRequest) {
+      const result = await gateway.execute(input);
+      if (input.action !== "status" || input.runId === undefined) return result;
+      const managementPane = await bootstrapManagementPane(
+        input.runId,
+        input.runtime,
+      );
+      if (managementPane.text.length === 0) return result;
+      return Object.freeze({
+        text: `${result.text}${managementPane.text}`,
+        ...(managementPane.failed
+          ? { notificationType: "warning" as const }
+          : result.notificationType === undefined
+            ? {}
+            : { notificationType: result.notificationType }),
+      });
+    },
+  });
 }
