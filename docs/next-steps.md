@@ -38,8 +38,10 @@ Acceptance evidence:
 
 ## 2. Make launch failures recoverable
 
-`materializeAgentLaunch` currently precedes secure Pi process launch, so a launch failure can leave a durable `launching` agent that suppresses replacement indefinitely.
-Add process-aware reconciliation for Project Managers, advisors, writers, and reviewers.
+Status: Completed in `ec11afe` and hardened in `e783e10` with durable launch reservations, exact process confirmation, idempotent reconciliation, and concurrent launch coalescing.
+
+`materializeAgentLaunch` precedes secure Pi process launch, so durable launch reservations and process-aware reconciliation now prevent a failed process start from suppressing replacement indefinitely.
+The reconciliation applies to Project Managers, advisors, writers, and reviewers.
 A durable launch reservation must either prove its exact live pane, process, and Pi session or transition through a guarded retry or terminal failure path.
 Preserve deterministic agent identities and never silently adopt a replacement process or pane.
 
@@ -172,7 +174,7 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
 
 1. [x] Fix management-origin ownership and add cross-tab duplicate-prevention tests.
 2. [ ] Implement deferred-first-tick resume after successful dashboard recovery.
-3. [ ] Reconcile durable `launching` agents after failed process launch.
+3. [x] Reconcile durable `launching` agents after failed process launch.
 4. [ ] Implement exact-slot pane and session restoration plus dead-controller recovery.
 5. [x] Enforce the global active-agent budget.
 6. [ ] Complete repeated multi-story reviewer, merge, cleanup, and completion flow.
