@@ -299,7 +299,18 @@ export async function executeInjectedPaneRestoration(
       "Agent pane restoration is not configured",
     );
   }
-  return executor.restorePanes(write);
+  const previous = orchestrationExecutions.get(executor);
+  const execution = (previous ?? Promise.resolve({}))
+    .catch(() => ({}))
+    .then(() => executor.restorePanes?.(write) ?? Promise.resolve({}));
+  orchestrationExecutions.set(executor, execution);
+  try {
+    return await execution;
+  } finally {
+    if (orchestrationExecutions.get(executor) === execution) {
+      orchestrationExecutions.delete(executor);
+    }
+  }
 }
 
 export type DeferredInitialResumeReason =

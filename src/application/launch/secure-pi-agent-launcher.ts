@@ -3,6 +3,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  fstatSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -227,7 +228,21 @@ function assertExistingPiSession(
     constants.O_RDONLY | constants.O_NOFOLLOW,
   );
   try {
-    const bytes = Buffer.alloc(Math.min(status.size, 4_096));
+    const opened = fstatSync(descriptor);
+    if (
+      !opened.isFile() ||
+      opened.uid !== status.uid ||
+      opened.mode !== status.mode ||
+      opened.nlink !== status.nlink ||
+      opened.size !== status.size ||
+      opened.dev !== status.dev ||
+      opened.ino !== status.ino
+    ) {
+      throw new SecurePiAgentLaunchError(
+        "Existing Pi session changed while its evidence was opened",
+      );
+    }
+    const bytes = Buffer.alloc(Math.min(opened.size, 4_096));
     const length = readSync(descriptor, bytes, 0, bytes.length, 0);
     const firstLine = bytes
       .subarray(0, length)
@@ -255,7 +270,7 @@ function assertExistingPiSession(
   } finally {
     closeSync(descriptor);
   }
-  return realpathSync(sessionFile);
+  return sessionFile;
 }
 
 function shellQuote(value: string): string {

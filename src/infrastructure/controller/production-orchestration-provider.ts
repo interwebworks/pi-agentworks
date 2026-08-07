@@ -564,6 +564,15 @@ export function createProductionOrchestrationProvider(
           processEvidence: new LinuxPaneProcessEvidenceGateway(herdr),
           lifecycle: paneLifecycle,
           launcher: piLauncher,
+          async resolveLabel(agent) {
+            const role = await roleCatalog.find(agent.roleRuntimeId);
+            if (role === null) {
+              throw new ProductionOrchestrationProviderError(
+                `restoration role ${agent.roleRuntimeId} is unavailable`,
+              );
+            }
+            return role.label;
+          },
           preparation: {
             async prepare(input) {
               const current = input.snapshot;

@@ -117,6 +117,39 @@ test("pane restoration is parent-only and forwards exact fenced authority", asyn
   );
 });
 
+test("pane restoration serializes behind ordinary orchestration effects", async () => {
+  let releaseExecute: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    releaseExecute = resolve;
+  });
+  const order: string[] = [];
+  const executor: ControllerOrchestrationExecutor = {
+    async execute() {
+      order.push("execute-start");
+      await gate;
+      order.push("execute-end");
+      return { accepted: true };
+    },
+    restorePanes() {
+      order.push("restore");
+      return Promise.resolve({ restored: true });
+    },
+  };
+
+  const executing = executeInjectedOrchestration("parent", {}, write, executor);
+  const restoring = executeInjectedPaneRestoration(
+    "parent",
+    {},
+    write,
+    executor,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["execute-start"]);
+  releaseExecute?.();
+  await Promise.all([executing, restoring]);
+  assert.deepEqual(order, ["execute-start", "execute-end", "restore"]);
+});
+
 test("orchestration execution is serialized per controller executor", async () => {
   const releases: (() => void)[] = [];
   const firstGate = new Promise<void>((resolve) => {

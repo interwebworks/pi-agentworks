@@ -103,6 +103,7 @@ export interface AgentPaneRestorationControllerDependencies {
   readonly lifecycle: Pick<AgentsTabLifecycle, "ensure">;
   readonly launcher: PiAgentLauncher;
   readonly preparation: AgentPaneRestorationLaunchPreparer;
+  readonly resolveLabel?: (agent: AgentState) => Promise<string>;
   readonly restorationId?: () => string;
   readonly processExists?: (processId: number) => boolean;
   readonly afterPhase?: (
@@ -166,6 +167,7 @@ export class AgentPaneRestorationController {
   readonly #lifecycle: Pick<AgentsTabLifecycle, "ensure">;
   readonly #launcher: PiAgentLauncher;
   readonly #preparation: AgentPaneRestorationLaunchPreparer;
+  readonly #resolveLabel: (agent: AgentState) => Promise<string>;
   readonly #restorationId: () => string;
   readonly #processExists: (processId: number) => boolean;
   readonly #afterPhase: NonNullable<
@@ -179,6 +181,9 @@ export class AgentPaneRestorationController {
     this.#lifecycle = dependencies.lifecycle;
     this.#launcher = dependencies.launcher;
     this.#preparation = dependencies.preparation;
+    this.#resolveLabel =
+      dependencies.resolveLabel ??
+      ((agent) => Promise.resolve(roleLabel(agent.roleRuntimeId)));
     this.#restorationId = dependencies.restorationId ?? randomUUID;
     this.#processExists =
       dependencies.processExists ??
@@ -359,6 +364,19 @@ export class AgentPaneRestorationController {
     });
     await this.#afterPhase("reserved", reservation);
 
+    const labels = new Map(
+      await Promise.all(
+        roster.map(async (entry) => {
+          const label = (await this.#resolveLabel(entry.agent)).trim();
+          if (label.length === 0) {
+            throw new AgentPaneRestorationError(
+              `agent ${entry.agent.id} has no canonical role label`,
+            );
+          }
+          return [entry.agent.id, label] as const;
+        }),
+      ),
+    );
     const assignments: AgentPaneAssignment[] = Array.from({
       length: roster.length,
     });
@@ -377,14 +395,14 @@ export class AgentPaneRestorationController {
       }
       assignments[candidate.slot] = {
         agentId: entry.agent.id,
-        label: roleLabel(entry.agent.roleRuntimeId),
+        label: labels.get(entry.agent.id) ?? "",
         cwd: entry.agent.worktreePath,
       };
       expectedPaneIds[candidate.slot] = entry.launch.paneId;
     }
     assignments[slot] = {
       agentId: target.agent.id,
-      label: roleLabel(target.agent.roleRuntimeId),
+      label: labels.get(target.agent.id) ?? "",
       cwd: target.agent.worktreePath,
       restorationId: reservation.restorationId,
     };
