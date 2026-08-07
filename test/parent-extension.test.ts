@@ -59,7 +59,15 @@ test("parent extension delegates launch commands and tool actions to its gateway
       if (content !== undefined) widgets.push(content);
     },
   };
-  await commands.get("agentworks")?.handler("NORMAL ship it", { ui });
+  const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  process.env.HERDR_WORKSPACE_ID = "w1P";
+  await commands.get("agentworks")?.handler("NORMAL ship it", {
+    ui,
+    model: { provider: "local-sglang", id: "Qwen/Qwen3.5-2B" },
+    thinkingLevel: "off",
+  });
+  if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
+  else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
   await commands.get("agentworks")?.handler("status run-1", { ui });
   const result = await tools.get("agentworks")?.execute("call-1", {
     action: "status",
@@ -67,7 +75,17 @@ test("parent extension delegates launch commands and tool actions to its gateway
   });
 
   assert.deepEqual(requests, [
-    { action: "launch", mode: "NORMAL", task: "ship it" },
+    {
+      action: "launch",
+      mode: "NORMAL",
+      task: "ship it",
+      runtime: {
+        workspaceId: "w1P",
+        provider: "local-sglang",
+        model: "Qwen/Qwen3.5-2B",
+        thinking: "off",
+      },
+    },
     { action: "status", runId: "run-1" },
     { action: "status", runId: "run-1" },
   ]);

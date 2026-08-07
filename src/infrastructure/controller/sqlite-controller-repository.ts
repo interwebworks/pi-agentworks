@@ -504,7 +504,7 @@ export class SqliteControllerRepository implements ControllerRepository {
     const launched = transitionAgent(input.agent, {
       type: "launch-requested",
       paneId,
-      at: input.write.now,
+      at: Math.max(input.write.now, input.agent.updatedAt),
     });
     this.#transaction(() => {
       this.#assertFence(input.write);

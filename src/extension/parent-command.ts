@@ -6,6 +6,7 @@ import {
 } from "../domain/complexity.ts";
 export type {
   ParentManagementGateway,
+  ParentManagementRequest,
   ParentManagementResult,
 } from "../application/ports/parent-management.ts";
 

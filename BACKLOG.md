@@ -133,6 +133,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Add a host-supplied process dependency adapter that passes only explicitly enabled trusted providers.
 - [x] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
 - [ ] Complete live child completion/recovery proof after the first production orchestration tick.
+  - [x] Propagate the active parent Pi model/provider into detached composition, provision its selected private model configuration, and prove authenticated child session/operation events in a real Herdr tab.
+  - [ ] Provide model transport without widening a role's isolated task-network policy; local HTTP providers currently cannot cross the Bubblewrap network namespace.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.

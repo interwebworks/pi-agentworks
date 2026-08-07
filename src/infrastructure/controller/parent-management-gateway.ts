@@ -257,16 +257,20 @@ export function createDiscoveredParentManagementGateway(
     const task = launchTask(input);
     const now = Date.now();
     const root = resolve(repositoryRoot);
+    const selectedRuntime = input.runtime;
     const liveCompositionReady =
-      options.enableLiveComposition === true &&
-      process.env.HERDR_WORKSPACE_ID !== undefined &&
-      process.env.PI_PROVIDER !== undefined &&
-      process.env.PI_MODEL !== undefined;
+      options.enableLiveComposition === true && selectedRuntime !== undefined;
     const supervisor = new DetachedControllerSupervisor({
       runtimeRoot,
       runId,
       environment: liveCompositionReady
-        ? { AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1" }
+        ? {
+            AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1",
+            AGENTWORKS_WORKSPACE_ID: selectedRuntime.workspaceId,
+            PI_PROVIDER: selectedRuntime.provider,
+            PI_MODEL: selectedRuntime.model,
+            PI_REASONING_LEVEL: selectedRuntime.thinking,
+          }
         : {},
     });
     await supervisor.ensureRunning();
@@ -347,6 +351,12 @@ export function createDiscoveredParentManagementGateway(
         } as unknown as JsonValue,
       });
       if (run.complexity === "HIGH") {
+        if (!liveCompositionReady) {
+          return Object.freeze({
+            text: `Agentworks run ${runId} was saved, but no agent was started because the active Pi model or Herdr workspace was unavailable to the extension.`,
+            notificationType: "error" as const,
+          });
+        }
         try {
           await client.request({
             action: "orchestration.execute",

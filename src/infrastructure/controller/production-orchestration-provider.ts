@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ControllerOrchestrationExecutor } from "../../controller/process-entry.ts";
@@ -83,6 +89,93 @@ function packageRootFromExecutable(path: string): string {
   throw new ProductionOrchestrationProviderError(
     `cannot find package root for ${path}`,
   );
+}
+
+function installSelectedModelConfiguration(
+  configPath: string,
+  providerId: string,
+  modelId: string,
+): void {
+  const source = join(homedir(), ".pi", "agent", "models.json");
+  if (!existsSync(source)) return;
+  const status = lstatSync(source);
+  if (
+    status.isSymbolicLink() ||
+    !status.isFile() ||
+    status.uid !== process.getuid?.() ||
+    status.size > 1024 * 1024
+  ) {
+    throw new ProductionOrchestrationProviderError(
+      "global model configuration is not a trusted bounded file",
+    );
+  }
+  const parsed: unknown = JSON.parse(readFileSync(source, "utf8"));
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ProductionOrchestrationProviderError(
+      "global model configuration is invalid",
+    );
+  }
+  const providers = (parsed as Record<string, unknown>).providers;
+  if (
+    providers === null ||
+    typeof providers !== "object" ||
+    Array.isArray(providers)
+  ) {
+    return;
+  }
+  const selected = (providers as Record<string, unknown>)[providerId];
+  if (selected === undefined) return;
+  if (
+    selected === null ||
+    typeof selected !== "object" ||
+    Array.isArray(selected)
+  ) {
+    throw new ProductionOrchestrationProviderError(
+      `model provider ${providerId} has invalid configuration`,
+    );
+  }
+  const provider = selected as Record<string, unknown>;
+  const models = provider.models;
+  const selectedModels = Array.isArray(models)
+    ? models.filter(
+        (entry) =>
+          entry !== null &&
+          typeof entry === "object" &&
+          !Array.isArray(entry) &&
+          (entry as Record<string, unknown>).id === modelId,
+      )
+    : undefined;
+  if (Array.isArray(models) && selectedModels?.length !== 1) {
+    throw new ProductionOrchestrationProviderError(
+      `model ${providerId}/${modelId} is absent from models.json`,
+    );
+  }
+  const content = `${JSON.stringify(
+    {
+      providers: {
+        [providerId]: {
+          ...provider,
+          ...(selectedModels === undefined ? {} : { models: selectedModels }),
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`;
+  const destination = join(configPath, "models.json");
+  if (existsSync(destination)) {
+    if (readFileSync(destination, "utf8") !== content) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration changed during relaunch",
+      );
+    }
+    return;
+  }
+  writeFileSync(destination, content, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
 }
 
 function stableUuid(value: string): string {
@@ -257,11 +350,31 @@ export function createProductionOrchestrationProvider(
         new LinuxPaneProcessEvidenceGateway(herdr),
       );
       const panes = new HerdrAgentPaneAllocator(paneLifecycle, herdr);
-      const sessions = new PrivateAgentSessionProvider(
+      const privateSessions = new PrivateAgentSessionProvider(
         join(dirname(runtime.paths.runtimeDirectory), "sessions"),
         (runId, _storyId, agentId) =>
           deriveChildAuthToken(runtime.authToken, runId, agentId),
       );
+      const sessions = {
+        async create(
+          sessionRun: { readonly id: string },
+          sessionStory: { readonly id: string },
+          agentId: string,
+        ) {
+          const session = await privateSessions.create(
+            sessionRun,
+            sessionStory,
+            agentId,
+          );
+          installSelectedModelConfiguration(
+            session.configPath,
+            provider,
+            model,
+          );
+          return session;
+        },
+        cleanup: privateSessions.cleanup.bind(privateSessions),
+      };
       const gitInspection = inspector.inspect(run.originalCheckout);
       const gitEvidence = new GitAssignmentEvidenceAdapter({
         inspector,

@@ -110,8 +110,9 @@ test("discovered parent launch supports a subsequent status request", async () =
       mode: "HIGH",
       task: "verify parent launch",
     });
-    assert.match(launched.text, /created in planning state/u);
-    runId = /Agentworks run (\S+) created/u.exec(launched.text)?.[1];
+    assert.equal(launched.notificationType, "error");
+    assert.match(launched.text, /no agent was started/u);
+    runId = /Agentworks run (\S+) was saved/u.exec(launched.text)?.[1];
     assert.ok(runId);
     const status = await gateway.execute({ action: "status", runId });
     assert.match(status.text, /HIGH/u);

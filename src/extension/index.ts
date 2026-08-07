@@ -1,5 +1,6 @@
 import type {
   ExtensionAPI,
+  ExtensionContext,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -13,6 +14,7 @@ import {
   parseAgentworksCommand,
   parseAgentworksToolInput,
   type ParentManagementGateway,
+  type ParentManagementRequest,
   type ParentManagementResult,
 } from "./parent-command.ts";
 import { createDiscoveredParentManagementGateway } from "../infrastructure/controller/parent-management-gateway.ts";
@@ -59,6 +61,26 @@ function createParentGateway(
   );
 }
 
+function withLaunchRuntime(
+  request: ParentManagementRequest,
+  context: Pick<ExtensionContext, "model" | "thinkingLevel">,
+): ParentManagementRequest {
+  if (request.action !== "launch" || context.model === undefined) {
+    return request;
+  }
+  const workspaceId = process.env.HERDR_WORKSPACE_ID?.trim();
+  if (workspaceId === undefined || workspaceId.length === 0) return request;
+  return Object.freeze({
+    ...request,
+    runtime: {
+      workspaceId,
+      provider: context.model.provider,
+      model: context.model.id,
+      thinking: context.thinkingLevel ?? "off",
+    },
+  });
+}
+
 function gatewayFailure(error: unknown): ParentManagementResult {
   return {
     text: `Agentworks controller request failed: ${
@@ -93,12 +115,17 @@ export function installParentExtension(
       const { action, mode, task, runId } = parseAgentworksCommand(args);
       if (gateway !== null) {
         return gateway
-          .execute({
-            action: action ?? "launch",
-            ...(mode === null ? {} : { mode }),
-            ...(task.length === 0 ? {} : { task }),
-            ...(runId === undefined ? {} : { runId }),
-          })
+          .execute(
+            withLaunchRuntime(
+              {
+                action: action ?? "launch",
+                ...(mode === null ? {} : { mode }),
+                ...(task.length === 0 ? {} : { task }),
+                ...(runId === undefined ? {} : { runId }),
+              },
+              ctx,
+            ),
+          )
           .catch(gatewayFailure)
           .then((result) => {
             updateParentStatusWidget(ctx.ui, result);
@@ -126,14 +153,16 @@ export function installParentExtension(
       "launch, status, approve, reject, steer, pause, resume, focus, close. " +
       "Not yet wired to the controller runtime.",
     parameters: AgentworksToolInputSchema,
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, context) {
       const input = parseAgentworksToolInput(params);
       const result =
         gateway === null
           ? {
               text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
             }
-          : await gateway.execute(input).catch(gatewayFailure);
+          : await gateway
+              .execute(withLaunchRuntime(input, context))
+              .catch(gatewayFailure);
       return {
         content: [{ type: "text" as const, text: result.text }],
         details: undefined,
