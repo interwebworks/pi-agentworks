@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -126,6 +127,36 @@ test("discovered parent launch supports a subsequent status request", async () =
         client.close();
       }
     }
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("live launch explains that an unborn repository needs an initial commit", async () => {
+  const repository = mkdtempSync(join(tmpdir(), "agentworks-unborn-repo-"));
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-parent-gateway-"));
+  try {
+    execFileSync("git", ["init", "-b", "main", repository]);
+    const result = await createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      repository,
+      { enableLiveComposition: true },
+    ).execute({
+      action: "launch",
+      mode: "HIGH",
+      task: "work in an unborn repository",
+      runtime: {
+        workspaceId: "w1P",
+        provider: "local-sglang",
+        model: "Qwen/Qwen3.5-2B",
+        thinking: "off",
+        allowHostNetwork: true,
+      },
+    });
+    assert.equal(result.notificationType, "error");
+    assert.match(result.text, /has no Git commit/u);
+    assert.match(result.text, /initial commit/u);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
     rmSync(runtimeRoot, { recursive: true, force: true });
   }
 });

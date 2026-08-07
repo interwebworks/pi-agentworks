@@ -18,6 +18,7 @@ import {
   transitionStory,
 } from "../../domain/controller-state.ts";
 import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
+import { GitCliRepositoryInspector } from "../git/git-cli-repository-inspector.ts";
 import { buildDashboardViewModel } from "../../application/tui/dashboard-view-model.ts";
 import {
   integrationBranchForRun,
@@ -260,6 +261,22 @@ export function createDiscoveredParentManagementGateway(
     const selectedRuntime = input.runtime;
     const liveCompositionReady =
       options.enableLiveComposition === true && selectedRuntime !== undefined;
+    if (input.mode === "HIGH" && liveCompositionReady) {
+      try {
+        const repository = new GitCliRepositoryInspector().inspect(root);
+        if (repository.headCommit === null) {
+          return Object.freeze({
+            text: `Agentworks did not start: ${root} has no Git commit. Create the repository's initial commit, then retry.`,
+            notificationType: "error" as const,
+          });
+        }
+      } catch (error) {
+        return Object.freeze({
+          text: `Agentworks did not start: ${root} is not a usable Git checkout (${error instanceof Error ? error.message : String(error)}).`,
+          notificationType: "error" as const,
+        });
+      }
+    }
     const supervisor = new DetachedControllerSupervisor({
       runtimeRoot,
       runId,
@@ -270,6 +287,9 @@ export function createDiscoveredParentManagementGateway(
             PI_PROVIDER: selectedRuntime.provider,
             PI_MODEL: selectedRuntime.model,
             PI_REASONING_LEVEL: selectedRuntime.thinking,
+            AGENTWORKS_ALLOW_HOST_NETWORK: selectedRuntime.allowHostNetwork
+              ? "1"
+              : "0",
           }
         : {},
     });

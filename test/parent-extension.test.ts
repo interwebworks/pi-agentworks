@@ -63,7 +63,11 @@ test("parent extension delegates launch commands and tool actions to its gateway
   process.env.HERDR_WORKSPACE_ID = "w1P";
   await commands.get("agentworks")?.handler("NORMAL ship it", {
     ui,
-    model: { provider: "local-sglang", id: "Qwen/Qwen3.5-2B" },
+    model: {
+      provider: "local-sglang",
+      id: "Qwen/Qwen3.5-2B",
+      baseUrl: "http://127.0.0.1:30000/v1",
+    },
     thinkingLevel: "off",
   });
   if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
@@ -84,6 +88,7 @@ test("parent extension delegates launch commands and tool actions to its gateway
         provider: "local-sglang",
         model: "Qwen/Qwen3.5-2B",
         thinking: "off",
+        allowHostNetwork: true,
       },
     },
     { action: "status", runId: "run-1" },

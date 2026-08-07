@@ -15,6 +15,7 @@ export interface ParentLaunchRuntime {
   readonly model: string;
   readonly thinking:
     "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  readonly allowHostNetwork: boolean;
 }
 
 export interface ParentManagementRequest {

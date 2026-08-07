@@ -268,6 +268,7 @@ export function installChildBridge(
   let sessionId: string | null = null;
   let operationStartedAt: number | null = null;
   let operationFailureReason: string | null = null;
+  let messageQueue: Promise<void> = Promise.resolve();
 
   const sendMessage = async (
     nextClient: ChildControllerClient,
@@ -277,16 +278,20 @@ export function installChildBridge(
     await nextClient.request({ action: "agent.message", payload });
   };
 
-  const reportMessage = async (message: AgentMessage): Promise<void> => {
-    const activeClient = client;
-    if (!authenticated || activeClient === null) return;
-    try {
-      await sendMessage(activeClient, message);
-    } catch {
-      authenticated = false;
-      client = null;
-      activeClient.close();
-    }
+  const reportMessage = (message: AgentMessage): Promise<void> => {
+    const queued = messageQueue.then(async () => {
+      const activeClient = client;
+      if (!authenticated || activeClient === null) return;
+      try {
+        await sendMessage(activeClient, message);
+      } catch {
+        authenticated = false;
+        client = null;
+        activeClient.close();
+      }
+    });
+    messageQueue = queued.catch(() => undefined);
+    return queued;
   };
 
   pi.on("session_start", async (_event, context) => {
@@ -294,6 +299,7 @@ export function installChildBridge(
     operationFailureReason = null;
     authenticated = false;
     sessionId = randomUUID();
+    messageQueue = Promise.resolve();
     client?.close();
     const nextClient = clientFactory(configuration);
     client = nextClient;
@@ -348,14 +354,14 @@ export function installChildBridge(
   pi.on("agent_start", () => {
     operationStartedAt = Date.now();
     operationFailureReason = null;
-    void reportMessage(
+    return reportMessage(
       operationStarted(configuration.runId, configuration.agentId),
     );
   });
 
   pi.on("turn_start", (event) => {
     const startedAt = operationStartedAt ?? event.timestamp;
-    void reportMessage(
+    return reportMessage(
       heartbeat(
         configuration.runId,
         configuration.agentId,
@@ -364,15 +370,15 @@ export function installChildBridge(
     );
   });
 
-  pi.on("tool_execution_start", (event) => {
-    void reportMessage(
+  pi.on("tool_execution_start", (event) =>
+    reportMessage(
       operationProgress(
         configuration.runId,
         configuration.agentId,
         `tool:${event.toolName}`,
       ),
-    );
-  });
+    ),
+  );
 
   pi.on("tool_execution_end", (event) => {
     if (!event.isError) return;
@@ -380,7 +386,7 @@ export function installChildBridge(
       0,
       4096,
     );
-    void reportMessage(
+    return reportMessage(
       agentBlocked(
         configuration.runId,
         configuration.agentId,
@@ -390,9 +396,9 @@ export function installChildBridge(
     );
   });
 
-  pi.on("agent_settled", () => {
+  pi.on("agent_settled", async () => {
     const success = operationFailureReason === null;
-    void reportMessage(
+    await reportMessage(
       operationCompleted(configuration.runId, configuration.agentId, success),
     );
     operationStartedAt = null;
@@ -410,6 +416,7 @@ export function installChildBridge(
   );
 
   pi.on("session_shutdown", async () => {
+    await messageQueue;
     authenticated = false;
     operationStartedAt = null;
     operationFailureReason = null;

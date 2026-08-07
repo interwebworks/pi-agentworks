@@ -54,6 +54,7 @@ interface ProductionEnvironment {
   readonly PI_PROVIDER?: string;
   readonly PI_MODEL?: string;
   readonly PI_REASONING_LEVEL?: string;
+  readonly AGENTWORKS_ALLOW_HOST_NETWORK?: string;
 }
 
 function required(value: string | undefined, label: string): string {
@@ -184,6 +185,16 @@ function stableUuid(value: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20)}`;
 }
 
+function hostNetworkApproved(value: string | undefined): boolean {
+  if (value === undefined || value === "0") return false;
+  if (value !== "1") {
+    throw new ProductionOrchestrationProviderError(
+      "AGENTWORKS_ALLOW_HOST_NETWORK must be exactly 0 or 1",
+    );
+  }
+  return true;
+}
+
 function thinking(
   value: string | undefined,
 ): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" {
@@ -300,6 +311,9 @@ export function createProductionOrchestrationProvider(
   );
   const nodePath = process.execPath;
   const launchThinking = thinking(environment.PI_REASONING_LEVEL);
+  const allowHostNetwork = hostNetworkApproved(
+    environment.AGENTWORKS_ALLOW_HOST_NETWORK,
+  );
 
   return (runtime) => ({
     async execute(write: FencedWrite) {
@@ -340,10 +354,15 @@ export function createProductionOrchestrationProvider(
         );
       }
       const roles = discovery.packs.flatMap((pack) => pack.roles);
-      const roleCatalog = LoadedRoleCatalog.fromPacks(discovery.packs);
+      const runtimeRoles = allowHostNetwork
+        ? roles.map((role) =>
+            Object.freeze({ ...role, networkAccess: "required" as const }),
+          )
+        : roles;
+      const roleCatalog = new LoadedRoleCatalog(runtimeRoles);
       const roleSelector: AssignmentRoleSelector = {
         select: (kind, story) =>
-          Promise.resolve(chooseRole(roles, kind, story)),
+          Promise.resolve(chooseRole(runtimeRoles, kind, story)),
       };
       const paneLifecycle = new AgentsTabLifecycle(
         herdr,
