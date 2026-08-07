@@ -90,6 +90,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P7 - Management TUI
 
+- [ ] Wire live run launch/restoration to create the right-side management pane beside the originating parent Pi pane.
 - [ ] Implement the htop-style management dashboard.
 - [ ] Implement independent scrolling and sorting for stories, todos, and agents.
 - [ ] Implement color-coded run and attention states.
