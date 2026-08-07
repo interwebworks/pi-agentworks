@@ -6,6 +6,7 @@ import {
 import type {
   ControllerEventCursor,
   ControllerEventInput,
+  ControllerSnapshot,
   FencedWrite,
   JsonValue,
 } from "../application/ports/controller-repository.ts";
@@ -273,6 +274,192 @@ export async function executeInjectedOrchestration(
   }
 }
 
+export type DeferredInitialResumeReason =
+  | "eligible"
+  | "not-high-complexity"
+  | "run-not-ready"
+  | "no-stories"
+  | "launch-already-started";
+
+export interface DeferredInitialResumeAssessment {
+  readonly eligible: boolean;
+  readonly reason: DeferredInitialResumeReason;
+}
+
+/**
+ * Proves that a HIGH run is still at its durable post-initialization boundary.
+ * Agent launch materialization is persisted before Pi process launch, so any
+ * non-empty agent roster (or story assignment evidence) means this narrowly
+ * scoped recovery path must not attempt another launch set.
+ */
+export function assessDeferredInitialResume(
+  snapshot: ControllerSnapshot,
+): DeferredInitialResumeAssessment {
+  if (snapshot.run.complexity !== "HIGH") {
+    return Object.freeze({ eligible: false, reason: "not-high-complexity" });
+  }
+  if (snapshot.run.status !== "ready") {
+    return Object.freeze({ eligible: false, reason: "run-not-ready" });
+  }
+  if (snapshot.stories.length === 0) {
+    return Object.freeze({ eligible: false, reason: "no-stories" });
+  }
+  const launchStarted =
+    snapshot.agents.length > 0 ||
+    snapshot.stories.some(
+      (story) =>
+        story.status !== "ready" ||
+        story.assignedAgentId !== null ||
+        story.reviewerAgentId !== null ||
+        story.candidateStoryHead !== null ||
+        story.reviewedIntegrationHead !== null ||
+        story.mergeHead !== null,
+    );
+  return launchStarted
+    ? Object.freeze({
+        eligible: false,
+        reason: "launch-already-started" as const,
+      })
+    : Object.freeze({ eligible: true, reason: "eligible" as const });
+}
+
+const deferredInitialResumes = new WeakMap<
+  ControllerRuntime,
+  Promise<JsonValue>
+>();
+
+function currentResumeWrite(runtime: ControllerRuntime): FencedWrite {
+  try {
+    runtime.assertReadyForWork();
+  } catch {
+    throw new ControllerRequestError(
+      "recovery-required",
+      "Controller recovery reconciliation is required before resuming orchestration",
+    );
+  }
+  const write = runtime.currentWrite();
+  const descriptor = runtime.descriptor;
+  if (
+    descriptor?.ownerId !== write.ownerId ||
+    descriptor.fencingToken !== write.fencingToken ||
+    descriptor.leaseExpiresAt <= write.now
+  ) {
+    throw new ControllerRequestError(
+      "stale-fence",
+      "Deferred orchestration resume requires a current controller fence",
+    );
+  }
+  return write;
+}
+
+/**
+ * Controller-authoritative, idempotent recovery for the one first tick that
+ * was deliberately deferred when mandatory management bootstrap failed.
+ * Concurrent parent retries share one in-flight decision and execution.
+ */
+export function resumeDeferredInitialOrchestration(
+  clientKind: "parent" | "management" | "child",
+  payload: JsonValue,
+  runtime: ControllerRuntime,
+  runId: string,
+  executor: ControllerOrchestrationExecutor | undefined,
+): Promise<JsonValue> {
+  if (clientKind !== "parent") {
+    return Promise.reject(
+      new ControllerRequestError(
+        "forbidden",
+        "Only a parent client can resume deferred orchestration",
+      ),
+    );
+  }
+  if (!isEmptyObject(payload)) {
+    return Promise.reject(
+      new ControllerRequestError(
+        "invalid-payload",
+        "Deferred orchestration resume payload must be empty",
+      ),
+    );
+  }
+  const inFlight = deferredInitialResumes.get(runtime);
+  if (inFlight !== undefined) return inFlight;
+  const previousExecution =
+    executor === undefined ? undefined : orchestrationExecutions.get(executor);
+
+  const execution = (async (): Promise<JsonValue> => {
+    // Share the executor-wide serialization boundary with ordinary first-tick
+    // requests. If a normal launch is already in flight, assess durable state
+    // only after it settles instead of racing a second launch set beside it.
+    await previousExecution?.catch(() => undefined);
+    const write = currentResumeWrite(runtime);
+    const before = runtime.repository.loadSnapshot(runId);
+    if (before === null) {
+      throw new ControllerRequestError(
+        "unknown-run",
+        "Run has not been initialized",
+      );
+    }
+    const assessment = assessDeferredInitialResume(before);
+    if (!assessment.eligible) {
+      return {
+        accepted: true,
+        resumed: false,
+        reason: assessment.reason,
+        revision: before.revision,
+        agentCount: before.agents.length,
+      };
+    }
+    if (executor === undefined) {
+      throw new ControllerRequestError(
+        "not-configured",
+        "Live orchestration effects are not configured",
+      );
+    }
+
+    // Re-read the authority immediately before effects. This rejects a lease
+    // expiry or fenced takeover that occurred while evaluating run state.
+    const currentWrite = currentResumeWrite(runtime);
+    if (
+      currentWrite.ownerId !== write.ownerId ||
+      currentWrite.fencingToken !== write.fencingToken
+    ) {
+      throw new ControllerRequestError(
+        "stale-fence",
+        "Controller fence changed before deferred orchestration resume",
+      );
+    }
+    await executor.execute(currentWrite);
+    const after = runtime.repository.loadSnapshot(runId);
+    if (after === null || after.agents.length === 0) {
+      throw new ControllerRequestError(
+        "resume-not-materialized",
+        "Deferred orchestration did not durably materialize an agent launch",
+      );
+    }
+    return {
+      accepted: true,
+      resumed: true,
+      reason: "launched",
+      revision: after.revision,
+      agentCount: after.agents.length,
+    };
+  })();
+  deferredInitialResumes.set(runtime, execution);
+  if (executor !== undefined) orchestrationExecutions.set(executor, execution);
+  const clearInFlight = (): void => {
+    if (deferredInitialResumes.get(runtime) === execution) {
+      deferredInitialResumes.delete(runtime);
+    }
+    if (
+      executor !== undefined &&
+      orchestrationExecutions.get(executor) === execution
+    ) {
+      orchestrationExecutions.delete(executor);
+    }
+  };
+  void execution.then(clearInFlight, clearInFlight);
+  return execution;
+}
+
 function parseRunInitializationPayload(payload: JsonValue): {
   readonly run: RunState;
   readonly stories: readonly StoryState[];
@@ -483,6 +670,15 @@ export async function runControllerProcess(
             request.clientKind,
             request.payload,
             runtime.currentWrite(),
+            orchestrationExecutor,
+          );
+        }
+        case "orchestration.resume-initial": {
+          return resumeDeferredInitialOrchestration(
+            request.clientKind,
+            request.payload,
+            runtime,
+            configuration.runId,
             orchestrationExecutor,
           );
         }

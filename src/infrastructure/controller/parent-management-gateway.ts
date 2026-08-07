@@ -133,6 +133,52 @@ function orchestrationPlan(value: JsonValue): readonly string[] {
   });
 }
 
+interface DeferredInitialResumeResult {
+  readonly resumed: boolean;
+  readonly agentCount: number;
+}
+
+function deferredInitialResumeResult(
+  value: JsonValue,
+): DeferredInitialResumeResult {
+  const object = record(value, "deferred initial orchestration resume");
+  if (
+    object.accepted !== true ||
+    typeof object.resumed !== "boolean" ||
+    typeof object.reason !== "string" ||
+    typeof object.revision !== "number" ||
+    !Number.isSafeInteger(object.revision) ||
+    typeof object.agentCount !== "number" ||
+    !Number.isSafeInteger(object.agentCount) ||
+    object.agentCount < 0
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller returned an invalid deferred initial orchestration resume",
+    );
+  }
+  return Object.freeze({
+    resumed: object.resumed,
+    agentCount: object.agentCount,
+  });
+}
+
+async function requestDeferredInitialResume(
+  clientFactory: ParentControllerClientFactory,
+  runId: string,
+): Promise<DeferredInitialResumeResult> {
+  const client = await clientFactory(runId);
+  try {
+    return deferredInitialResumeResult(
+      await client.request({
+        action: "orchestration.resume-initial",
+        payload: {},
+      }),
+    );
+  } finally {
+    client.close();
+  }
+}
+
 export interface ControllerDashboardData {
   readonly view: DashboardViewModel;
   readonly plannedActions: readonly string[];
@@ -520,7 +566,7 @@ export function createDiscoveredParentManagementGateway(
   };
   return Object.freeze({
     async execute(input: ParentManagementRequest) {
-      const result = await gateway.execute(input);
+      let result = await gateway.execute(input);
       if (
         input.action !== "status" ||
         input.runId === undefined ||
@@ -533,6 +579,33 @@ export function createDiscoveredParentManagementGateway(
         await readManagementPaneOrigin(input.runId),
       );
       if (managementPane.text.length === 0) return result;
+      if (!managementPane.failed) {
+        try {
+          const resume = await requestDeferredInitialResume(
+            clientFactory,
+            input.runId,
+          );
+          if (resume.resumed) {
+            // The pre-bootstrap status frame was necessarily agentless. Read
+            // again after the controller-authoritative launch so the recovered
+            // dashboard/status response reflects the durable launch set.
+            result = await gateway.execute(input);
+            return Object.freeze({
+              text: `${result.text}${managementPane.text} Deferred first orchestration tick resumed with ${String(resume.agentCount)} agent(s).`,
+              ...(result.notificationType === undefined
+                ? {}
+                : { notificationType: result.notificationType }),
+            });
+          }
+        } catch (error) {
+          return Object.freeze({
+            text: `${result.text}${managementPane.text} Deferred first orchestration tick failed: ${
+              error instanceof Error ? error.message : String(error)
+            }. Retry with /agentworks status ${input.runId}.`,
+            notificationType: "error" as const,
+          });
+        }
+      }
       return Object.freeze({
         text: `${result.text}${managementPane.text}`,
         ...(managementPane.failed

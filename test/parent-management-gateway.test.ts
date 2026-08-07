@@ -20,6 +20,8 @@ import type {
 } from "../src/application/ports/controller-repository.ts";
 import type { ParentControllerClient } from "../src/infrastructure/controller/parent-management-gateway.ts";
 import type { ControllerClientRequest } from "../src/infrastructure/controller/unix-controller-transport.ts";
+import { runControllerProcess } from "../src/controller/process-entry.ts";
+import { discoverControllerRuntime } from "../src/infrastructure/controller/controller-runtime.ts";
 
 function snapshot(): ControllerSnapshot {
   const run = createRunState({
@@ -344,6 +346,158 @@ test("status never adopts the caller origin when controller state has none", asy
         client.close();
       }
     }
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("HIGH launch resumes exactly one first tick after dashboard recovery", async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-deferred-tick-"));
+  const runId = "run-deferred";
+  let releaseLaunch: (() => void) | undefined;
+  const launchGate = new Promise<void>((resolve) => {
+    releaseLaunch = resolve;
+  });
+  let launchSets = 0;
+  const launchSetCount = (): number => launchSets;
+  const controllerProcess = runControllerProcess(
+    { runtimeRoot, runId, ownerId: "deferred-controller" },
+    {
+      orchestrationFactory: (controllerRuntime) => ({
+        async execute(write) {
+          launchSets += 1;
+          const snapshot = controllerRuntime.repository.loadSnapshot(runId);
+          if (snapshot === null) throw new Error("run was not initialized");
+          if (
+            controllerRuntime.repository.materializeAgentLaunch === undefined
+          ) {
+            throw new Error("agent launch materialization is unavailable");
+          }
+          controllerRuntime.repository.materializeAgentLaunch({
+            write,
+            agent: createAgentState({
+              id: "agent-deferred",
+              runId,
+              roleRuntimeId: "general-delivery/project-manager",
+              taskId: null,
+              worktreePath: snapshot.run.integrationWorktree,
+              createdAt: write.now,
+            }),
+            paneId: "w1P:p-agent",
+            sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          });
+          await launchGate;
+          return { accepted: true, actions: ["assign-project-manager"] };
+        },
+      }),
+    },
+  );
+  let managementAttempts = 0;
+  try {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (discoverControllerRuntime(runtimeRoot, runId) !== null) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(discoverControllerRuntime(runtimeRoot, runId));
+    const runtime = {
+      workspaceId: "w1P",
+      origin: { tabId: "w1P:t2", paneId: "w1P:p1" },
+      provider: "local-sglang",
+      model: "Qwen/Qwen3.5-2B",
+      thinking: "off" as const,
+      allowHostNetwork: true,
+    };
+    const gateway = createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      process.cwd(),
+      {
+        enableLiveComposition: true,
+        managementPaneLauncher: {
+          ensure: () => {
+            managementAttempts += 1;
+            if (managementAttempts === 1) {
+              throw new Error("split interrupted");
+            }
+            return Promise.resolve({
+              paneId: "w1P:p2",
+              paneCreated: false,
+              dashboardStarted: true,
+            });
+          },
+        },
+      },
+    );
+
+    const launched = await gateway.execute({
+      action: "launch",
+      mode: "HIGH",
+      task: "Recover launch",
+      runId,
+      runtime,
+    });
+    assert.equal(launched.notificationType, "error");
+    assert.match(launched.text, /was saved, but no agent was started/u);
+    assert.equal(launchSetCount(), 0);
+    const initializedClient =
+      await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+    let initialized: ControllerSnapshot;
+    try {
+      initialized = (await initializedClient.request({
+        action: "snapshot.get",
+        payload: {},
+      })) as unknown as ControllerSnapshot;
+    } finally {
+      initializedClient.close();
+    }
+    assert.equal(initialized.run.status, "ready");
+    assert.equal(initialized.agents.length, 0);
+
+    const statuses = Array.from({ length: 4 }, () =>
+      gateway.execute({ action: "status", runId, runtime }),
+    );
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (launchSetCount() === 1) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(launchSetCount(), 1);
+    releaseLaunch?.();
+    const results = await Promise.all(statuses);
+    assert.equal(launchSetCount(), 1);
+    assert.equal(
+      results.some((result) =>
+        result.text.includes(
+          "Deferred first orchestration tick resumed with 1 agent",
+        ),
+      ),
+      true,
+    );
+    assert.equal(
+      results.some((result) => result.text.includes("Agents: 1")),
+      true,
+    );
+
+    const repeated = await gateway.execute({
+      action: "status",
+      runId,
+      runtime,
+    });
+    assert.equal(launchSetCount(), 1);
+    assert.equal(repeated.text.includes("Agents: 1"), true);
+    assert.equal(
+      repeated.text.includes("Deferred first orchestration tick resumed"),
+      false,
+    );
+  } finally {
+    releaseLaunch?.();
+    if (discoverControllerRuntime(runtimeRoot, runId) !== null) {
+      const client =
+        await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+      try {
+        await client.request({ action: "controller.shutdown", payload: {} });
+      } finally {
+        client.close();
+      }
+    }
+    await controllerProcess;
     rmSync(runtimeRoot, { recursive: true, force: true });
   }
 });
