@@ -2,8 +2,6 @@ import { getComplexityPolicy, type ComplexityMode } from "./complexity.ts";
 import type { AgentStatus } from "./controller-state.ts";
 
 const AGENT_CAPACITY_RELEASE_STATUSES: ReadonlySet<AgentStatus> = new Set([
-  "completed",
-  "failed",
   "closed",
 ]);
 
@@ -18,9 +16,9 @@ export interface AgentCapacity {
 }
 
 /**
- * Every persisted agent reserves one run-level slot until it reaches a valid
- * terminal status. In particular, planned/launching agents are reservations,
- * while blocked and disconnected agents remain recoverable active work.
+ * Every persisted agent reserves one run-level slot until it is closed with
+ * verified cleanup evidence. Planned/launching agents are reservations, and
+ * completed, failed, blocked, or disconnected records still hold capacity.
  */
 export function occupiesAgentCapacity(status: AgentStatus): boolean {
   return !AGENT_CAPACITY_RELEASE_STATUSES.has(status);

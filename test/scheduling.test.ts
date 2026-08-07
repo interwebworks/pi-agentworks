@@ -105,7 +105,7 @@ test("concurrency cap leaves room for the PM and a reviewer", () => {
   assert.equal(storyConcurrencyCap("HIGH"), 14); // 16 - 2
 });
 
-test("all nonterminal agent states occupy the one run-level capacity", () => {
+test("all unclosed agent states occupy the one run-level capacity", () => {
   const statuses: readonly AgentStatus[] = [
     "planned",
     "launching",
@@ -128,10 +128,12 @@ test("all nonterminal agent states occupy the one run-level capacity", () => {
     "blocked",
     "reviewing",
     "disconnected",
+    "completed",
+    "failed",
   ]);
   assert.equal(
     countOccupiedAgentSlots(statuses.map((status) => ({ status }))),
-    8,
+    10,
   );
   assert.deepEqual(agentCapacity("LOW", 4), {
     limit: 4,
@@ -140,12 +142,15 @@ test("all nonterminal agent states occupy the one run-level capacity", () => {
   });
 });
 
-test("capacity is released only after completed, failed, or closed states", () => {
-  for (const status of ["blocked", "disconnected"] as const) {
+test("capacity is released only after the agent is closed", () => {
+  for (const status of [
+    "blocked",
+    "disconnected",
+    "completed",
+    "failed",
+  ] as const) {
     assert.equal(occupiesAgentCapacity(status), true);
   }
-  for (const status of ["completed", "failed", "closed"] as const) {
-    assert.equal(occupiesAgentCapacity(status), false);
-  }
+  assert.equal(occupiesAgentCapacity("closed"), false);
   assert.throws(() => agentCapacity("LOW", -1), SchedulingError);
 });

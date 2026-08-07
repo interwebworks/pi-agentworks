@@ -8,6 +8,7 @@ import {
   createAgentState,
   createRunState,
   createStoryState,
+  transitionAgent,
   transitionRun,
   transitionStory,
   type AgentState,
@@ -181,7 +182,7 @@ test("snapshot initialization rejects active agents beyond the complexity limit"
   }
 });
 
-test("agent launch capacity is atomic across reloaded repositories and releases only at terminal state", () => {
+test("agent launch capacity is atomic across reloads and releases only after verified close", () => {
   const fixture = createFixture();
   let reloaded: SqliteControllerRepository | null = null;
   try {
@@ -233,8 +234,8 @@ test("agent launch capacity is atomic across reloaded repositories and releases 
       AgentCapacityExceededError,
     );
 
-    // Disconnected is recoverable and held capacity above. Only after a valid
-    // terminal status is durably committed may another role reserve the slot.
+    // Disconnected is recoverable and held capacity above. Completed also
+    // remains reserved until a verified close records cleanup completion.
     const snapshot = fixture.repository.loadSnapshot("run-1");
     assert.ok(snapshot);
     fixture.repository.commitSnapshot({
@@ -265,12 +266,63 @@ test("agent launch capacity is atomic across reloaded repositories and releases 
         },
       ],
     });
+    assert.throws(
+      () =>
+        reloaded?.materializeAgentLaunch({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_301,
+          },
+          agent: agent("agent-5"),
+          paneId: "pane-5",
+        }),
+      AgentCapacityExceededError,
+    );
+
+    const completedSnapshot = fixture.repository.loadSnapshot("run-1");
+    assert.ok(completedSnapshot);
+    const completedAgent = completedSnapshot.agents.find(
+      (current) => current.id === "agent-4",
+    );
+    assert.ok(completedAgent);
+    const closedAgent = transitionAgent(completedAgent, {
+      type: "agent-closed",
+      at: 1_400,
+      writerLeaseReleased: true,
+    });
+    fixture.repository.commitSnapshot({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_400,
+      },
+      runId: "run-1",
+      expectedRevision: completedSnapshot.revision,
+      idempotencyKey: "close-agent-4",
+      request: { command: "close-agent", agentId: "agent-4" },
+      run: completedSnapshot.run,
+      stories: completedSnapshot.stories,
+      agents: completedSnapshot.agents.map((current) =>
+        current.id === closedAgent.id ? closedAgent : current,
+      ),
+      events: [
+        {
+          eventId: "event-agent-4-closed",
+          type: "agent-closed",
+          entityType: "agent",
+          entityId: "agent-4",
+          payload: { writerLeaseReleased: true },
+          occurredAt: 1_400,
+        },
+      ],
+    });
     assert.equal(
       reloaded.materializeAgentLaunch({
         write: {
           ownerId: "controller-a",
           fencingToken: controller.fencingToken,
-          now: 1_301,
+          now: 1_401,
         },
         agent: agent("agent-5"),
         paneId: "pane-5",

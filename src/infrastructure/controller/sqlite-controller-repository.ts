@@ -1663,7 +1663,7 @@ export class SqliteControllerRepository implements ControllerRepository {
       .prepare(
         `SELECT COUNT(*) AS count
          FROM agents
-         WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'closed')`,
+         WHERE run_id = ? AND status <> 'closed'`,
       )
       .get(runId) as unknown as CountRow;
     const occupied = asSafeInteger(
