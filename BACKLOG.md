@@ -88,13 +88,17 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Add deterministic pane-loss assessment and restoration planning.
   - [x] Restore one missing controller-roster pane in its exact slot through durable reservations and exact on-disk Pi session reuse.
   - [x] Restart a dead controller from status only after authenticated immutable composition, database, lease, socket, process-identity, and startup-recovery gates pass.
-  - [ ] Extend recovery to parent Pi, Herdr restart, and multi-pane-loss boundaries.
+  - [ ] Extend recovery across the remaining parent and Herdr boundaries.
+    - [x] Prove a fresh parent Pi extension and gateway reconnect to the active controller, preserve exact management origin and background-work visibility, and recover a dead controller after lease expiry without duplicating owned resources or consuming capacity.
+    - [ ] Prove real Herdr restart and multi-pane-loss recovery.
 
 ## P7 - Management TUI
 
 - [x] Wire live run launch to create an authenticated, fail-closed right-side management pane beside the originating parent Pi pane.
 - [x] Implement the live polling terminal management dashboard with bounded run, story, agent, action, and attention rendering.
-- [ ] Restore the management pane and dashboard after parent Pi or Herdr restart.
+- [ ] Restore the management pane and dashboard across parent Pi and Herdr restarts.
+  - [x] Reconnect a fresh parent Pi surface to the exact existing management origin and idempotently ensure its one dashboard without redefining or duplicating ownership.
+  - [ ] Restore the management surface after a real Herdr restart.
 - [ ] Implement independent scrolling and sorting for stories, todos, and agents.
 - [ ] Implement color-coded run and attention states.
 - [ ] Implement mouse selection and keyboard navigation that focuses agent panes.
@@ -108,7 +112,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Add a bounded parent run-status widget and footer indicator after successful status/launch reads.
 - [ ] Implement the persistent right-side overlay todo and run-status view.
 - [ ] Implement narrow-terminal fallback, hide/show, focus, and management shortcuts.
-- [ ] Restore active runs when Pi restarts.
+- [x] Restore active runs through authenticated status when Pi restarts, including session-bound background-work visibility for unclosed agents.
 
 ## P9 - Orchestration
 

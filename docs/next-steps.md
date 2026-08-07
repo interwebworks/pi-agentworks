@@ -57,7 +57,7 @@ Acceptance evidence:
 
 ## 3. Complete controller and pane restoration
 
-Status: The exact single-missing-pane and trusted dead-controller restart slices are implemented.
+Status: The exact single-missing-pane, trusted dead-controller restart, and parent Pi restart slices are implemented.
 Status recovery now assesses the controller roster against strict Herdr process and metadata evidence, reserves one durable slot restoration with a private nonce, reconstructs the missing pane in that exact slot, and relaunches through the secure launcher only when the exact recorded Pi session file survives.
 The three-pane `0, missing 1, 2` case and every restoration kill point converge without moving the surviving panes or duplicating a tab, pane, process, session, worktree, or agent.
 Missing, ambiguous, stale, conflicting, and spoofed pane or session evidence fails closed.
@@ -69,7 +69,11 @@ A dead-controller status path opens and validates the database, verifies the aut
 The restarted controller verifies the same authenticated composition before opening its socket, and production pane restoration remains lazy until status requests it.
 Process tests cover SIGKILL, pre-expiry refusal, one fenced restart, exact surviving pane/process/session/worktree/agent evidence, repeated status idempotency, caller drift, missing or unauthenticated composition, a live competing process identity, an active orphan socket, physical database corruption, and incomplete startup recovery evidence.
 
-Parent Pi restart, Herdr restart, and multi-pane loss remain unclaimed and were not run end to end.
+A process-level parent Pi restart test now launches through the model-callable extension tool, disposes the original extension session and background-work registration, constructs a fresh extension and discovered gateway with the same authenticated runtime identity, and issues status first against the still-active controller and then against the `SIGKILL`ed controller after lease expiry.
+The fresh surface restores its session-bound background-work item for the unclosed agent, reuses the original management origin, restarts exactly one fenced controller, and preserves the one run, story, controller composition, agent, launch, management pane/dashboard, agent pane process, Pi session file, and two expected Git worktrees without a restoration reservation or capacity increase.
+Caller-runtime drift and pre-expiry takeover remain refused before management mutation.
+This is deterministic process-level evidence with a protocol-shaped fake Herdr agent-pane boundary and an injected idempotent management lifecycle, not a real live Herdr UI E2E claim.
+Real Herdr restart and multi-pane loss remain unclaimed.
 
 Acceptance evidence:
 
@@ -194,7 +198,8 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
 4. [ ] Complete controller and pane restoration.
    - [x] Restore one exact missing slot with exact on-disk Pi session reuse and crash-idempotent reservations.
    - [x] Add trusted status-triggered dead-controller restart with authenticated exact-composition rebuilding.
-   - [ ] Run parent Pi and Herdr restart E2E proof.
+   - [x] Prove fresh parent Pi extension and gateway recovery at the process boundary.
+   - [ ] Run real Herdr restart and multi-pane-loss E2E proof.
 5. [x] Enforce the global active-agent budget.
 6. [ ] Complete repeated multi-story reviewer, merge, cleanup, and completion flow.
 7. [ ] Run the large-grid and restart E2E matrix.

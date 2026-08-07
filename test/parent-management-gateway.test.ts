@@ -15,6 +15,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import type { BackgroundWorkProvider } from "pi-subagents/background-work";
 import {
   ControllerParentManagementGateway,
   createDiscoveredParentClientFactory,
@@ -42,6 +47,9 @@ import {
 import { createControllerLaunchComposition } from "../src/infrastructure/controller/controller-launch-composition.ts";
 import { DetachedControllerSupervisor } from "../src/infrastructure/controller/detached-controller-supervisor.ts";
 import { SqliteControllerRepository } from "../src/infrastructure/controller/sqlite-controller-repository.ts";
+import { isControllerRunBackgroundWorkActive } from "../src/infrastructure/controller/controller-background-work.ts";
+import { installParentExtension } from "../src/extension/index.ts";
+import type { ParentManagementGateway } from "../src/application/ports/parent-management.ts";
 
 function snapshot(): ControllerSnapshot {
   const run = createRunState({
@@ -90,6 +98,166 @@ async function stopDiscoveredController(
     client.close();
   }
   await waitFor(() => discoverControllerRuntime(runtimeRoot, runId) === null);
+}
+
+interface ParentExtensionSurface {
+  readonly api: ExtensionAPI;
+  readonly handlers: ReadonlyMap<
+    string,
+    readonly ((event: unknown, context: ExtensionContext) => unknown)[]
+  >;
+  readonly commands: ReadonlyMap<
+    string,
+    {
+      readonly handler: (
+        args: string,
+        context: ExtensionContext,
+      ) => Promise<void>;
+    }
+  >;
+  readonly tools: ReadonlyMap<
+    string,
+    {
+      readonly execute: (
+        toolCallId: string,
+        params: unknown,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        context: ExtensionContext,
+      ) => Promise<{
+        readonly content: readonly {
+          readonly type: "text";
+          readonly text: string;
+        }[];
+      }>;
+    }
+  >;
+  readonly entries: unknown[];
+  readonly notices: string[];
+  readonly activeProvider: () => BackgroundWorkProvider | null;
+}
+
+function parentExtensionSurface(
+  gateway: ParentManagementGateway,
+  runtimeRoot: string,
+  initialEntries: readonly unknown[] = [],
+): ParentExtensionSurface {
+  type Handler = (event: unknown, context: ExtensionContext) => unknown;
+  const handlers = new Map<string, Handler[]>();
+  const commands = new Map<
+    string,
+    { handler: (args: string, context: ExtensionContext) => Promise<void> }
+  >();
+  const tools = new Map<
+    string,
+    {
+      execute: (
+        toolCallId: string,
+        params: unknown,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        context: ExtensionContext,
+      ) => Promise<{
+        content: readonly { type: "text"; text: string }[];
+      }>;
+    }
+  >();
+  const entries = [...initialEntries];
+  const notices: string[] = [];
+  let provider: BackgroundWorkProvider | null = null;
+  let providerGeneration = 0;
+  const api = {
+    on(name: string, handler: Handler) {
+      const current = handlers.get(name) ?? [];
+      current.push(handler);
+      handlers.set(name, current);
+    },
+    appendEntry(customType: string, data: unknown) {
+      entries.push({ type: "custom", customType, data });
+    },
+    registerCommand(
+      name: string,
+      command: {
+        handler: (args: string, context: ExtensionContext) => Promise<void>;
+      },
+    ) {
+      commands.set(name, command);
+    },
+    registerTool(tool: {
+      name: string;
+      execute: (
+        toolCallId: string,
+        params: unknown,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        context: ExtensionContext,
+      ) => Promise<{
+        content: readonly { type: "text"; text: string }[];
+      }>;
+    }) {
+      tools.set(tool.name, tool);
+    },
+  } as unknown as ExtensionAPI;
+  installParentExtension(api, gateway, {
+    isRunActive: (runId) =>
+      isControllerRunBackgroundWorkActive(runtimeRoot, runId),
+    registerProvider: (nextProvider) => {
+      const generation = ++providerGeneration;
+      provider = nextProvider;
+      return () => {
+        if (providerGeneration === generation) provider = null;
+      };
+    },
+  });
+  return {
+    api,
+    handlers,
+    commands,
+    tools,
+    entries,
+    notices,
+    activeProvider: () => provider,
+  };
+}
+
+function parentExtensionContext(
+  surface: ParentExtensionSurface,
+  sessionId: string,
+  runtime: {
+    readonly provider: string;
+    readonly model: string;
+    readonly thinking: "off";
+  },
+): ExtensionContext {
+  return {
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getBranch: () => surface.entries,
+    },
+    model: { provider: runtime.provider, id: runtime.model },
+    thinkingLevel: runtime.thinking,
+    ui: {
+      notify(message: string) {
+        surface.notices.push(message);
+      },
+      setStatus() {
+        return undefined;
+      },
+      setWidget() {
+        return undefined;
+      },
+    },
+  } as unknown as ExtensionContext;
+}
+
+async function invokeParentLifecycle(
+  surface: ParentExtensionSurface,
+  event: "session_start" | "session_shutdown",
+  context: ExtensionContext,
+): Promise<void> {
+  for (const handler of surface.handlers.get(event) ?? []) {
+    await handler({}, context);
+  }
 }
 
 class FakeClient implements ParentControllerClient {
@@ -654,7 +822,7 @@ test("live launch explains that an unborn repository needs an initial commit", a
   }
 });
 
-test("SIGKILL followed by status restarts once from exact composition without duplicate resources", async () => {
+test("a fresh parent Pi surface reconnects active and dead controllers without duplicate resources", async () => {
   const repositoryRoot = mkdtempSync(
     join(tmpdir(), "agentworks-restart-repo-"),
   );
@@ -672,8 +840,17 @@ test("SIGKILL followed by status restarts once from exact composition without du
   };
   let dashboardStarts = 0;
   let managementEnsures = 0;
+  let managementPaneCreations = 0;
   let paneShell: ChildProcess | null = null;
   let paneShellIdentity: string | null = null;
+  let currentSurface: ParentExtensionSurface | null = null;
+  let currentContext: ExtensionContext | null = null;
+  const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  const previousTab = process.env.HERDR_TAB_ID;
+  const previousPane = process.env.HERDR_PANE_ID;
+  process.env.HERDR_WORKSPACE_ID = runtime.workspaceId;
+  process.env.HERDR_TAB_ID = runtime.origin.tabId;
+  process.env.HERDR_PANE_ID = runtime.origin.paneId;
   try {
     execFileSync("git", ["init", "-b", "main", repositoryRoot]);
     execFileSync("git", ["-C", repositoryRoot, "config", "user.name", "Test"]);
@@ -750,38 +927,62 @@ if (args[0] === "--version") {
       { mode: 0o755 },
     );
     chmodSync(herdrPath, 0o755);
-    const gateway = createDiscoveredParentManagementGateway(
-      runtimeRoot,
-      repositoryRoot,
-      {
+    const managementPaneLauncher = {
+      ensure() {
+        managementEnsures += 1;
+        const dashboardStarted = managementEnsures === 1;
+        if (dashboardStarted) {
+          dashboardStarts += 1;
+          managementPaneCreations += 1;
+        }
+        return Promise.resolve({
+          paneId: "w1P:p2",
+          paneCreated: dashboardStarted,
+          dashboardStarted,
+        });
+      },
+    };
+    const createGateway = (): ParentManagementGateway =>
+      createDiscoveredParentManagementGateway(runtimeRoot, repositoryRoot, {
         enableLiveComposition: true,
         herdrPath,
         controllerLeaseTtlMs: 600,
         controllerRenewIntervalMs: 100,
         controllerStartupTimeoutMs: 10_000,
         controllerPollIntervalMs: 20,
-        managementPaneLauncher: {
-          ensure() {
-            managementEnsures += 1;
-            const dashboardStarted = managementEnsures === 1;
-            if (dashboardStarted) dashboardStarts += 1;
-            return Promise.resolve({
-              paneId: "w1P:p2",
-              paneCreated: dashboardStarted,
-              dashboardStarted,
-            });
-          },
-        },
-      },
-    );
-    const launched = await gateway.execute({
-      action: "launch",
-      mode: "NORMAL",
-      task: "recover one exact controller",
-      runId,
+        managementPaneLauncher,
+      });
+    let gateway = createGateway();
+    const parentSessionId = "22222222-2222-4222-8222-222222222222";
+    const originalSurface = parentExtensionSurface(gateway, runtimeRoot);
+    const originalContext = parentExtensionContext(
+      originalSurface,
+      parentSessionId,
       runtime,
-    });
-    assert.equal(launched.notificationType, undefined);
+    );
+    currentSurface = originalSurface;
+    currentContext = originalContext;
+    await invokeParentLifecycle(
+      originalSurface,
+      "session_start",
+      originalContext,
+    );
+    const launchTool = originalSurface.tools.get("agentworks");
+    assert.ok(launchTool);
+    const launched = await launchTool.execute(
+      "parent-launch",
+      {
+        action: "launch",
+        mode: "NORMAL",
+        task: "recover one exact controller",
+        runId,
+      },
+      new AbortController().signal,
+      () => undefined,
+      originalContext,
+    );
+    assert.match(launched.content[0]?.text ?? "", /created in planning state/u);
+    assert.equal(originalSurface.entries.length, 1);
     const initialController = discoverControllerRuntime(runtimeRoot, runId);
     assert.ok(initialController);
 
@@ -892,6 +1093,44 @@ if (args[0] === "--version") {
       commandSha256: "a".repeat(64),
     });
     repository.close();
+
+    assert.deepEqual(originalSurface.activeProvider()?.listActiveWork(), [
+      { id: runId, sessionId: parentSessionId },
+    ]);
+    await invokeParentLifecycle(
+      originalSurface,
+      "session_shutdown",
+      originalContext,
+    );
+    assert.equal(originalSurface.activeProvider(), null);
+
+    gateway = createGateway();
+    const freshSurface = parentExtensionSurface(
+      gateway,
+      runtimeRoot,
+      originalSurface.entries,
+    );
+    const freshContext = parentExtensionContext(
+      freshSurface,
+      parentSessionId,
+      runtime,
+    );
+    currentSurface = freshSurface;
+    currentContext = freshContext;
+    await invokeParentLifecycle(freshSurface, "session_start", freshContext);
+    assert.deepEqual(freshSurface.activeProvider()?.listActiveWork(), [
+      { id: runId, sessionId: parentSessionId },
+    ]);
+    const statusCommand = freshSurface.commands.get("agentworks");
+    assert.ok(statusCommand);
+    await statusCommand.handler(`status ${runId}`, freshContext);
+    assert.match(freshSurface.notices.at(-1) ?? "", /Agents: 1/u);
+    assert.equal(
+      discoverControllerRuntime(runtimeRoot, runId)?.descriptor.processId,
+      initialController.descriptor.processId,
+    );
+    assert.equal(managementEnsures, 2);
+
     const first = discoverControllerRuntime(runtimeRoot, runId);
     assert.ok(first);
     process.kill(first.descriptor.processId, "SIGKILL");
@@ -912,17 +1151,18 @@ if (args[0] === "--version") {
       first.descriptor.leaseExpiresAt - Date.now() + 25,
     );
     await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, waitMs));
-    const recovered = await gateway.execute({
-      action: "status",
-      runId,
-      runtime,
-    });
-    assert.equal(
-      recovered.notificationType,
-      undefined,
-      `${recovered.text}\n${readFileSync(join(paths.runtimeDirectory, "controller.log"), "utf8")}`,
+    await statusCommand.handler(`status ${runId}`, freshContext);
+    const recoveredText = freshSurface.notices.at(-1) ?? "";
+    assert.doesNotMatch(
+      recoveredText,
+      /failed|refused/u,
+      `${recoveredText}\n${readFileSync(join(paths.runtimeDirectory, "controller.log"), "utf8")}`,
     );
-    assert.match(recovered.text, /recover one exact controller/u);
+    assert.match(recoveredText, /recover one exact controller/u);
+    assert.match(recoveredText, /Agents: 1/u);
+    assert.deepEqual(freshSurface.activeProvider()?.listActiveWork(), [
+      { id: runId, sessionId: parentSessionId },
+    ]);
     const second = discoverControllerRuntime(runtimeRoot, runId);
     assert.ok(second);
     assert.notEqual(second.descriptor.processId, first.descriptor.processId);
@@ -940,7 +1180,25 @@ if (args[0] === "--version") {
       second.descriptor.processId,
     );
     assert.equal(dashboardStarts, 1);
-    assert.equal(managementEnsures, 3);
+    assert.equal(managementPaneCreations, 1);
+    assert.equal(managementEnsures, 4);
+
+    const recoveredRepository = new SqliteControllerRepository(
+      paths.databasePath,
+    );
+    try {
+      const recoveredSnapshot = recoveredRepository.loadSnapshot(runId);
+      assert.ok(recoveredSnapshot);
+      assert.deepEqual(recoveredSnapshot.run.managementPaneOrigin, {
+        workspaceId: runtime.workspaceId,
+        tabId: runtime.origin.tabId,
+        paneId: runtime.origin.paneId,
+      });
+      assert.equal(recoveredSnapshot.agents.length, 1);
+      assert.equal(recoveredSnapshot.agents[0]?.status, "idle");
+    } finally {
+      recoveredRepository.close();
+    }
 
     const database = new DatabaseSync(paths.databasePath, { readOnly: true });
     try {
@@ -1006,6 +1264,19 @@ if (args[0] === "--version") {
       launchEvidence.close();
     }
   } finally {
+    if (currentSurface !== null && currentContext !== null) {
+      await invokeParentLifecycle(
+        currentSurface,
+        "session_shutdown",
+        currentContext,
+      ).catch(() => undefined);
+    }
+    if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
+    else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
+    if (previousTab === undefined) delete process.env.HERDR_TAB_ID;
+    else process.env.HERDR_TAB_ID = previousTab;
+    if (previousPane === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = previousPane;
     await stopDiscoveredController(runtimeRoot, runId).catch(() => undefined);
     paneShell?.kill("SIGTERM");
     rmSync(runtimeRoot, { recursive: true, force: true });
