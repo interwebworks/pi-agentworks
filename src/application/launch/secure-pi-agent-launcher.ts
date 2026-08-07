@@ -437,12 +437,10 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     });
 
     const command = [plan.executablePath, ...plan.arguments];
+    const expectedProcessArgv = Object.freeze([nodePath, ...cliArguments]);
     let processIds = await this.#inspectProcessEvidence(
       request.paneId,
-      nodePath,
-      piCliPath,
-      request.sessionId,
-      artifacts.task.path,
+      expectedProcessArgv,
     );
     if (processIds === null) {
       const scriptPath = launchScript(
@@ -454,10 +452,7 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
       await this.#herdr.runCommand(request.paneId, ["/bin/sh", scriptPath]);
       processIds = await this.#awaitProcessEvidence(
         request.paneId,
-        nodePath,
-        piCliPath,
-        request.sessionId,
-        artifacts.task.path,
+        expectedProcessArgv,
       );
     }
     return Object.freeze({
@@ -530,10 +525,7 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
 
   async #inspectProcessEvidence(
     paneId: string,
-    nodePath: string,
-    piCliPath: string,
-    sessionId: string,
-    taskPath: string,
+    expectedArgv: readonly string[],
   ): Promise<readonly number[] | null> {
     const info: HerdrPaneProcessInfo =
       await this.#herdr.getPaneProcessInfo(paneId);
@@ -542,21 +534,19 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
         "Herdr process evidence belongs to a different pane",
       );
     }
+    const [nodePath, piCliPath] = expectedArgv;
     const exact = info.foregroundProcesses.filter((process) => {
       const argv = process.argv ?? [];
       return (
-        argv[0] === nodePath &&
-        argv.includes(piCliPath) &&
-        argv.includes("--session-id") &&
-        argv.includes(sessionId) &&
-        argv.includes(`@${taskPath}`)
+        argv.length === expectedArgv.length &&
+        argv.every((argument, index) => argument === expectedArgv[index])
       );
     });
     const conflictingPi = info.foregroundProcesses.some((process) => {
       const argv = process.argv ?? [];
       return (
         argv[0] === nodePath &&
-        argv.includes(piCliPath) &&
+        argv[1] === piCliPath &&
         !exact.includes(process)
       );
     });
@@ -572,18 +562,12 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
 
   async #awaitProcessEvidence(
     paneId: string,
-    nodePath: string,
-    piCliPath: string,
-    sessionId: string,
-    taskPath: string,
+    expectedArgv: readonly string[],
   ): Promise<readonly number[]> {
     for (let attempt = 0; attempt < this.#processPollAttempts; attempt += 1) {
       const processIds = await this.#inspectProcessEvidence(
         paneId,
-        nodePath,
-        piCliPath,
-        sessionId,
-        taskPath,
+        expectedArgv,
       );
       if (processIds !== null) return processIds;
       if (attempt + 1 < this.#processPollAttempts) {

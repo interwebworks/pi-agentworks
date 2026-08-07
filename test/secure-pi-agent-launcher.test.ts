@@ -224,9 +224,31 @@ function fixture() {
   herdr.processArgv = [
     nodePath,
     piCli,
+    "--provider",
+    request.provider,
+    "--model",
+    request.model,
+    "--thinking",
+    request.thinking,
+    "--system-prompt",
+    join(session, "role-system-prompt.md"),
+    "--tools",
+    request.task.allowedTools.join(","),
+    "--no-extensions",
+    "--extension",
+    childBridge,
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-approve",
+    "--session-dir",
+    join(session, "pi-sessions"),
     "--session-id",
     request.sessionId,
+    "--name",
+    `${request.role.label} · ${request.task.storyId}`,
     `@${join(session, "task-assignment.md")}`,
+    "Execute this assignment and keep the controller informed.",
   ];
   return {
     root,
@@ -348,6 +370,11 @@ test("read-only roles receive a read-only worktree without a writer lease", asyn
       },
       writerLeaseActive: false,
     };
+    current.herdr.processArgv = current.herdr.processArgv.map((argument) => {
+      if (argument === "read,edit,write,bash") return "read";
+      if (argument === "Builder · story-1") return "Reviewer · story-1";
+      return argument;
+    });
     await current.launcher.launch(current.request);
     const sandboxRequest = current.sandbox.requests[0];
     assert.ok(sandboxRequest);
@@ -434,17 +461,13 @@ test("relaunch after a kill point reuses the private artifacts idempotently", as
   }
 });
 
-test("reconciliation refuses conflicting Pi session evidence without sending another command", async () => {
+test("reconciliation refuses conflicting exact Pi launch evidence without sending another command", async () => {
   const current = fixture();
   try {
     await current.launcher.launch(current.request);
-    current.herdr.processArgv = [
-      current.request.nodePath,
-      current.request.piCliPath,
-      "--session-id",
-      "00000000-0000-4000-8000-000000000099",
-      `@${join(current.request.sessionPath, "task-assignment.md")}`,
-    ];
+    current.herdr.processArgv = current.herdr.processArgv.map((argument) =>
+      argument === current.request.model ? "gpt-conflicting" : argument,
+    );
     await assert.rejects(
       current.launcher.launch(current.request),
       /conflicting or duplicate interactive Pi process evidence/u,
