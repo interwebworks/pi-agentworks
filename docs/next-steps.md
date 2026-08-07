@@ -24,6 +24,8 @@ Acceptance evidence:
 
 ### 1.2 Resume a launch deferred by management bootstrap failure
 
+Status: Completed in `d645a55` with a parent-only resume action, dashboard-success gating, current-fence validation, launch-boundary checks, and concurrency coalescing.
+
 Record that the initial orchestration tick was deferred when mandatory dashboard startup fails.
 After `/agentworks status` successfully restores the dashboard, execute the deferred tick through an explicit idempotent resume operation.
 Require safe run state, current controller fencing, and proof that no launch set has already started.
@@ -173,7 +175,7 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
 ## Immediate execution order
 
 1. [x] Fix management-origin ownership and add cross-tab duplicate-prevention tests.
-2. [ ] Implement deferred-first-tick resume after successful dashboard recovery.
+2. [x] Implement deferred-first-tick resume after successful dashboard recovery.
 3. [x] Reconcile durable `launching` agents after failed process launch.
 4. [ ] Implement exact-slot pane and session restoration plus dead-controller recovery.
 5. [x] Enforce the global active-agent budget.
