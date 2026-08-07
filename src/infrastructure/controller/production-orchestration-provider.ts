@@ -92,14 +92,8 @@ function packageRootFromExecutable(path: string): string {
   );
 }
 
-function installSelectedModelConfiguration(
-  configPath: string,
-  providerId: string,
-  modelId: string,
-): void {
-  const source = join(homedir(), ".pi", "agent", "models.json");
-  if (!existsSync(source)) return;
-  const status = lstatSync(source);
+function trustedPrivateSource(path: string, label: string): void {
+  const status = lstatSync(path);
   if (
     status.isSymbolicLink() ||
     !status.isFile() ||
@@ -107,9 +101,58 @@ function installSelectedModelConfiguration(
     status.size > 1024 * 1024
   ) {
     throw new ProductionOrchestrationProviderError(
-      "global model configuration is not a trusted bounded file",
+      `${label} is not a trusted bounded file`,
     );
   }
+}
+
+export function installSelectedProviderAuthentication(
+  configPath: string,
+  providerId: string,
+  authenticationPath = join(homedir(), ".pi", "agent", "auth.json"),
+): void {
+  const source = authenticationPath;
+  if (!existsSync(source)) return;
+  trustedPrivateSource(source, "global authentication configuration");
+  const parsed: unknown = JSON.parse(readFileSync(source, "utf8"));
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ProductionOrchestrationProviderError(
+      "global authentication configuration is invalid",
+    );
+  }
+  const credential = (parsed as Record<string, unknown>)[providerId];
+  if (credential === undefined) return;
+  const destination = join(configPath, "auth.json");
+  const content = `${JSON.stringify({ [providerId]: credential }, null, 2)}\n`;
+  if (existsSync(destination)) {
+    trustedPrivateSource(destination, "private authentication configuration");
+    const existing: unknown = JSON.parse(readFileSync(destination, "utf8"));
+    if (
+      existing !== null &&
+      typeof existing === "object" &&
+      !Array.isArray(existing) &&
+      (existing as Record<string, unknown>)[providerId] !== undefined
+    ) {
+      return;
+    }
+    writeFileSync(destination, content, { encoding: "utf8", mode: 0o600 });
+    return;
+  }
+  writeFileSync(destination, content, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
+}
+
+function installSelectedModelConfiguration(
+  configPath: string,
+  providerId: string,
+  modelId: string,
+): void {
+  const source = join(homedir(), ".pi", "agent", "models.json");
+  if (!existsSync(source)) return;
+  trustedPrivateSource(source, "global model configuration");
   const parsed: unknown = JSON.parse(readFileSync(source, "utf8"));
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new ProductionOrchestrationProviderError(
@@ -390,6 +433,7 @@ export function createProductionOrchestrationProvider(
             provider,
             model,
           );
+          installSelectedProviderAuthentication(session.configPath, provider);
           return session;
         },
         cleanup: privateSessions.cleanup.bind(privateSessions),

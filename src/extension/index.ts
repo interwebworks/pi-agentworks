@@ -61,19 +61,6 @@ function createParentGateway(
   );
 }
 
-function permitsLoopbackHostNetwork(
-  model: NonNullable<ExtensionContext["model"]>,
-): boolean {
-  try {
-    const hostname = new URL(model.baseUrl).hostname;
-    return (
-      hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost"
-    );
-  } catch {
-    return false;
-  }
-}
-
 function withLaunchRuntime(
   request: ParentManagementRequest,
   context: Pick<ExtensionContext, "model" | "thinkingLevel">,
@@ -90,7 +77,10 @@ function withLaunchRuntime(
       provider: context.model.provider,
       model: context.model.id,
       thinking: context.thinkingLevel ?? "off",
-      allowHostNetwork: permitsLoopbackHostNetwork(context.model),
+      // Model calls must reach either a host-local or remote provider. This
+      // temporarily gives the child host networking while egress mediation is
+      // still under development.
+      allowHostNetwork: true,
     },
   });
 }

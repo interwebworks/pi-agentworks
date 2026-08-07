@@ -134,7 +134,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
 - [ ] Complete live child completion/recovery proof after the first production orchestration tick.
   - [x] Propagate the active parent Pi model/provider into detached composition, provision its selected private model configuration, and prove authenticated child session/operation events in a real Herdr tab.
-  - [x] Permit explicit host networking for loopback-backed active models, accepting that the child task tools share that widened network boundary.
+  - [x] Temporarily retain host networking for active model access, accepting that child task tools share the widened network boundary until mediated model egress is implemented.
+  - [x] Copy only the selected provider credential into each private child configuration so authenticated providers work without exposing unrelated provider credentials.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
