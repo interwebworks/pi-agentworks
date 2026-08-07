@@ -34,6 +34,8 @@ export interface ParentManagementRequest {
 export interface ParentManagementResult {
   readonly text: string;
   readonly notificationType?: "info" | "warning" | "error";
+  /** A newly initialized run that belongs to the calling parent Pi session. */
+  readonly launchedRunId?: string;
 }
 
 export interface ParentManagementGateway {

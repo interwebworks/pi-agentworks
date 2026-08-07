@@ -19,19 +19,28 @@ import {
 } from "./parent-command.ts";
 import { createDiscoveredParentManagementGateway } from "../infrastructure/controller/parent-management-gateway.ts";
 import { resolveAgentworksRuntimeRoot } from "../infrastructure/controller/runtime-root.ts";
+import { isControllerRunBackgroundWorkActive } from "../infrastructure/controller/controller-background-work.ts";
+import {
+  installAgentworksBackgroundWork,
+  type AgentworksBackgroundWorkOptions,
+} from "./background-work.ts";
 
 /**
  * Agentworks package entrypoint.
  *
- * The package remains completely dormant during ordinary Pi sessions until the
- * parent-extension backlog slice is complete.
+ * Ordinary parent sessions expose the Agentworks command, tool, and read-only
+ * background-work visibility.
  * A controller-launched sandbox selects child mode with an exact environment
  * marker and a private per-agent authentication capability.
  */
 export default function agentworks(pi: ExtensionAPI): void {
   const environment: ChildModeEnvironment = process.env;
   if (environment.AGENTWORKS_CHILD_MODE !== "1") {
-    installParentExtension(pi, createParentGateway(environment));
+    const runtimeRoot = resolveAgentworksRuntimeRoot(environment);
+    installParentExtension(pi, createParentGateway(environment, runtimeRoot), {
+      isRunActive: (runId) =>
+        isControllerRunBackgroundWorkActive(runtimeRoot, runId),
+    });
     return;
   }
   try {
@@ -53,20 +62,17 @@ export default function agentworks(pi: ExtensionAPI): void {
  */
 function createParentGateway(
   environment: ChildModeEnvironment,
+  runtimeRoot: string,
 ): ParentManagementGateway | null {
   const configuredHerdrPath = environment.AGENTWORKS_HERDR_PATH?.trim();
   const herdrPath =
     configuredHerdrPath === undefined || configuredHerdrPath.length === 0
       ? "herdr"
       : configuredHerdrPath;
-  return createDiscoveredParentManagementGateway(
-    resolveAgentworksRuntimeRoot(environment),
-    process.cwd(),
-    {
-      enableLiveComposition: true,
-      herdrPath,
-    },
-  );
+  return createDiscoveredParentManagementGateway(runtimeRoot, process.cwd(), {
+    enableLiveComposition: true,
+    herdrPath,
+  });
 }
 
 function withLaunchRuntime(
@@ -132,7 +138,14 @@ function updateParentStatusWidget(
 export function installParentExtension(
   pi: ExtensionAPI,
   gateway: ParentManagementGateway | null = null,
+  backgroundWorkOptions: AgentworksBackgroundWorkOptions = {
+    isRunActive: () => false,
+  },
 ): void {
+  const backgroundWork = installAgentworksBackgroundWork(
+    pi,
+    backgroundWorkOptions,
+  );
   pi.registerCommand("agentworks", {
     description:
       "Launch or inspect an Agentworks run. Usage: /agentworks [LOW|NORMAL|HIGH] <task> or /agentworks status <runId>",
@@ -153,6 +166,9 @@ export function installParentExtension(
           )
           .catch(gatewayFailure)
           .then((result) => {
+            if (result.launchedRunId !== undefined) {
+              backgroundWork.recordLaunchedRun(result.launchedRunId, ctx);
+            }
             updateParentStatusWidget(ctx.ui, result);
             ctx.ui.notify(result.text, result.notificationType ?? "info");
           });
@@ -188,6 +204,9 @@ export function installParentExtension(
           : await gateway
               .execute(withLaunchRuntime(input, context))
               .catch(gatewayFailure);
+      if (result.launchedRunId !== undefined) {
+        backgroundWork.recordLaunchedRun(result.launchedRunId, context);
+      }
       return {
         content: [{ type: "text" as const, text: result.text }],
         details: undefined,

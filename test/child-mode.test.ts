@@ -96,7 +96,7 @@ async function closeSocketFixture(
   rmSync(fixture.root, { recursive: true, force: true });
 }
 
-test("ordinary Pi sessions register only the parent /agentworks surface, no child-mode event handlers", () => {
+test("ordinary Pi sessions register the parent surface and session-scoped background visibility", () => {
   assert.equal(resolveChildModeConfiguration({}), null);
   assert.equal(
     resolveChildModeConfiguration({ AGENTWORKS_CHILD_MODE: "0" }),
@@ -108,7 +108,10 @@ test("ordinary Pi sessions register only the parent /agentworks surface, no chil
   try {
     const fake = fakeExtensionApi();
     agentworks(fake.api);
-    assert.equal(fake.handlers.size, 0);
+    assert.deepEqual(
+      [...fake.handlers.keys()],
+      ["session_start", "session_shutdown"],
+    );
     assert.deepEqual([...fake.commands.keys()], ["agentworks"]);
     assert.deepEqual([...fake.tools.keys()], ["agentworks"]);
   } finally {

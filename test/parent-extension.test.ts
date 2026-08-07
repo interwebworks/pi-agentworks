@@ -32,6 +32,9 @@ test("parent extension delegates launch commands and tool actions to its gateway
     },
   };
   const api = {
+    on() {
+      return undefined;
+    },
     registerCommand(
       name: string,
       options: { handler: (args: string, context: unknown) => Promise<void> },

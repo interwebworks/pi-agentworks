@@ -117,6 +117,7 @@ test("discovered parent launch supports a subsequent status request", async () =
     assert.match(launched.text, /no agent was started/u);
     runId = /Agentworks run (\S+) was saved/u.exec(launched.text)?.[1];
     assert.ok(runId);
+    assert.equal(launched.launchedRunId, runId);
     const status = await gateway.execute({ action: "status", runId });
     assert.match(status.text, /HIGH/u);
   } finally {

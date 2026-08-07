@@ -145,6 +145,11 @@ Acceptance evidence:
 
 ## 9. Reuse selected `pi-subagents` components
 
+Status: Partially completed with an exact `pi-subagents@0.38.0` production dependency and session-bound registration through the public `pi-subagents/background-work` export.
+Agentworks continues to own all execution, controller, Git, sandbox, Herdr, and recovery authority.
+The capability-ceiling API is deferred because its registry constrains pi-subagents execution rather than Agentworks child launches, so registering it here would duplicate policy and unexpectedly constrain unrelated delegation without strengthening Agentworks.
+The preflight API is deferred because its agent discovery, role, skill, model-fallback, extension, artifact, and launch-contract semantics conflict with the current Agentworks role-pack and secure-launch boundaries.
+
 Adopt `pi-subagents` only through stable public exports or attributed vendoring under its MIT license.
 Keep Agentworks authoritative for controller state, Git, worktrees, leases, fencing, Herdr ownership, sandboxing, and recovery.
 Never silently fall back to ordinary `pi-subagents` execution for an Agentworks run.

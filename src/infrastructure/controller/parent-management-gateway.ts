@@ -513,6 +513,7 @@ export function createDiscoveredParentManagementGateway(
         return Object.freeze({
           text: `Agentworks run ${runId} was saved, but no agent was started.${managementPane.text}`,
           notificationType: "error" as const,
+          launchedRunId: runId,
         });
       }
       if (run.complexity === "HIGH") {
@@ -520,6 +521,7 @@ export function createDiscoveredParentManagementGateway(
           return Object.freeze({
             text: `Agentworks run ${runId} was saved, but no agent was started because the active Pi model or Herdr workspace was unavailable to the extension.${managementPane.text}`,
             notificationType: "error" as const,
+            launchedRunId: runId,
           });
         }
         try {
@@ -529,6 +531,7 @@ export function createDiscoveredParentManagementGateway(
           });
           return Object.freeze({
             text: `Agentworks run ${runId} created and started for "${task}".${managementPane.text}`,
+            launchedRunId: runId,
           });
         } catch (error) {
           if (!(
@@ -540,11 +543,13 @@ export function createDiscoveredParentManagementGateway(
           return Object.freeze({
             text: `Agentworks run ${runId} created in planning state for "${task}". Live execution is not configured.${managementPane.text}`,
             notificationType: "warning" as const,
+            launchedRunId: runId,
           });
         }
       }
       return Object.freeze({
         text: `Agentworks run ${runId} created in planning state for "${task}".${managementPane.text}`,
+        launchedRunId: runId,
       });
     } finally {
       client.close();
