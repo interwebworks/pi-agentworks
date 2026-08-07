@@ -362,6 +362,55 @@ interface TrustedStatusControllerEvidence {
   readonly recovery: ReturnType<typeof assessStartupRecovery>;
 }
 
+type PrivateFileIdentity = Readonly<{
+  dev: bigint;
+  ino: bigint;
+  uid: number;
+  mode: number;
+  nlink: number;
+}>;
+
+function privateFileIdentity(path: string): PrivateFileIdentity {
+  const status = lstatSync(path, { bigint: true });
+  if (
+    status.isSymbolicLink() ||
+    !status.isFile() ||
+    status.nlink !== 1n ||
+    (status.mode & 0o077n) !== 0n ||
+    (typeof process.getuid === "function" &&
+      status.uid !== BigInt(process.getuid()))
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller database is not one private controller-owned file",
+    );
+  }
+  return Object.freeze({
+    dev: status.dev,
+    ino: status.ino,
+    uid: Number(status.uid),
+    mode: Number(status.mode),
+    nlink: Number(status.nlink),
+  });
+}
+
+function assertSamePrivateFileIdentity(
+  expected: PrivateFileIdentity,
+  path: string,
+): void {
+  const current = privateFileIdentity(path);
+  if (
+    current.dev !== expected.dev ||
+    current.ino !== expected.ino ||
+    current.uid !== expected.uid ||
+    current.mode !== expected.mode ||
+    current.nlink !== expected.nlink
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller database identity changed during trusted status recovery",
+    );
+  }
+}
+
 function processStillMatches(descriptor: ControllerRuntimeDescriptor): boolean {
   if (descriptor.processStartIdentity !== null) {
     return (
@@ -388,22 +437,12 @@ function readTrustedStatusControllerEvidence(
       "controller database is missing and will not be recreated by status",
     );
   }
-  const databaseStatus = lstatSync(paths.databasePath);
-  if (
-    databaseStatus.isSymbolicLink() ||
-    !databaseStatus.isFile() ||
-    databaseStatus.nlink !== 1 ||
-    (databaseStatus.mode & 0o077) !== 0 ||
-    (typeof process.getuid === "function" &&
-      databaseStatus.uid !== process.getuid())
-  ) {
-    throw new ParentManagementGatewayError(
-      "controller database is not one private controller-owned file",
-    );
-  }
+  const databaseIdentity = privateFileIdentity(paths.databasePath);
   const authToken = readControllerRuntimeAuthToken(runtimeRoot, runId);
   const repository = new SqliteControllerRepository(paths.databasePath);
+  let evidence: TrustedStatusControllerEvidence;
   try {
+    assertSamePrivateFileIdentity(databaseIdentity, paths.databasePath);
     repository.assertIntegrity();
     const record = repository.readControllerLaunchComposition(runId);
     if (record === null) {
@@ -428,14 +467,17 @@ function readTrustedStatusControllerEvidence(
         "controller run is missing from its database",
       );
     }
-    return Object.freeze({
+    evidence = Object.freeze({
       composition,
       lease: repository.readControllerLease(),
       recovery: assessStartupRecovery(current),
     });
+    assertSamePrivateFileIdentity(databaseIdentity, paths.databasePath);
   } finally {
     repository.close();
   }
+  assertSamePrivateFileIdentity(databaseIdentity, paths.databasePath);
+  return evidence;
 }
 
 async function ensureTrustedStatusController(
