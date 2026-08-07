@@ -68,6 +68,8 @@ Acceptance evidence:
 
 ## 4. Enforce one global active-agent limit
 
+Status: Completed in `52beb43` and `628c2c0` with deterministic orchestration admission, serialized tick reloads, and an atomic SQLite materialization guard.
+
 Replace role-local or story-local counting with a controller-authoritative active-agent budget.
 Count Project Managers, advisors, writers, reviewers, and any future active role against the same run-level limit.
 Reserve capacity explicitly and atomically before launch effects.
@@ -172,7 +174,7 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
 2. [ ] Implement deferred-first-tick resume after successful dashboard recovery.
 3. [ ] Reconcile durable `launching` agents after failed process launch.
 4. [ ] Implement exact-slot pane and session restoration plus dead-controller recovery.
-5. [ ] Enforce the global active-agent budget.
+5. [x] Enforce the global active-agent budget.
 6. [ ] Complete repeated multi-story reviewer, merge, cleanup, and completion flow.
 7. [ ] Run the large-grid and restart E2E matrix.
 8. [ ] Add advanced management controls and LOW/NORMAL confirmations.
