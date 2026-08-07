@@ -19,6 +19,10 @@ import {
 } from "../../domain/controller-state.ts";
 import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
 import { buildDashboardViewModel } from "../../application/tui/dashboard-view-model.ts";
+import {
+  integrationBranchForRun,
+  storyBranchForRun,
+} from "../../domain/workspace-naming.ts";
 import type { ControllerClientRequest } from "./unix-controller-transport.ts";
 import {
   ControllerRemoteError,
@@ -243,6 +247,7 @@ function launchTask(input: ParentManagementRequest): string {
 export function createDiscoveredParentManagementGateway(
   runtimeRoot: string,
   repositoryRoot: string,
+  options: { readonly enableLiveComposition?: boolean } = {},
 ): ParentManagementGateway {
   const clientFactory = createDiscoveredParentClientFactory(runtimeRoot);
   const launch = async (
@@ -252,9 +257,17 @@ export function createDiscoveredParentManagementGateway(
     const task = launchTask(input);
     const now = Date.now();
     const root = resolve(repositoryRoot);
+    const liveCompositionReady =
+      options.enableLiveComposition === true &&
+      process.env.HERDR_WORKSPACE_ID !== undefined &&
+      process.env.PI_PROVIDER !== undefined &&
+      process.env.PI_MODEL !== undefined;
     const supervisor = new DetachedControllerSupervisor({
       runtimeRoot,
       runId,
+      environment: liveCompositionReady
+        ? { AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1" }
+        : {},
     });
     await supervisor.ensureRunning();
     const client = await clientFactory(runId);
@@ -266,8 +279,8 @@ export function createDiscoveredParentManagementGateway(
         repositoryRoot: root,
         originalCheckout: root,
         baseBranch: "main",
-        integrationBranch: `agentworks/${runId}/integration`,
-        integrationWorktree: `${runtimeRoot}/${runId}/integration-worktree`,
+        integrationBranch: integrationBranchForRun(runId),
+        integrationWorktree: `${runtimeRoot}/worktrees/${runId}/integration-worktree`,
         createdAt: now,
       });
       const run = transitionRun(draftRun, {
@@ -278,8 +291,8 @@ export function createDiscoveredParentManagementGateway(
         id: `${runId}-story-1`,
         runId,
         title: task,
-        branchName: `agentworks/${runId}/story-1`,
-        worktreePath: `${runtimeRoot}/${runId}/story-1-worktree`,
+        branchName: storyBranchForRun(runId, `${runId}-story-1`),
+        worktreePath: `${runtimeRoot}/worktrees/${runId}/story-1-worktree`,
         planning: {
           narrative: task,
           objective: task,

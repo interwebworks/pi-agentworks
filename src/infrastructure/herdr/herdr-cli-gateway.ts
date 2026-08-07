@@ -368,13 +368,6 @@ function assertIdentifier(
   return value;
 }
 
-function shellQuote(value: string): string {
-  if (value.includes("\0")) {
-    throw new HerdrCliCommandError("Terminal command contains a null byte", []);
-  }
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
 function responseIssues(schema: Schema, value: unknown): readonly string[] {
   return [...Errors(schema, value)].map(
     (error) => `${error.instancePath || "/"}: ${error.message}`,
@@ -670,15 +663,27 @@ export class HerdrCliGateway implements HerdrGateway {
         [],
       );
     }
-    const quoted = command.map((argument) => shellQuote(argument)).join(" ");
-    if (Buffer.byteLength(quoted) > MAX_ARGUMENT_BYTES) {
+    const arguments_ = command.map((argument) => {
+      if (argument.includes("\0")) {
+        throw new HerdrCliCommandError(
+          "Terminal command contains a null byte",
+          [],
+        );
+      }
+      return assertText(
+        argument,
+        "Terminal command argument",
+        MAX_ARGUMENT_BYTES,
+      );
+    });
+    if (Buffer.byteLength(arguments_.join("\0")) > MAX_ARGUMENT_BYTES) {
       throw new HerdrCliCommandError("Terminal command is too large", []);
     }
     return this.#empty([
       "pane",
       "run",
       assertIdentifier(paneId, "pane"),
-      quoted,
+      ...arguments_,
     ]);
   }
 

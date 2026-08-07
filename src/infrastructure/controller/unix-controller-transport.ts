@@ -424,6 +424,13 @@ export class UnixControllerServer {
           error.message,
         );
       } else {
+        process.stderr.write(
+          `Controller request internal error: ${
+            error instanceof Error
+              ? (error.stack ?? error.message)
+              : String(error)
+          }\n`,
+        );
         response = protocolErrorResponse(
           request.requestId,
           "internal-error",

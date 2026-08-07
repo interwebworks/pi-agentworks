@@ -504,6 +504,7 @@ export class SqliteControllerRepository implements ControllerRepository {
     this.#assertTimeAndTtl(input.write.now, input.ttlMs);
     const lease = this.#transaction(() => {
       this.#assertFence(input.write);
+      this.#materializeWriterAssignment(input);
       const current = this.#writerLeaseRow(runId, storyId);
       if (isActiveWriterLeaseRow(current, input.write.now)) {
         if (current.owner_agent_id !== ownerAgentId) {
@@ -512,10 +513,20 @@ export class SqliteControllerRepository implements ControllerRepository {
             current.expires_at,
           );
         }
-        this.#assertAgentAssignedToStory(runId, storyId, ownerAgentId);
+        this.#assertAgentAssignedToStory(
+          runId,
+          storyId,
+          ownerAgentId,
+          input.agent !== undefined,
+        );
         return parseWriterLease(current);
       }
-      this.#assertAgentAssignedToStory(runId, storyId, ownerAgentId);
+      this.#assertAgentAssignedToStory(
+        runId,
+        storyId,
+        ownerAgentId,
+        input.agent !== undefined,
+      );
 
       const leaseToken = (current?.lease_token ?? 0) + 1;
       const expiresAt = input.write.now + input.ttlMs;
@@ -1232,10 +1243,71 @@ export class SqliteControllerRepository implements ControllerRepository {
     return row;
   }
 
+  #materializeWriterAssignment(input: AcquireWriterLeaseInput): void {
+    const agent = input.agent;
+    if (agent === undefined) return;
+    if (
+      agent.id !== input.ownerAgentId ||
+      agent.runId !== input.runId ||
+      agent.taskId !== input.storyId
+    ) {
+      throw new StaleWriterLeaseError(
+        "pending writer agent identity does not match the lease",
+      );
+    }
+    const storyRow = this.#database
+      .prepare(
+        "SELECT state_json FROM stories WHERE run_id = ? AND story_id = ?",
+      )
+      .get(input.runId, input.storyId) as unknown as StateRow | undefined;
+    if (storyRow === undefined) {
+      throw new StaleWriterLeaseError("assigned story is missing");
+    }
+    const story = parseJsonObject(storyRow.state_json, "writer lease story");
+    if (!isStoryState(story)) {
+      throw new ControllerDatabaseIntegrityError(
+        "writer lease story state is invalid",
+      );
+    }
+    if (
+      story.assignedAgentId !== null &&
+      story.assignedAgentId !== input.ownerAgentId
+    ) {
+      throw new StaleWriterLeaseError(
+        "story is already assigned to another agent",
+      );
+    }
+    if (story.assignedAgentId === null) {
+      this.#database
+        .prepare(
+          "UPDATE stories SET state_json = ? WHERE run_id = ? AND story_id = ?",
+        )
+        .run(
+          JSON.stringify({ ...story, assignedAgentId: input.ownerAgentId }),
+          input.runId,
+          input.storyId,
+        );
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO agents(agent_id, run_id, state_version, status, state_json)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(run_id, agent_id) DO NOTHING`,
+      )
+      .run(
+        agent.id,
+        agent.runId,
+        agent.schemaVersion,
+        agent.status,
+        JSON.stringify(agent),
+      );
+  }
+
   #assertAgentAssignedToStory(
     runId: string,
     storyId: string,
     ownerAgentId: string,
+    allowPendingReady = false,
   ): void {
     const storyRow = this.#database
       .prepare(
@@ -1266,7 +1338,10 @@ export class SqliteControllerRepository implements ControllerRepository {
         "agent is not assigned to the story worktree",
       );
     }
-    if (!["assigned", "working", "changes-requested"].includes(story.status)) {
+    if (
+      !allowPendingReady &&
+      !["assigned", "working", "changes-requested"].includes(story.status)
+    ) {
       throw new StaleWriterLeaseError(
         `story status ${story.status} cannot hold a writer lease`,
       );

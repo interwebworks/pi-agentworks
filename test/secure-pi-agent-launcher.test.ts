@@ -53,6 +53,7 @@ class FakeHerdrLaunch {
   readonly commands: readonly string[][] = [];
   processPolls = 0;
   processAppears = true;
+  processArgv: readonly string[] = [];
 
   constructor(worktree: string) {
     this.pane = {
@@ -88,7 +89,8 @@ class FakeHerdrLaunch {
 
   getPaneProcessInfo() {
     this.processPolls += 1;
-    const command = this.commands[0] ?? [];
+    const command =
+      this.processArgv.length > 0 ? this.processArgv : (this.commands[0] ?? []);
     return Promise.resolve({
       paneId: "w1P:pA",
       shellPid: 100,
@@ -219,6 +221,13 @@ function fixture() {
     controllerFenceCurrent: true,
     expectedRevisionMatches: true,
   };
+  herdr.processArgv = [
+    nodePath,
+    piCli,
+    "--session-id",
+    request.sessionId,
+    `@${join(session, "task-assignment.md")}`,
+  ];
   return {
     root,
     request,
@@ -257,6 +266,7 @@ test("composes one fenced interactive Pi process through Bubblewrap and Herdr", 
       evidence.controllerCapabilityPath,
     );
     assert.equal(sandbox.environment.OPENAI_API_KEY, undefined);
+    assert.deepEqual(current.herdr.commands[0]?.slice(0, 1), ["/bin/sh"]);
     assert.equal(sandbox.readOnlyPaths.includes(evidence.rolePromptPath), true);
     assert.equal(sandbox.readOnlyPaths.includes(evidence.taskPromptPath), true);
     assert.equal(

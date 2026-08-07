@@ -194,6 +194,31 @@ function writeDurableArtifact(
   }
 }
 
+function shellQuote(value: string): string {
+  if (value.includes("\0")) {
+    throw new SecurePiAgentLaunchError("Launch command contains a null byte");
+  }
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function launchScript(
+  runtimePath: string,
+  agentId: string,
+  sessionId: string,
+  command: readonly string[],
+): string {
+  const directory = join(runtimePath, "launch-scripts");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertPrivateDirectory(directory, "launch script directory");
+  const name = `${agentId}-${sessionId}.sh`;
+  const script = writeDurableArtifact(
+    directory,
+    name,
+    `#!/bin/sh\nexec ${command.map(shellQuote).join(" ")}\n`,
+  );
+  return script.path;
+}
+
 function rolePrompt(request: PiAgentLaunchRequest): string {
   return `# Agentworks role: ${request.role.label}
 
@@ -412,7 +437,13 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     });
 
     const command = [plan.executablePath, ...plan.arguments];
-    await this.#herdr.runCommand(request.paneId, command);
+    const scriptPath = launchScript(
+      runtimePath,
+      request.task.assignedAgentId,
+      request.sessionId,
+      command,
+    );
+    await this.#herdr.runCommand(request.paneId, ["/bin/sh", scriptPath]);
     const processInfo = await this.#awaitProcessEvidence(
       request.paneId,
       piCliPath,
@@ -450,8 +481,12 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     if (!MODEL_PATTERN.test(request.model)) {
       throw new SecurePiAgentLaunchError("Pi model is invalid");
     }
+    const roleRuntimeId =
+      "runtimeId" in request.role && typeof request.role.runtimeId === "string"
+        ? request.role.runtimeId
+        : request.role.id;
     if (
-      request.role.id !== request.task.assignedRole ||
+      roleRuntimeId !== request.task.assignedRole ||
       request.role.writePolicy !== request.task.writePolicy
     ) {
       throw new SecurePiAgentLaunchError(

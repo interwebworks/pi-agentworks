@@ -55,6 +55,7 @@ function createParentGateway(
   return createDiscoveredParentManagementGateway(
     resolveAgentworksRuntimeRoot(environment),
     process.cwd(),
+    { enableLiveComposition: true },
   );
 }
 

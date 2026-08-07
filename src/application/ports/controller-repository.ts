@@ -64,6 +64,8 @@ export interface AcquireWriterLeaseInput {
   readonly storyId: string;
   readonly ownerAgentId: string;
   readonly ttlMs: number;
+  /** New agent state to persist atomically before first lease acquisition. */
+  readonly agent?: AgentState;
 }
 
 export interface HeldWriterLeaseInput {

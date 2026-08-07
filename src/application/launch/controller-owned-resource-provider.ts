@@ -133,6 +133,7 @@ export class ControllerOwnedAssignmentResourceProvider {
           storyId: story.id,
           ownerAgentId: resources.agent.id,
           ttlMs: this.#writerLeaseTtlMs,
+          agent: resources.agent,
         });
         if (
           lease.ownerAgentId !== resources.agent.id ||

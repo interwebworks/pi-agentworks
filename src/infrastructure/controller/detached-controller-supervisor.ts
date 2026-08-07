@@ -47,6 +47,7 @@ export interface DetachedControllerSupervisorOptions {
   readonly pollIntervalMs?: number;
   readonly leaseTtlMs?: number;
   readonly renewIntervalMs?: number;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly clock?: () => number;
 }
 
@@ -133,6 +134,7 @@ export class DetachedControllerSupervisor {
   readonly #pollIntervalMs: number;
   readonly #leaseTtlMs: number | null;
   readonly #renewIntervalMs: number | null;
+  readonly #environment: Readonly<Record<string, string | undefined>>;
   readonly #clock: () => number;
 
   constructor(options: DetachedControllerSupervisorOptions) {
@@ -164,6 +166,10 @@ export class DetachedControllerSupervisor {
       options.renewIntervalMs === undefined
         ? null
         : positiveSafeInteger(options.renewIntervalMs, "renew interval");
+    this.#environment = Object.freeze({
+      ...process.env,
+      ...options.environment,
+    });
     if (
       this.#leaseTtlMs !== null &&
       this.#renewIntervalMs !== null &&
@@ -358,6 +364,7 @@ export class DetachedControllerSupervisor {
         {
           detached: true,
           shell: false,
+          env: this.#environment,
           stdio: ["ignore", logDescriptor, logDescriptor],
         },
       );

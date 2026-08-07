@@ -131,7 +131,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Derive controller socket/runtime endpoint evidence from the live descriptor and current fence ownership.
 - [x] Add exact environment enablement gating for configured orchestration composition providers.
 - [x] Add a host-supplied process dependency adapter that passes only explicitly enabled trusted providers.
-- [ ] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
+- [x] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
+- [ ] Complete live child completion/recovery proof after the first production orchestration tick.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.

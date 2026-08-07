@@ -24,6 +24,7 @@ import {
   ControllerRuntimeError,
 } from "../infrastructure/controller/controller-runtime.ts";
 import { ControllerRequestError } from "../infrastructure/controller/unix-controller-transport.ts";
+import { createProductionOrchestrationProvider } from "../infrastructure/controller/production-orchestration-provider.ts";
 
 export interface ControllerOrchestrationExecutor {
   execute(write: FencedWrite): Promise<JsonValue>;
@@ -575,9 +576,16 @@ export async function runControllerProcess(
 
 async function main(): Promise<void> {
   const configuration = parseArguments(process.argv.slice(2));
+  const productionProvider =
+    process.env.AGENTWORKS_ENABLE_LIVE_ORCHESTRATION === "1"
+      ? createProductionOrchestrationProvider(
+          process.env,
+          fileURLToPath(new URL("../..", import.meta.url)),
+        )
+      : undefined;
   const orchestrationFactory = resolveConfiguredOrchestrationProvider(
     process.env,
-    undefined,
+    productionProvider,
   );
   process.exitCode = await runControllerProcess(
     configuration,

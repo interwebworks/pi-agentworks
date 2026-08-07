@@ -334,7 +334,10 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
     "pane",
     "run",
     "w1P:p5",
-    "'/usr/bin/bwrap' 'space value' '$(touch /tmp/injected)' 'quote'\"'\"'value'",
+    "/usr/bin/bwrap",
+    "space value",
+    "$(touch /tmp/injected)",
+    "quote'value",
   ]);
   assert.deepEqual(executor.calls[9]?.arguments_, [
     "pane",
