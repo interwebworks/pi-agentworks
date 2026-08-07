@@ -16,6 +16,7 @@ import {
   createStoryState,
   transitionRun,
   transitionStory,
+  type ManagementPaneOrigin,
 } from "../../domain/controller-state.ts";
 import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
 import { GitCliRepositoryInspector } from "../git/git-cli-repository-inspector.ts";
@@ -289,18 +290,24 @@ export function createDiscoveredParentManagementGateway(
       : options.managementPaneLauncher;
   const bootstrapManagementPane = async (
     runId: string,
-    runtime: ParentManagementRequest["runtime"],
+    origin: ManagementPaneOrigin | undefined,
   ): Promise<{ readonly text: string; readonly failed: boolean }> => {
-    if (managementPaneLauncher === null || runtime?.origin === undefined) {
+    if (managementPaneLauncher === null) {
       return Object.freeze({ text: "", failed: false });
+    }
+    if (origin === undefined) {
+      return Object.freeze({
+        text: " Management pane recovery refused: the controller has no authoritative parent origin.",
+        failed: true,
+      });
     }
     try {
       const evidence = await managementPaneLauncher.ensure({
         runId,
         runtimeRoot,
-        workspaceId: runtime.workspaceId,
-        parentTabId: runtime.origin.tabId,
-        parentPaneId: runtime.origin.paneId,
+        workspaceId: origin.workspaceId,
+        parentTabId: origin.tabId,
+        parentPaneId: origin.paneId,
       });
       return Object.freeze({
         text: ` Management pane: ${evidence.paneId}.`,
@@ -378,6 +385,15 @@ export function createDiscoveredParentManagementGateway(
         baseBranch: "main",
         integrationBranch: integrationBranchForRun(runId),
         integrationWorktree: `${runtimeRoot}/worktrees/${runId}/integration-worktree`,
+        ...(selectedRuntime?.origin === undefined
+          ? {}
+          : {
+              managementPaneOrigin: Object.freeze({
+                workspaceId: selectedRuntime.workspaceId,
+                tabId: selectedRuntime.origin.tabId,
+                paneId: selectedRuntime.origin.paneId,
+              }),
+            }),
         createdAt: now,
       });
       const run = transitionRun(draftRun, {
@@ -445,7 +461,7 @@ export function createDiscoveredParentManagementGateway(
       });
       const managementPane = await bootstrapManagementPane(
         runId,
-        selectedRuntime,
+        run.managementPaneOrigin,
       );
       if (managementPane.failed) {
         return Object.freeze({
@@ -489,13 +505,32 @@ export function createDiscoveredParentManagementGateway(
     }
   };
   const gateway = new ControllerParentManagementGateway(clientFactory, launch);
+  const readManagementPaneOrigin = async (
+    runId: string,
+  ): Promise<ManagementPaneOrigin | undefined> => {
+    const client = await clientFactory(runId);
+    try {
+      const current = snapshot(
+        await client.request({ action: "snapshot.get", payload: {} }),
+      );
+      return current.run.managementPaneOrigin;
+    } finally {
+      client.close();
+    }
+  };
   return Object.freeze({
     async execute(input: ParentManagementRequest) {
       const result = await gateway.execute(input);
-      if (input.action !== "status" || input.runId === undefined) return result;
+      if (
+        input.action !== "status" ||
+        input.runId === undefined ||
+        managementPaneLauncher === null
+      ) {
+        return result;
+      }
       const managementPane = await bootstrapManagementPane(
         input.runId,
-        input.runtime,
+        await readManagementPaneOrigin(input.runId),
       );
       if (managementPane.text.length === 0) return result;
       return Object.freeze({

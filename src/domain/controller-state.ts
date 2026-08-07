@@ -42,6 +42,12 @@ export type AgentStatus =
   | "disconnected"
   | "closed";
 
+export interface ManagementPaneOrigin {
+  readonly workspaceId: string;
+  readonly tabId: string;
+  readonly paneId: string;
+}
+
 export interface RunState {
   readonly schemaVersion: typeof CONTROLLER_STATE_SCHEMA_VERSION;
   readonly id: string;
@@ -53,6 +59,8 @@ export interface RunState {
   readonly baseBranch: string;
   readonly integrationBranch: string;
   readonly integrationWorktree: string;
+  /** Immutable launch ownership used for fail-closed management recovery. */
+  readonly managementPaneOrigin?: ManagementPaneOrigin;
   readonly blockedReason: string | null;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -228,6 +236,16 @@ export const RunStateSchema = Type.Object(
     baseBranch: NonEmptyStateString,
     integrationBranch: NonEmptyStateString,
     integrationWorktree: NonEmptyStateString,
+    managementPaneOrigin: Type.Optional(
+      Type.Object(
+        {
+          workspaceId: NonEmptyStateString,
+          tabId: NonEmptyStateString,
+          paneId: NonEmptyStateString,
+        },
+        { additionalProperties: false },
+      ),
+    ),
     blockedReason: NullableStateString,
     createdAt: StateTimestamp,
     updatedAt: StateTimestamp,

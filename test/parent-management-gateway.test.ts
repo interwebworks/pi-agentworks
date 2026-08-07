@@ -131,7 +131,7 @@ test("discovered parent launch supports a subsequent status request", async () =
   }
 });
 
-test("launch creates the management dashboard beside the originating parent pane", async () => {
+test("status from another pane restores management beside the controller-recorded origin", async () => {
   const runtimeRoot = mkdtempSync(
     join(tmpdir(), "agentworks-management-pane-"),
   );
@@ -171,7 +171,14 @@ test("launch creates the management dashboard beside the originating parent pane
     runId = /Agentworks run (\S+) created/u.exec(result.text)?.[1];
     assert.ok(runId);
     assert.match(result.text, /Management pane: w1P:p2/u);
-    const status = await gateway.execute({ action: "status", runId, runtime });
+    const status = await gateway.execute({
+      action: "status",
+      runId,
+      runtime: {
+        ...runtime,
+        origin: { tabId: "w1P:t9", paneId: "w1P:p9" },
+      },
+    });
     assert.match(status.text, /Management pane: w1P:p2/u);
     assert.deepEqual(requests, [
       {
@@ -206,6 +213,7 @@ test("launch creates the management dashboard beside the originating parent pane
 test("management pane failure prevents agents and status retries bootstrap", async () => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-pane-retry-"));
   let attempts = 0;
+  const requests: unknown[] = [];
   let runId: string | undefined;
   const runtime = {
     workspaceId: "w1P",
@@ -221,7 +229,8 @@ test("management pane failure prevents agents and status retries bootstrap", asy
       process.cwd(),
       {
         managementPaneLauncher: {
-          ensure() {
+          ensure(request) {
+            requests.push(request);
             attempts += 1;
             if (attempts === 1) throw new Error("split interrupted");
             return Promise.resolve({
@@ -244,9 +253,26 @@ test("management pane failure prevents agents and status retries bootstrap", asy
     assert.equal(launch.notificationType, "error");
     assert.match(launch.text, /Retry with \/agentworks status/u);
 
-    const status = await gateway.execute({ action: "status", runId, runtime });
+    const status = await gateway.execute({
+      action: "status",
+      runId,
+      runtime: {
+        ...runtime,
+        origin: { tabId: "w1P:t8", paneId: "w1P:p8" },
+      },
+    });
     assert.match(status.text, /Management pane: w1P:p2/u);
     assert.equal(attempts, 2);
+    assert.deepEqual(
+      requests.map((request) => {
+        const value = request as { parentTabId: string; parentPaneId: string };
+        return [value.parentTabId, value.parentPaneId];
+      }),
+      [
+        ["w1P:t2", "w1P:p1"],
+        ["w1P:t2", "w1P:p1"],
+      ],
+    );
   } finally {
     if (runId !== undefined) {
       const client =

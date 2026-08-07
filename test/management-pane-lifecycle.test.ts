@@ -85,6 +85,7 @@ class FakeManagementHerdr {
   readonly splitRequests: HerdrSplitPaneRequest[] = [];
   readonly renames: { paneId: string; label: string }[] = [];
   readonly metadata: HerdrPaneMetadataReport[] = [];
+  readonly listWorkspaceIds: (string | undefined)[] = [];
   layoutIsAdjacent = true;
 
   constructor(panes: HerdrPane[], processEvidence: FakeProcessEvidence) {
@@ -93,6 +94,7 @@ class FakeManagementHerdr {
   }
 
   listPanes(workspaceId?: string): Promise<readonly HerdrPane[]> {
+    this.listWorkspaceIds.push(workspaceId);
     return Promise.resolve(
       this.panes.filter(
         (candidate) =>
@@ -253,6 +255,76 @@ test("recovers a split interrupted before rename or metadata and remains idempot
   });
   assert.equal(repeated.paneId, "w1P:p2");
   assert.equal(fixture.herdr.splitRequests.length, 0);
+});
+
+test("globally rejects duplicate operation ownership before splitting", async () => {
+  const fixture = lifecycle([
+    pane("w1P:p1"),
+    pane("w1P:p2"),
+    pane("w9X:p7", {
+      workspaceId: "w9X",
+      tabId: "w9X:t4",
+      focused: false,
+    }),
+  ]);
+  fixture.process.environments.set("w1P:p2", OWNERSHIP_ENVIRONMENT);
+  fixture.process.environments.set("w9X:p7", OWNERSHIP_ENVIRONMENT);
+
+  await assert.rejects(
+    fixture.lifecycle.ensure(REQUEST),
+    /Multiple Herdr panes claim the same management operation/u,
+  );
+  assert.deepEqual(fixture.herdr.listWorkspaceIds, [undefined]);
+  assert.equal(fixture.herdr.splitRequests.length, 0);
+});
+
+test("rejects interrupted ownership with parent or pane-location drift before splitting", async () => {
+  const processDrift = lifecycle([pane("w1P:p1"), pane("w1P:p2")]);
+  processDrift.process.environments.set("w1P:p2", {
+    ...OWNERSHIP_ENVIRONMENT,
+    AGENTWORKS_PARENT_PANE_ID: "w1P:p9",
+  });
+  await assert.rejects(
+    processDrift.lifecycle.ensure(REQUEST),
+    /process ownership has parent-origin drift/u,
+  );
+  assert.equal(processDrift.herdr.splitRequests.length, 0);
+
+  const metadataDrift = lifecycle([
+    pane("w1P:p1"),
+    pane("w1P:p2", {
+      tokens: {
+        aw_kind: "management",
+        aw_operation: "manage-op-1",
+        aw_parent: "w1P:p9",
+        aw_run: "run-1",
+      },
+    }),
+  ]);
+  metadataDrift.process.environments.set("w1P:p2", OWNERSHIP_ENVIRONMENT);
+  await assert.rejects(
+    metadataDrift.lifecycle.ensure(REQUEST),
+    /metadata has parent-origin drift/u,
+  );
+  assert.equal(metadataDrift.herdr.splitRequests.length, 0);
+
+  const movedSplit = lifecycle([
+    pane("w1P:p1"),
+    pane("w1P:p2", { tabId: "w1P:t3" }),
+  ]);
+  movedSplit.process.environments.set("w1P:p2", OWNERSHIP_ENVIRONMENT);
+  await assert.rejects(
+    movedSplit.lifecycle.ensure(REQUEST),
+    /identity or working directory does not match/u,
+  );
+  assert.equal(movedSplit.herdr.splitRequests.length, 0);
+
+  const movedParent = lifecycle([pane("w1P:p1", { tabId: "w1P:t3" })]);
+  await assert.rejects(
+    movedParent.lifecycle.ensure(REQUEST),
+    /controller-recorded parent Herdr pane is absent or has moved/u,
+  );
+  assert.equal(movedParent.herdr.splitRequests.length, 0);
 });
 
 test("fails closed on ownership spoofing, duplicate claims, stale controller identity, and moved layouts", async () => {
