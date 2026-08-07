@@ -261,6 +261,63 @@ test("child bridge authenticates before any model turn and closes on shutdown", 
   );
 });
 
+test("child bridge re-authenticates after the controller closes an idle connection", async () => {
+  const fake = fakeExtensionApi();
+  const actions: string[] = [];
+  let clientNumber = 0;
+  installChildBridge(
+    fake.api,
+    {
+      runId: "run-1",
+      agentId: "agent-1",
+      controllerSocketPath: "/runtime/controller.sock",
+      controllerAuthToken: "A".repeat(43),
+    },
+    () => {
+      clientNumber += 1;
+      const currentClient = clientNumber;
+      let messageCount = 0;
+      return {
+        connect() {
+          actions.push(`connect:${String(currentClient)}`);
+          return Promise.resolve();
+        },
+        request(input) {
+          actions.push(`${input.action}:${String(currentClient)}`);
+          if (input.action === "agent.message") {
+            messageCount += 1;
+            if (currentClient === 1 && messageCount === 3) {
+              return Promise.reject(new Error("idle socket closed"));
+            }
+          }
+          return Promise.resolve({
+            runId: "run-1",
+            agentId: "agent-1",
+            revision: 7,
+            status: "working",
+          });
+        },
+        close: () => undefined,
+      };
+    },
+  );
+
+  await invoke(fake.handlers, "session_start");
+  await invokeEvent(fake.handlers, "agent_start", {});
+  await invokeEvent(fake.handlers, "tool_execution_start", {
+    toolName: "edit",
+  });
+
+  assert.equal(clientNumber, 2);
+  assert.equal(await invoke(fake.handlers, "tool_call"), undefined);
+  assert.deepEqual(actions.slice(-4), [
+    "agent.message:1",
+    "connect:2",
+    "child.hello:2",
+    "agent.message:2",
+  ]);
+});
+
 test("child operation errors emit blocker and failed-result messages", async () => {
   const fake = fakeExtensionApi();
   const messages: ReturnType<typeof decodeAgentMessage>[] = [];

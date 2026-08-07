@@ -278,16 +278,46 @@ export function installChildBridge(
     await nextClient.request({ action: "agent.message", payload });
   };
 
+  const connectAuthenticatedClient =
+    async (): Promise<ChildControllerClient> => {
+      const nextClient = clientFactory(configuration);
+      await nextClient.connect();
+      try {
+        const response = await nextClient.request({
+          action: "child.hello",
+          payload: {},
+        });
+        assertHelloResponse(response, configuration);
+        return nextClient;
+      } catch (error) {
+        nextClient.close();
+        throw error;
+      }
+    };
+
   const reportMessage = (message: AgentMessage): Promise<void> => {
     const queued = messageQueue.then(async () => {
       const activeClient = client;
       if (!authenticated || activeClient === null) return;
       try {
         await sendMessage(activeClient, message);
+        return;
+      } catch {
+        activeClient.close();
+        if (client === activeClient) client = null;
+      }
+
+      // The controller intentionally closes idle Unix connections. Model
+      // reasoning can exceed that timeout, so re-authenticate once using the
+      // same bounded child capability before failing closed.
+      try {
+        const replacement = await connectAuthenticatedClient();
+        client = replacement;
+        await sendMessage(replacement, message);
       } catch {
         authenticated = false;
+        client?.close();
         client = null;
-        activeClient.close();
       }
     });
     messageQueue = queued.catch(() => undefined);
@@ -301,15 +331,10 @@ export function installChildBridge(
     sessionId = randomUUID();
     messageQueue = Promise.resolve();
     client?.close();
-    const nextClient = clientFactory(configuration);
-    client = nextClient;
+    let nextClient: ChildControllerClient | null = null;
     try {
-      await nextClient.connect();
-      const response = await nextClient.request({
-        action: "child.hello",
-        payload: {},
-      });
-      assertHelloResponse(response, configuration);
+      nextClient = await connectAuthenticatedClient();
+      client = nextClient;
       const contextWithSession = context as unknown as {
         sessionManager?: { getSessionFile?: () => string };
       };
@@ -331,7 +356,7 @@ export function installChildBridge(
       );
       authenticated = true;
     } catch (error) {
-      nextClient.close();
+      nextClient?.close();
       if (client === nextClient) client = null;
       context.shutdown();
       throw new ChildBridgeUnavailableError(

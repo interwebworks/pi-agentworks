@@ -136,6 +136,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Propagate the active parent Pi model/provider into detached composition, provision its selected private model configuration, and prove authenticated child session/operation events in a real Herdr tab.
   - [x] Temporarily retain host networking for active model access, accepting that child task tools share the widened network boundary until mediated model egress is implemented.
   - [x] Copy only the selected provider credential into each private child configuration so authenticated providers work without exposing unrelated provider credentials.
+  - [x] Reconnect and re-authenticate the child bridge after the controller's bounded idle timeout so long model reasoning does not permanently disable tools.
 - [ ] Implement bounded idle detection and Project Manager `.` nudges.
 - [ ] Implement reviewer approval and renewed-review rules after relevant changes.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
