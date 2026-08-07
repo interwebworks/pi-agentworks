@@ -1,4 +1,53 @@
 import { getComplexityPolicy, type ComplexityMode } from "./complexity.ts";
+import type { AgentStatus } from "./controller-state.ts";
+
+const AGENT_CAPACITY_RELEASE_STATUSES: ReadonlySet<AgentStatus> = new Set([
+  "completed",
+  "failed",
+  "closed",
+]);
+
+export interface AgentCapacityOccupant {
+  readonly status: AgentStatus;
+}
+
+export interface AgentCapacity {
+  readonly limit: number;
+  readonly occupied: number;
+  readonly available: number;
+}
+
+/**
+ * Every persisted agent reserves one run-level slot until it reaches a valid
+ * terminal status. In particular, planned/launching agents are reservations,
+ * while blocked and disconnected agents remain recoverable active work.
+ */
+export function occupiesAgentCapacity(status: AgentStatus): boolean {
+  return !AGENT_CAPACITY_RELEASE_STATUSES.has(status);
+}
+
+export function countOccupiedAgentSlots(
+  agents: readonly AgentCapacityOccupant[],
+): number {
+  return agents.filter((agent) => occupiesAgentCapacity(agent.status)).length;
+}
+
+export function agentCapacity(
+  mode: ComplexityMode,
+  occupied: number,
+): AgentCapacity {
+  if (!Number.isSafeInteger(occupied) || occupied < 0) {
+    throw new SchedulingError(
+      "occupied agent count must be a non-negative integer",
+    );
+  }
+  const limit = getComplexityPolicy(mode).maximumAgents;
+  return Object.freeze({
+    limit,
+    occupied,
+    available: Math.max(0, limit - occupied),
+  });
+}
 
 export type StorySchedulingStatus = "pending" | "running" | "done" | "failed";
 
@@ -27,9 +76,10 @@ export class SchedulingError extends Error {
 }
 
 /**
- * The maximum number of stories a mode may run concurrently. The agent limit
- * includes the Project Manager and one reviewer, so the writable-story budget
- * is two fewer; never below one.
+ * The independent maximum number of stories a mode may run concurrently. It
+ * preserves room for the Project Manager and one reviewer as before; the
+ * run-level capacity guard separately counts advisors, additional reviewers,
+ * reservations, and every other nonterminal agent.
  */
 export function storyConcurrencyCap(mode: ComplexityMode): number {
   return Math.max(1, getComplexityPolicy(mode).maximumAgents - 2);

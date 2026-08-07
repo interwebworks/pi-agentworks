@@ -28,6 +28,10 @@ import {
   type RunState,
   type StoryState,
 } from "../../domain/controller-state.ts";
+import {
+  agentCapacity,
+  countOccupiedAgentSlots,
+} from "../../domain/scheduling.ts";
 
 const DATABASE_SCHEMA_VERSION = 2;
 const MAX_EVENT_READ_LIMIT = 1_000;
@@ -35,6 +39,10 @@ const MAX_EVENTS_PER_COMMIT = 100;
 
 interface RevisionRow {
   readonly revision: number;
+}
+
+interface CountRow {
+  readonly count: number;
 }
 
 interface StateRow {
@@ -130,6 +138,22 @@ export class StaleWriterLeaseError extends ControllerRepositoryError {
   constructor(reason: string) {
     super(`Writer lease check failed: ${reason}`);
     this.name = "StaleWriterLeaseError";
+  }
+}
+
+export class AgentCapacityExceededError extends ControllerRepositoryError {
+  readonly runId: string;
+  readonly limit: number;
+  readonly occupied: number;
+
+  constructor(runId: string, limit: number, occupied: number) {
+    super(
+      `Run ${runId} has exhausted its global active-agent limit (${String(occupied)}/${String(limit)})`,
+    );
+    this.name = "AgentCapacityExceededError";
+    this.runId = runId;
+    this.limit = limit;
+    this.occupied = occupied;
   }
 }
 
@@ -303,6 +327,16 @@ function validateSnapshotMembers(
       );
     }
     agentIds.add(agent.id);
+  }
+
+  const capacity = agentCapacity(
+    run.complexity,
+    countOccupiedAgentSlots(agents),
+  );
+  if (capacity.occupied > capacity.limit) {
+    throw new InvalidControllerSnapshotError(
+      `run ${run.id} exceeds its global active-agent limit (${String(capacity.occupied)}/${String(capacity.limit)})`,
+    );
   }
 }
 
@@ -528,6 +562,8 @@ export class SqliteControllerRepository implements ControllerRepository {
             `agent ${launched.id} is already ${current.status}`,
           );
         }
+      } else {
+        this.#assertAgentSlotAvailable(launched.runId);
       }
       this.#database
         .prepare(
@@ -1345,6 +1381,14 @@ export class SqliteControllerRepository implements ControllerRepository {
           input.storyId,
         );
     }
+    const existingAgent = this.#database
+      .prepare(
+        "SELECT 1 AS count FROM agents WHERE run_id = ? AND agent_id = ?",
+      )
+      .get(agent.runId, agent.id) as unknown as CountRow | undefined;
+    if (existingAgent === undefined) {
+      this.#assertAgentSlotAvailable(agent.runId);
+    }
     this.#database
       .prepare(
         `INSERT INTO agents(agent_id, run_id, state_version, status, state_json)
@@ -1599,6 +1643,36 @@ export class SqliteControllerRepository implements ControllerRepository {
         state.status,
         stringifyJson(state),
       );
+    }
+  }
+
+  #assertAgentSlotAvailable(runId: string): void {
+    const runRow = this.#database
+      .prepare("SELECT state_json FROM runs WHERE run_id = ?")
+      .get(runId) as unknown as StateRow | undefined;
+    if (runRow === undefined) {
+      throw new ControllerRepositoryError(`Run ${runId} does not exist`);
+    }
+    const run = parseJsonObject(runRow.state_json, "agent capacity run state");
+    if (!isRunState(run)) {
+      throw new ControllerDatabaseIntegrityError(
+        "agent capacity run state is invalid",
+      );
+    }
+    const countRow = this.#database
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM agents
+         WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'closed')`,
+      )
+      .get(runId) as unknown as CountRow;
+    const occupied = asSafeInteger(
+      countRow.count,
+      "occupied agent capacity count",
+    );
+    const capacity = agentCapacity(run.complexity, occupied);
+    if (capacity.available === 0) {
+      throw new AgentCapacityExceededError(runId, capacity.limit, occupied);
     }
   }
 

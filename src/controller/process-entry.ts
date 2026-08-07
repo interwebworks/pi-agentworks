@@ -19,6 +19,7 @@ import {
   InvalidAgentMessageRouteError,
 } from "../application/protocol/agent-message-routing.ts";
 import { planOrchestration } from "../domain/orchestration.ts";
+import { countOccupiedAgentSlots } from "../domain/scheduling.ts";
 import {
   ControllerRuntime,
   ControllerRuntimeError,
@@ -507,6 +508,7 @@ export async function runControllerProcess(
               reviewerAssigned: story.reviewerAgentId !== null,
             })),
             snapshot.run.complexity,
+            countOccupiedAgentSlots(snapshot.agents),
           );
           if (actions.length > 64) {
             throw new ControllerRequestError(

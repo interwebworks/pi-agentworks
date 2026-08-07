@@ -1,9 +1,11 @@
 import {
   planOrchestration,
+  reserveAgentLaunchCapacity,
   type OrchestrationAction,
   type OrchestrationStory,
 } from "../../domain/orchestration.ts";
 import type { RunState, StoryState } from "../../domain/controller-state.ts";
+import { countOccupiedAgentSlots } from "../../domain/scheduling.ts";
 import type {
   ControllerEventInput,
   ControllerRepository,
@@ -93,6 +95,7 @@ export class OrchestrationLoop {
   readonly #runId: string;
   readonly #dependenciesByStory: ReadonlyMap<string, readonly string[]>;
   readonly #initialTeam: InitialOrchestrationTeam | null;
+  #tickQueue: Promise<void> = Promise.resolve();
 
   // `clock` is accepted (not merely `write.now`) so callers can source
   // deterministic timestamps for anything they layer on top of a tick (e.g.
@@ -107,7 +110,16 @@ export class OrchestrationLoop {
     this.#initialTeam = dependencies.initialTeam ?? null;
   }
 
-  async tick(write: FencedWrite): Promise<OrchestrationTickResult> {
+  tick(write: FencedWrite): Promise<OrchestrationTickResult> {
+    const execution = this.#tickQueue.then(() => this.#executeTick(write));
+    this.#tickQueue = execution.then(
+      () => undefined,
+      () => undefined,
+    );
+    return execution;
+  }
+
+  async #executeTick(write: FencedWrite): Promise<OrchestrationTickResult> {
     const snapshot = this.#repository.loadSnapshot(this.#runId);
     if (snapshot === null || TERMINAL_RUN_STATUSES.has(snapshot.run.status)) {
       return Object.freeze({ actions: [], committed: false });
@@ -136,13 +148,19 @@ export class OrchestrationLoop {
       }
     }
     actions.push(...planOrchestration(projected, snapshot.run.complexity));
-    if (actions.length === 0) {
-      return Object.freeze({ actions, committed: false });
+    const capacityDecision = reserveAgentLaunchCapacity(
+      actions,
+      snapshot.run.complexity,
+      countOccupiedAgentSlots(snapshot.agents),
+    );
+    const admittedActions = capacityDecision.actions;
+    if (admittedActions.length === 0) {
+      return Object.freeze({ actions: admittedActions, committed: false });
     }
 
     let current: ControllerSnapshot = snapshot;
     const events: ControllerEventInput[] = [];
-    for (const action of actions) {
+    for (const action of admittedActions) {
       const result = await this.#effects.execute(action, current);
       events.push(...result.events);
       current = Object.freeze({
@@ -179,6 +197,6 @@ export class OrchestrationLoop {
       commit(latest);
     }
 
-    return Object.freeze({ actions, committed: true });
+    return Object.freeze({ actions: admittedActions, committed: true });
   }
 }

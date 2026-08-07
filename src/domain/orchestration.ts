@@ -1,6 +1,7 @@
 import type { ComplexityMode } from "./complexity.ts";
 import type { StoryStatus } from "./controller-state.ts";
 import {
+  agentCapacity,
   scheduleStories,
   storyConcurrencyCap,
   type SchedulableStory,
@@ -26,6 +27,50 @@ export type OrchestrationAction =
   | { readonly type: "request-merge"; readonly storyId: string }
   | { readonly type: "request-cleanup"; readonly storyId: string }
   | { readonly type: "complete-run" };
+
+export interface AgentLaunchCapacityDecision {
+  readonly actions: readonly OrchestrationAction[];
+  readonly occupied: number;
+  readonly reserved: number;
+  readonly remaining: number;
+}
+
+/** All current assignment actions create or recover one active agent slot. */
+export function isAgentLaunchAction(action: OrchestrationAction): boolean {
+  return action.type.startsWith("assign-");
+}
+
+/**
+ * Reserve available run-level agent slots for launch actions in their existing
+ * deterministic order. Non-launch actions never consume capacity and are not
+ * suppressed when the run is at its boundary.
+ */
+export function reserveAgentLaunchCapacity(
+  actions: readonly OrchestrationAction[],
+  mode: ComplexityMode,
+  occupiedAgentSlots: number,
+): AgentLaunchCapacityDecision {
+  const capacity = agentCapacity(mode, occupiedAgentSlots);
+  let remaining = capacity.available;
+  let reserved = 0;
+  const admitted: OrchestrationAction[] = [];
+  for (const action of actions) {
+    if (!isAgentLaunchAction(action)) {
+      admitted.push(action);
+      continue;
+    }
+    if (remaining === 0) continue;
+    admitted.push(action);
+    reserved += 1;
+    remaining -= 1;
+  }
+  return Object.freeze({
+    actions: Object.freeze(admitted),
+    occupied: capacity.occupied,
+    reserved,
+    remaining,
+  });
+}
 
 /**
  * Project a story status onto the scheduler's coarse lifecycle:
@@ -54,11 +99,14 @@ function schedulingStatus(status: StoryStatus): StorySchedulingStatus {
  * dependency-aware scheduling starts new stories within the concurrency cap,
  * and the run completes once every story is merged. Emitting an action does not
  * execute it — the controller loop performs the effect and the next tick
- * observes the result.
+ * observes the result. The optional occupied count applies the configured
+ * run-level agent limit after the existing dependency and story-concurrency
+ * decisions, so neither of those independent guards is weakened.
  */
 export function planOrchestration(
   stories: readonly OrchestrationStory[],
   mode: ComplexityMode,
+  occupiedAgentSlots = 0,
 ): readonly OrchestrationAction[] {
   const actions: OrchestrationAction[] = [];
 
@@ -95,5 +143,5 @@ export function planOrchestration(
     actions.push({ type: "complete-run" });
   }
 
-  return Object.freeze(actions);
+  return reserveAgentLaunchCapacity(actions, mode, occupiedAgentSlots).actions;
 }

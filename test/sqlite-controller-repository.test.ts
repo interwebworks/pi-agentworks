@@ -15,9 +15,11 @@ import {
   type StoryState,
 } from "../src/domain/controller-state.ts";
 import {
+  AgentCapacityExceededError,
   ControllerDatabaseIntegrityError,
   ControllerLeaseHeldError,
   IdempotencyConflictError,
+  InvalidControllerSnapshotError,
   SqliteControllerRepository,
   StaleControllerFenceError,
   StaleRunRevisionError,
@@ -150,6 +152,182 @@ test("repository enables WAL, migrates once, and protects runtime files", () => 
     reopened.assertIntegrity();
     reopened.close();
   } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("snapshot initialization rejects active agents beyond the complexity limit", () => {
+  const fixture = createFixture();
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    const agents = Array.from({ length: 5 }, (_unused, index) =>
+      agent(`agent-${String(index + 1)}`),
+    );
+    assert.throws(
+      () =>
+        initialize(fixture.repository, controller.fencingToken, {
+          run: { ...run(), complexity: "LOW" },
+          agents,
+        }),
+      InvalidControllerSnapshotError,
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("agent launch capacity is atomic across reloaded repositories and releases only at terminal state", () => {
+  const fixture = createFixture();
+  let reloaded: SqliteControllerRepository | null = null;
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    const reserved = [
+      agent("agent-1"),
+      agent("agent-2"),
+      agent("agent-3"),
+      { ...agent("agent-4"), status: "disconnected" as const },
+    ];
+    initialize(fixture.repository, controller.fencingToken, {
+      run: { ...run(), complexity: "LOW" },
+      agents: reserved,
+    });
+    reloaded = new SqliteControllerRepository(fixture.databasePath);
+
+    // Transitioning an existing planned reservation is valid at the exact
+    // boundary; it does not consume a second slot.
+    assert.equal(
+      fixture.repository.materializeAgentLaunch({
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controller.fencingToken,
+          now: 1_200,
+        },
+        agent: reserved[0] ?? agent("missing"),
+        paneId: "pane-1",
+      }).status,
+      "launching",
+    );
+
+    // A separately loaded repository must observe the same transactional
+    // boundary rather than trusting a stale orchestration snapshot.
+    assert.throws(
+      () =>
+        reloaded?.materializeAgentLaunch({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_201,
+          },
+          agent: agent("agent-5"),
+          paneId: "pane-5",
+        }),
+      AgentCapacityExceededError,
+    );
+
+    // Disconnected is recoverable and held capacity above. Only after a valid
+    // terminal status is durably committed may another role reserve the slot.
+    const snapshot = fixture.repository.loadSnapshot("run-1");
+    assert.ok(snapshot);
+    fixture.repository.commitSnapshot({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_300,
+      },
+      runId: "run-1",
+      expectedRevision: snapshot.revision,
+      idempotencyKey: "complete-agent-4",
+      request: { command: "complete-agent", agentId: "agent-4" },
+      run: snapshot.run,
+      stories: snapshot.stories,
+      agents: snapshot.agents.map((current) =>
+        current.id === "agent-4"
+          ? { ...current, status: "completed" as const, updatedAt: 1_300 }
+          : current,
+      ),
+      events: [
+        {
+          eventId: "event-agent-4-completed",
+          type: "agent-completed",
+          entityType: "agent",
+          entityId: "agent-4",
+          payload: {},
+          occurredAt: 1_300,
+        },
+      ],
+    });
+    assert.equal(
+      reloaded.materializeAgentLaunch({
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controller.fencingToken,
+          now: 1_301,
+        },
+        agent: agent("agent-5"),
+        paneId: "pane-5",
+      }).status,
+      "launching",
+    );
+  } finally {
+    reloaded?.close();
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("writer lease reservation cannot bypass the global agent boundary", () => {
+  const fixture = createFixture();
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, controller.fencingToken, {
+      run: { ...run(), complexity: "LOW" },
+      agents: [
+        agent("agent-1"),
+        agent("agent-2"),
+        agent("agent-3"),
+        agent("agent-4"),
+      ],
+    });
+
+    assert.throws(
+      () =>
+        fixture.repository.acquireWriterLease({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_200,
+          },
+          runId: "run-1",
+          storyId: "story-1",
+          ownerAgentId: "agent-5",
+          ttlMs: 1_000,
+          agent: agent("agent-5", "story-1"),
+        }),
+      AgentCapacityExceededError,
+    );
+    const snapshot = fixture.repository.loadSnapshot("run-1");
+    assert.ok(snapshot);
+    assert.equal(snapshot.stories[0]?.assignedAgentId, null);
+    assert.equal(
+      snapshot.agents.some((current) => current.id === "agent-5"),
+      false,
+    );
+    assert.equal(fixture.repository.readWriterLease("run-1", "story-1"), null);
+  } finally {
+    fixture.repository.close();
     rmSync(fixture.directory, { recursive: true, force: true });
   }
 });

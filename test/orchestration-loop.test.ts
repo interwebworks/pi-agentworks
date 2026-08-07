@@ -438,6 +438,58 @@ test("a ready story advances through assignment, review, and merge to run comple
   }
 });
 
+test("concurrent ticks serialize and reload the committed capacity reservation", async () => {
+  const fixture = createFixture();
+  try {
+    const lease = fixture.repository.acquireLease(
+      "controller-a",
+      2_000,
+      60_000,
+    );
+    const write = {
+      ownerId: "controller-a",
+      fencingToken: lease.fencingToken,
+      now: 2_000,
+    };
+    fixture.repository.initializeRun({
+      write,
+      idempotencyKey: "create-concurrent-run",
+      request: { command: "create-run" },
+      run: activeRun(),
+      stories: [readyStory()],
+      agents: plannedAgents(),
+      events: [event("run-created", "run", "run-1", 2_000)],
+    });
+    let now = 2_100;
+    const effects = new FakeEffects(() => (now += 1));
+    const loop = new OrchestrationLoop({
+      repository: fixture.repository,
+      effects,
+      runId: "run-1",
+      dependenciesByStory: new Map([["story-1", []]]),
+      clock: () => now,
+    });
+
+    const [first, second] = await Promise.all([
+      loop.tick({ ...write, now: 2_200 }),
+      loop.tick({ ...write, now: 2_201 }),
+    ]);
+
+    assert.deepEqual(first.actions, [
+      { type: "assign-story", storyId: "story-1" },
+    ]);
+    assert.deepEqual(second, { actions: [], committed: false });
+    assert.deepEqual(effects.applied, ["assign-story"]);
+    assert.equal(
+      fixture.repository.loadSnapshot("run-1")?.stories[0]?.status,
+      "assigned",
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 test("committing the same orchestration tick twice replays instead of double-applying", async () => {
   const fixture = createFixture();
   try {
