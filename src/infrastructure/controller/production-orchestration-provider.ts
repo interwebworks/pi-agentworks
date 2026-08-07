@@ -15,6 +15,7 @@ import { HerdrCliGateway } from "../herdr/herdr-cli-gateway.ts";
 import { GitCliRepositoryInspector } from "../git/git-cli-repository-inspector.ts";
 import { GitCliWorkspaceGateway } from "../git/git-cli-workspace-gateway.ts";
 import { PrivateAgentSessionProvider } from "../launch/private-agent-session-provider.ts";
+import { deriveChildAuthToken } from "./unix-controller-transport.ts";
 import { discoverRolePacks } from "../role-packs/file-role-pack-repository.ts";
 import { LoadedRoleCatalog } from "../role-packs/loaded-role-catalog.ts";
 import { BubblewrapCapabilityDoctor } from "../sandbox/bubblewrap-capability-doctor.ts";
@@ -258,6 +259,8 @@ export function createProductionOrchestrationProvider(
       const panes = new HerdrAgentPaneAllocator(paneLifecycle, herdr);
       const sessions = new PrivateAgentSessionProvider(
         join(dirname(runtime.paths.runtimeDirectory), "sessions"),
+        (runId, _storyId, agentId) =>
+          deriveChildAuthToken(runtime.authToken, runId, agentId),
       );
       const gitInspection = inspector.inspect(run.originalCheckout);
       const gitEvidence = new GitAssignmentEvidenceAdapter({

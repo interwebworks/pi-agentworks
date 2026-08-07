@@ -35,7 +35,7 @@ export interface AssignmentPrivilegedResourceProvisioner {
 export interface ControllerOwnedResourceProviderDependencies {
   readonly repository: Pick<
     ControllerRepository,
-    "acquireWriterLease" | "releaseWriterLease"
+    "acquireWriterLease" | "releaseWriterLease" | "materializeAgentLaunch"
   >;
   readonly write: FencedWrite;
   readonly writerLeaseTtlMs: number;
@@ -144,6 +144,14 @@ export class ControllerOwnedAssignmentResourceProvider {
             "writer lease evidence is invalid",
           );
         }
+      }
+      if (this.#repository.materializeAgentLaunch !== undefined) {
+        const launchedAgent = this.#repository.materializeAgentLaunch({
+          write: this.#write,
+          agent: resources.agent,
+          paneId: resources.paneId,
+        });
+        resources = Object.freeze({ ...resources, agent: launchedAgent });
       }
       return Object.freeze({
         ...resources,

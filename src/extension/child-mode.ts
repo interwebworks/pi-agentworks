@@ -219,6 +219,31 @@ function assertHelloResponse(
   }
 }
 
+/**
+ * Standalone extension entrypoint used by the sandboxed child Pi process.
+ *
+ * The launcher loads this module directly rather than the parent package
+ * entrypoint, so ordinary parent-session registrations cannot leak into the
+ * child. Any missing or invalid child evidence installs the fail-closed
+ * lockdown instead of leaving the process interactive without authentication.
+ */
+export default function childMode(pi: ExtensionAPI): void {
+  if (process.env.AGENTWORKS_CHILD_MODE !== "1") {
+    installChildLockdown(pi);
+    return;
+  }
+  try {
+    const configuration = resolveChildModeConfiguration(process.env);
+    if (configuration === null) {
+      installChildLockdown(pi);
+      return;
+    }
+    installChildBridge(pi, configuration);
+  } catch {
+    installChildLockdown(pi);
+  }
+}
+
 export function installChildLockdown(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, context) => {
     context.shutdown();

@@ -30,6 +30,30 @@ export class OrchestrationLoopError extends Error {
   }
 }
 
+function isStaleRevision(error: unknown): boolean {
+  return error instanceof Error && error.name === "StaleRunRevisionError";
+}
+
+function mergeAfterConcurrentChildMessage(
+  latest: ControllerSnapshot,
+  intended: ControllerSnapshot,
+): ControllerSnapshot {
+  const agents = intended.agents.map((candidate) => {
+    const current = latest.agents.find((agent) => agent.id === candidate.id);
+    if (current === undefined) return candidate;
+    return current.updatedAt >= candidate.updatedAt ? current : candidate;
+  });
+  for (const current of latest.agents) {
+    if (!agents.some((agent) => agent.id === current.id)) agents.push(current);
+  }
+  return Object.freeze({
+    revision: latest.revision,
+    run: intended.run,
+    stories: intended.stories,
+    agents,
+  });
+}
+
 function projectStory(
   story: StoryState,
   dependenciesByStory: ReadonlyMap<string, readonly string[]>,
@@ -102,17 +126,31 @@ export class OrchestrationLoop {
       });
     }
 
-    this.#repository.commitSnapshot({
-      write,
-      runId: this.#runId,
-      expectedRevision: snapshot.revision,
-      idempotencyKey: `orchestrate-r${String(snapshot.revision)}`,
-      request: { command: "orchestrate", revision: snapshot.revision },
-      run: current.run,
-      stories: current.stories,
-      agents: current.agents,
-      events,
-    });
+    const commit = (base: ControllerSnapshot): void => {
+      const merged =
+        base === snapshot
+          ? current
+          : mergeAfterConcurrentChildMessage(base, current);
+      this.#repository.commitSnapshot({
+        write,
+        runId: this.#runId,
+        expectedRevision: base.revision,
+        idempotencyKey: `orchestrate-r${String(base.revision)}`,
+        request: { command: "orchestrate", revision: base.revision },
+        run: merged.run,
+        stories: merged.stories,
+        agents: merged.agents,
+        events,
+      });
+    };
+    try {
+      commit(snapshot);
+    } catch (error) {
+      if (!isStaleRevision(error)) throw error;
+      const latest = this.#repository.loadSnapshot(this.#runId);
+      if (latest === null) throw error;
+      commit(latest);
+    }
 
     return Object.freeze({ actions, committed: true });
   }

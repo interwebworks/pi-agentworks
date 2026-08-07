@@ -22,6 +22,7 @@ import type {
 import {
   isAgentState,
   isRunState,
+  transitionAgent,
   isStoryState,
   type AgentState,
   type RunState,
@@ -491,6 +492,62 @@ export class SqliteControllerRepository implements ControllerRepository {
         .run();
     });
     this.#protectDatabaseFiles();
+  }
+
+  materializeAgentLaunch(input: {
+    readonly write: FencedWrite;
+    readonly agent: AgentState;
+    readonly paneId: string;
+  }): AgentState {
+    this.#assertOpen();
+    const paneId = nonEmpty(input.paneId, "agent launch pane id");
+    const launched = transitionAgent(input.agent, {
+      type: "launch-requested",
+      paneId,
+      at: input.write.now,
+    });
+    this.#transaction(() => {
+      this.#assertFence(input.write);
+      const existing = this.#database
+        .prepare(
+          "SELECT state_json FROM agents WHERE run_id = ? AND agent_id = ?",
+        )
+        .get(launched.runId, launched.id) as unknown as StateRow | undefined;
+      if (existing !== undefined) {
+        const current = parseJsonObject(
+          existing.state_json,
+          "agent launch state",
+        );
+        if (!isAgentState(current)) {
+          throw new ControllerDatabaseIntegrityError(
+            "agent launch state is invalid",
+          );
+        }
+        if (current.status !== "planned") {
+          throw new StaleWriterLeaseError(
+            `agent ${launched.id} is already ${current.status}`,
+          );
+        }
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO agents(agent_id, run_id, state_version, status, state_json)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(run_id, agent_id) DO UPDATE SET
+             state_version = excluded.state_version,
+             status = excluded.status,
+             state_json = excluded.state_json`,
+        )
+        .run(
+          launched.id,
+          launched.runId,
+          launched.schemaVersion,
+          launched.status,
+          JSON.stringify(launched),
+        );
+    });
+    this.#protectDatabaseFiles();
+    return launched;
   }
 
   acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease {

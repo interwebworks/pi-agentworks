@@ -84,6 +84,12 @@ export interface RevokeWriterLeaseInput {
   readonly reason: string;
 }
 
+export interface MaterializeAgentLaunchInput {
+  readonly write: FencedWrite;
+  readonly agent: AgentState;
+  readonly paneId: string;
+}
+
 export interface InitializeRunInput {
   readonly write: FencedWrite;
   readonly idempotencyKey: string;
@@ -117,6 +123,8 @@ export interface ControllerRepository {
   renewLease(write: FencedWrite, ttlMs: number): ControllerLease;
   releaseLease(write: FencedWrite): void;
   acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease;
+  /** Optional during test-only/in-memory composition; production SQLite implements it. */
+  materializeAgentLaunch?(input: MaterializeAgentLaunchInput): AgentState;
   renewWriterLease(input: HeldWriterLeaseInput, ttlMs: number): WriterLease;
   releaseWriterLease(input: HeldWriterLeaseInput): WriterLease;
   revokeWriterLease(input: RevokeWriterLeaseInput): WriterLease;

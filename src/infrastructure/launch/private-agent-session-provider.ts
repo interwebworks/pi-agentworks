@@ -15,6 +15,12 @@ import type { PrivateSessionEvidence } from "../../application/launch/assignment
 
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
+type CapabilityFactory = (
+  runId: string,
+  storyId: string,
+  agentId: string,
+) => string;
+
 export class PrivateAgentSessionProviderError extends Error {
   constructor(message: string) {
     super(`Private agent session provider failed: ${message}`);
@@ -53,9 +59,12 @@ function assertWithin(candidate: string, parent: string): void {
 
 export class PrivateAgentSessionProvider implements PrivateSessionProvider {
   readonly #root: string;
+  readonly #capabilityFactory: CapabilityFactory;
 
-  constructor(root: string) {
+  constructor(root: string, capabilityFactory?: CapabilityFactory) {
     this.#root = resolve(root);
+    this.#capabilityFactory =
+      capabilityFactory ?? (() => randomBytes(32).toString("base64url"));
     mkdirSync(this.#root, { recursive: true, mode: 0o700 });
     assertPrivateDirectory(this.#root, "private session root");
   }
@@ -98,7 +107,7 @@ export class PrivateAgentSessionProvider implements PrivateSessionProvider {
         }
         capability = readFileSync(capabilityPath, "utf8").trim();
       } else {
-        capability = randomBytes(32).toString("base64url");
+        capability = this.#capabilityFactory(run.id, story.id, agentId);
         writeFileSync(capabilityPath, `${capability}\n`, {
           encoding: "utf8",
           mode: 0o600,
