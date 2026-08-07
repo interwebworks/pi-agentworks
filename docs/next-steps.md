@@ -145,7 +145,7 @@ Acceptance evidence:
 
 ## 9. Reuse selected `pi-subagents` components
 
-Status: Partially completed with an exact `pi-subagents@0.38.0` production dependency and session-bound registration through the public `pi-subagents/background-work` export.
+Status: Completed for the compatible public surface in `914c720` with an exact `pi-subagents@0.38.0` production dependency and session-bound registration through the public `pi-subagents/background-work` export.
 Agentworks continues to own all execution, controller, Git, sandbox, Herdr, and recovery authority.
 The capability-ceiling API is deferred because its registry constrains pi-subagents execution rather than Agentworks child launches, so registering it here would duplicate policy and unexpectedly constrain unrelated delegation without strengthening Agentworks.
 The preflight API is deferred because its agent discovery, role, skill, model-fallback, extension, artifact, and launch-contract semantics conflict with the current Agentworks role-pack and secure-launch boundaries.
@@ -165,8 +165,8 @@ Recommended order:
 Acceptance evidence:
 
 - The dependency is pinned and production packaging includes every runtime requirement.
-- Capability intersection can only reduce authority.
-- Preflight disagreement with controller evidence fails closed.
+- Capability-ceiling remains disconnected because it governs pi-subagents execution and therefore cannot alter Agentworks authority.
+- Preflight remains disconnected because its discovery and launch semantics conflict with Agentworks controller evidence.
 - Package upgrades are covered by compatibility tests.
 - Removing or disabling `pi-subagents` cannot bypass Agentworks safety policy.
 
@@ -187,5 +187,5 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
 6. [ ] Complete repeated multi-story reviewer, merge, cleanup, and completion flow.
 7. [ ] Run the large-grid and restart E2E matrix.
 8. [ ] Add advanced management controls and LOW/NORMAL confirmations.
-9. [ ] Integrate safe `pi-subagents` public components.
+9. [x] Integrate safe `pi-subagents` public components.
 10. [ ] Replace host networking, complete documentation, publish, and tag.
