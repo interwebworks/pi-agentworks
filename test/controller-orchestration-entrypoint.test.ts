@@ -4,6 +4,7 @@ import {
   createConfiguredControllerProcessDependencies,
   assessDeferredInitialResume,
   executeInjectedOrchestration,
+  executeInjectedPaneRestoration,
   resolveConfiguredOrchestrationProvider,
   resolveControllerOrchestrationExecutor,
   resumeDeferredInitialOrchestration,
@@ -88,6 +89,32 @@ test("injected orchestration entrypoint forwards current fenced write to executo
     { accepted: true },
   );
   assert.deepEqual(received, write);
+});
+
+test("pane restoration is parent-only and forwards exact fenced authority", async () => {
+  let received: FencedWrite | null = null;
+  const executor: ControllerOrchestrationExecutor = {
+    execute: () => Promise.resolve({ accepted: true }),
+    restorePanes(current) {
+      received = current;
+      return Promise.resolve({ restored: true, slot: 1 });
+    },
+  };
+  assert.deepEqual(
+    await executeInjectedPaneRestoration("parent", {}, write, executor),
+    { restored: true, slot: 1 },
+  );
+  assert.equal(received, write);
+  await assert.rejects(
+    executeInjectedPaneRestoration("management", {}, write, executor),
+    /Only a parent client/u,
+  );
+  await assert.rejects(
+    executeInjectedPaneRestoration("parent", {}, write, {
+      execute: () => Promise.resolve({ accepted: true }),
+    }),
+    /not configured/u,
+  );
 });
 
 test("orchestration execution is serialized per controller executor", async () => {

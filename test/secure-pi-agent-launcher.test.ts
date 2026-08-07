@@ -438,6 +438,65 @@ test("launch refuses stale authority, pane mismatch, tool widening, and missing 
   }
 });
 
+test("restoration requires one private on-disk Pi session with the exact recorded id", async () => {
+  const current = fixture();
+  try {
+    const restorationRequest = {
+      ...current.request,
+      requireExistingSession: true,
+    };
+    await assert.rejects(
+      current.launcher.launch(restorationRequest),
+      /existing Pi session evidence is missing/u,
+    );
+    const sessionDirectory = join(current.request.sessionPath, "pi-sessions");
+    mkdirSync(sessionDirectory, { recursive: true, mode: 0o700 });
+    const sessionFile = join(
+      sessionDirectory,
+      `2026-08-07T00-00-00-000Z_${current.request.sessionId}.jsonl`,
+    );
+    writeFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: current.request.sessionId,
+        timestamp: "2026-08-07T00:00:00.000Z",
+        cwd: current.request.task.worktreePath,
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    const evidence = await current.launcher.launch({
+      ...restorationRequest,
+      expectedSessionFile: sessionFile,
+    });
+    assert.equal(evidence.sessionId, current.request.sessionId);
+    assert.equal(current.herdr.commands.length, 1);
+    await assert.rejects(
+      current.launcher.launch({
+        ...restorationRequest,
+        expectedSessionFile: current.request.controllerSocketPath,
+      }),
+      /conflicts with the controller-recorded path/u,
+    );
+    assert.equal(current.herdr.commands.length, 1);
+
+    writeFileSync(
+      sessionFile,
+      `${JSON.stringify({ type: "session", id: "wrong-session" })}\n`,
+      { mode: 0o600 },
+    );
+    await assert.rejects(
+      current.launcher.launch(restorationRequest),
+      /header conflicts with the recorded session id/u,
+    );
+    assert.equal(current.herdr.commands.length, 1);
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
 test("relaunch after a kill point reuses the private artifacts idempotently", async () => {
   const current = fixture();
   try {

@@ -30,6 +30,7 @@ import { createProductionOrchestrationProvider } from "../infrastructure/control
 
 export interface ControllerOrchestrationExecutor {
   execute(write: FencedWrite): Promise<JsonValue>;
+  restorePanes?(write: FencedWrite): Promise<JsonValue>;
 }
 
 export interface ControllerProcessDependencies {
@@ -272,6 +273,33 @@ export async function executeInjectedOrchestration(
       orchestrationExecutions.delete(executor);
     }
   }
+}
+
+export async function executeInjectedPaneRestoration(
+  clientKind: "parent" | "management" | "child",
+  payload: JsonValue,
+  write: FencedWrite,
+  executor: ControllerOrchestrationExecutor | undefined,
+): Promise<JsonValue> {
+  if (clientKind !== "parent") {
+    throw new ControllerRequestError(
+      "forbidden",
+      "Only a parent client can restore agent panes",
+    );
+  }
+  if (!isEmptyObject(payload)) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Agent pane restoration payload must be empty",
+    );
+  }
+  if (executor?.restorePanes === undefined) {
+    throw new ControllerRequestError(
+      "not-configured",
+      "Agent pane restoration is not configured",
+    );
+  }
+  return executor.restorePanes(write);
 }
 
 export type DeferredInitialResumeReason =
@@ -667,6 +695,14 @@ export async function runControllerProcess(
         }
         case "orchestration.execute": {
           return executeInjectedOrchestration(
+            request.clientKind,
+            request.payload,
+            runtime.currentWrite(),
+            orchestrationExecutor,
+          );
+        }
+        case "orchestration.restore-panes": {
+          return executeInjectedPaneRestoration(
             request.clientKind,
             request.payload,
             runtime.currentWrite(),

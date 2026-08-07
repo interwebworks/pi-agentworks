@@ -112,6 +112,47 @@ export interface AgentLaunchRecord {
   readonly updatedAt: number;
 }
 
+export interface AgentPaneRestorationRecord {
+  readonly runId: string;
+  readonly agentId: string;
+  readonly restorationId: string;
+  readonly operationId: string;
+  readonly slot: number;
+  readonly priorPaneId: string;
+  readonly replacementPaneId: string | null;
+  readonly sessionId: string;
+  readonly status: "reserved" | "bound" | "confirmed";
+  readonly updatedAt: number;
+}
+
+export interface ReserveAgentPaneRestorationInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly agentId: string;
+  readonly restorationId: string;
+  readonly operationId: string;
+  readonly slot: number;
+  readonly priorPaneId: string;
+  readonly sessionId: string;
+}
+
+export interface BindAgentPaneRestorationInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly agentId: string;
+  readonly restorationId: string;
+  readonly replacementPaneId: string;
+}
+
+export interface ConfirmAgentPaneRestorationInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly agentId: string;
+  readonly restorationId: string;
+  readonly replacementPaneId: string;
+  readonly sessionId: string;
+}
+
 export interface InitializeRunInput {
   readonly write: FencedWrite;
   readonly idempotencyKey: string;
@@ -149,6 +190,19 @@ export interface ControllerRepository {
   materializeAgentLaunch?(input: MaterializeAgentLaunchInput): AgentState;
   confirmAgentLaunch(input: ConfirmAgentLaunchInput): AgentLaunchRecord;
   readAgentLaunch(runId: string, agentId: string): AgentLaunchRecord | null;
+  reserveAgentPaneRestoration?(
+    input: ReserveAgentPaneRestorationInput,
+  ): AgentPaneRestorationRecord;
+  bindAgentPaneRestoration?(
+    input: BindAgentPaneRestorationInput,
+  ): AgentPaneRestorationRecord;
+  confirmAgentPaneRestoration?(
+    input: ConfirmAgentPaneRestorationInput,
+  ): AgentPaneRestorationRecord;
+  readAgentPaneRestoration?(
+    runId: string,
+    agentId: string,
+  ): AgentPaneRestorationRecord | null;
   renewWriterLease(input: HeldWriterLeaseInput, ttlMs: number): WriterLease;
   releaseWriterLease(input: HeldWriterLeaseInput): WriterLease;
   revokeWriterLease(input: RevokeWriterLeaseInput): WriterLease;

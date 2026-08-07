@@ -9,6 +9,8 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
+  readSync,
   realpathSync,
   statSync,
   unlinkSync,
@@ -194,6 +196,68 @@ function writeDurableArtifact(
   }
 }
 
+function assertExistingPiSession(
+  sessionDirectory: string,
+  sessionId: string,
+): string {
+  const matching = readdirSync(sessionDirectory).filter((name) =>
+    name.endsWith(`_${sessionId}.jsonl`),
+  );
+  if (matching.length !== 1) {
+    throw new SecurePiAgentLaunchError(
+      "Exact existing Pi session evidence is missing or ambiguous",
+    );
+  }
+  const sessionFile = join(sessionDirectory, matching[0] ?? "");
+  const status = lstatSync(sessionFile);
+  if (
+    status.isSymbolicLink() ||
+    !status.isFile() ||
+    status.uid !== process.getuid?.() ||
+    status.nlink !== 1 ||
+    (status.mode & 0o077) !== 0 ||
+    status.size < 1
+  ) {
+    throw new SecurePiAgentLaunchError(
+      "Existing Pi session evidence is not one private controller-owned file",
+    );
+  }
+  const descriptor = openSync(
+    sessionFile,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  try {
+    const bytes = Buffer.alloc(Math.min(status.size, 4_096));
+    const length = readSync(descriptor, bytes, 0, bytes.length, 0);
+    const firstLine = bytes
+      .subarray(0, length)
+      .toString("utf8")
+      .split("\n", 1)[0];
+    let header: unknown;
+    try {
+      header = JSON.parse(firstLine ?? "");
+    } catch {
+      throw new SecurePiAgentLaunchError(
+        "Existing Pi session header is invalid",
+      );
+    }
+    if (
+      header === null ||
+      typeof header !== "object" ||
+      Array.isArray(header) ||
+      (header as Readonly<Record<string, unknown>>).type !== "session" ||
+      (header as Readonly<Record<string, unknown>>).id !== sessionId
+    ) {
+      throw new SecurePiAgentLaunchError(
+        "Existing Pi session header conflicts with the recorded session id",
+      );
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return realpathSync(sessionFile);
+}
+
 function shellQuote(value: string): string {
   if (value.includes("\0")) {
     throw new SecurePiAgentLaunchError("Launch command contains a null byte");
@@ -312,6 +376,23 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     const piSessionPath = join(sessionPath, "pi-sessions");
     mkdirSync(piSessionPath, { recursive: true, mode: 0o700 });
     assertPrivateDirectory(piSessionPath, "Pi session storage path");
+    if (request.requireExistingSession === true) {
+      const existingSessionFile = assertExistingPiSession(
+        piSessionPath,
+        request.sessionId,
+      );
+      if (
+        request.expectedSessionFile !== undefined &&
+        canonicalExisting(
+          request.expectedSessionFile,
+          "recorded Pi session file",
+        ) !== existingSessionFile
+      ) {
+        throw new SecurePiAgentLaunchError(
+          "Existing Pi session file conflicts with the controller-recorded path",
+        );
+      }
+    }
 
     const artifacts = Object.freeze({
       role: writeDurableArtifact(

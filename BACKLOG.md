@@ -86,7 +86,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
   - [x] Add deterministic pane-loss assessment and restoration planning.
-  - [ ] Wire restoration planning into Herdr/Pi relaunch and session resume.
+  - [x] Restore one missing controller-roster pane in its exact slot through durable reservations and exact on-disk Pi session reuse.
+  - [ ] Extend recovery to trusted dead-controller, parent Pi, Herdr restart, and multi-pane-loss boundaries.
 
 ## P7 - Management TUI
 

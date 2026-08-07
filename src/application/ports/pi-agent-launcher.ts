@@ -14,6 +14,9 @@ export interface PiAgentLaunchRequest {
   readonly thinking:
     "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   readonly sessionId: string;
+  /** Restoration must prove and reuse an existing on-disk Pi session file. */
+  readonly requireExistingSession?: boolean;
+  readonly expectedSessionFile?: string;
   readonly sessionPath: string;
   readonly configPath: string;
   readonly runtimePath: string;

@@ -57,10 +57,15 @@ Acceptance evidence:
 
 ## 3. Complete controller and pane restoration
 
-Wire the existing pane-loss assessment and restoration plan into Herdr and Pi relaunch behavior.
-Restore missing panes into exact controller-owned slots and reuse the exact recorded Pi session when evidence is complete.
-Fail closed on missing, stale, conflicting, or spoofed process and session evidence.
-Restart a dead controller from status recovery only after validating its durable database, lease, socket, process-start identity, and recovery gates.
+Status: The exact single-missing-pane production slice is implemented.
+Status recovery now assesses the controller roster against strict Herdr process and metadata evidence, reserves one durable slot restoration with a private nonce, reconstructs the missing pane in that exact slot, and relaunches through the secure launcher only when the exact recorded Pi session file survives.
+The three-pane `0, missing 1, 2` case and every restoration kill point converge without moving the surviving panes or duplicating a tab, pane, process, session, worktree, or agent.
+Missing, ambiguous, stale, conflicting, and spoofed pane or session evidence fails closed.
+
+Dead-controller restart remains a separate slice.
+A status request currently refuses when no authenticated controller descriptor is active, as covered by a process-level regression test.
+The next slice must durably bind the original trusted live-composition environment to the run, then call `DetachedControllerSupervisor.ensureRunning()` from status only after database integrity, lease expiry or takeover, socket state, process-start identity, and startup recovery gates validate that exact configuration.
+Parent Pi restart, Herdr restart, and multi-pane loss remain unclaimed and untested end to end.
 
 Acceptance evidence:
 
@@ -182,7 +187,9 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
 1. [x] Fix management-origin ownership and add cross-tab duplicate-prevention tests.
 2. [x] Implement deferred-first-tick resume after successful dashboard recovery.
 3. [x] Reconcile durable `launching` agents after failed process launch.
-4. [ ] Implement exact-slot pane and session restoration plus dead-controller recovery.
+4. [ ] Complete controller and pane restoration.
+   - [x] Restore one exact missing slot with exact on-disk Pi session reuse and crash-idempotent reservations.
+   - [ ] Add trusted status-triggered dead-controller restart, then parent Pi and Herdr restart E2E proof.
 5. [x] Enforce the global active-agent budget.
 6. [ ] Complete repeated multi-story reviewer, merge, cleanup, and completion flow.
 7. [ ] Run the large-grid and restart E2E matrix.

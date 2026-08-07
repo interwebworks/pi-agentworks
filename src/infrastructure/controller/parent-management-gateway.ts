@@ -162,6 +162,30 @@ function deferredInitialResumeResult(
   });
 }
 
+async function requestAgentPaneRestoration(
+  clientFactory: ParentControllerClientFactory,
+  runId: string,
+): Promise<Readonly<Record<string, JsonValue>> | null> {
+  const client = await clientFactory(runId);
+  try {
+    const value = await client.request({
+      action: "orchestration.restore-panes",
+      payload: {},
+    });
+    return record(value, "agent pane restoration");
+  } catch (error) {
+    if (
+      error instanceof ControllerRemoteError &&
+      error.code === "not-configured"
+    ) {
+      return null;
+    }
+    throw error;
+  } finally {
+    client.close();
+  }
+}
+
 async function requestDeferredInitialResume(
   clientFactory: ParentControllerClientFactory,
   runId: string,
@@ -571,7 +595,47 @@ export function createDiscoveredParentManagementGateway(
   };
   return Object.freeze({
     async execute(input: ParentManagementRequest) {
+      let restorationText = "";
+      if (input.action === "status" && input.runId !== undefined) {
+        try {
+          const restoration = await requestAgentPaneRestoration(
+            clientFactory,
+            input.runId,
+          );
+          if (restoration?.restored === true) {
+            const agentId = restoration.agentId;
+            const slot = restoration.slot;
+            const sessionId = restoration.sessionId;
+            if (
+              typeof agentId !== "string" ||
+              typeof slot !== "number" ||
+              !Number.isSafeInteger(slot) ||
+              typeof sessionId !== "string"
+            ) {
+              throw new ParentManagementGatewayError(
+                "controller returned invalid pane restoration evidence",
+              );
+            }
+            restorationText = ` Restored agent ${agentId} in exact slot ${String(slot)} with Pi session ${sessionId}.`;
+          }
+        } catch (error) {
+          return Object.freeze({
+            text: `Agent pane restoration refused: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            notificationType: "error" as const,
+          });
+        }
+      }
       let result = await gateway.execute(input);
+      if (restorationText.length > 0) {
+        result = Object.freeze({
+          text: `${result.text}${restorationText}`,
+          ...(result.notificationType === undefined
+            ? {}
+            : { notificationType: result.notificationType }),
+        });
+      }
       if (
         input.action !== "status" ||
         input.runId === undefined ||

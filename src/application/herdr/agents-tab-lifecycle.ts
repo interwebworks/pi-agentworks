@@ -24,6 +24,7 @@ const ENVIRONMENT_KEYS = Object.freeze({
   operation: "AGENTWORKS_PANE_OPERATION_ID",
   run: "AGENTWORKS_RUN_ID",
   slot: "AGENTWORKS_PANE_SLOT",
+  restoration: "AGENTWORKS_PANE_RESTORATION_ID",
 });
 const TOKEN_KEYS = Object.freeze({
   agent: "aw_agent",
@@ -31,6 +32,7 @@ const TOKEN_KEYS = Object.freeze({
   operation: "aw_operation",
   run: "aw_run",
   slot: "aw_slot",
+  restoration: "aw_restoration",
 });
 
 type AgentsTabHerdrGateway = Pick<
@@ -49,6 +51,8 @@ export interface AgentPaneAssignment {
   readonly agentId: string;
   readonly label: string;
   readonly cwd: string;
+  /** Durable nonce authorizing adoption after an interrupted restoration split. */
+  readonly restorationId?: string;
 }
 
 export interface EnsureAgentsTabRequest {
@@ -111,6 +115,9 @@ function slotEnvironment(
     ...baseEnvironment(request),
     [ENVIRONMENT_KEYS.agent]: assignment.agentId,
     [ENVIRONMENT_KEYS.slot]: String(slot),
+    ...(assignment.restorationId === undefined
+      ? {}
+      : { [ENVIRONMENT_KEYS.restoration]: assignment.restorationId }),
   });
 }
 
@@ -128,6 +135,9 @@ function slotTokens(
     [TOKEN_KEYS.operation]: request.operationId,
     [TOKEN_KEYS.run]: request.runId,
     [TOKEN_KEYS.slot]: String(slot),
+    ...(assignment.restorationId === undefined
+      ? {}
+      : { [TOKEN_KEYS.restoration]: assignment.restorationId }),
   });
 }
 
@@ -461,6 +471,14 @@ export class AgentsTabLifecycle {
       if (!isAbsolute(assignment.cwd)) {
         throw new AgentsTabRecoveryRequiredError(
           `agent cwd ${String(slot)} must be absolute`,
+        );
+      }
+      if (
+        assignment.restorationId !== undefined &&
+        !SAFE_ID_PATTERN.test(assignment.restorationId)
+      ) {
+        throw new AgentsTabRecoveryRequiredError(
+          `agent restoration id ${String(slot)} is invalid`,
         );
       }
       const expectedPaneId = request.expectedPaneIds[slot];

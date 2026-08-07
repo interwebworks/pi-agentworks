@@ -134,6 +134,45 @@ test("discovered parent launch supports a subsequent status request", async () =
   }
 });
 
+test("status refuses the explicit dead-controller boundary instead of an unauthoritative restart", async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-dead-status-"));
+  let runId: string | undefined;
+  try {
+    const gateway = createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      process.cwd(),
+    );
+    const launched = await gateway.execute({
+      action: "launch",
+      mode: "NORMAL",
+      task: "preserve restart authority",
+    });
+    runId = /Agentworks run (\S+) (?:was saved|created)/u.exec(
+      launched.text,
+    )?.[1];
+    assert.ok(runId);
+    const client =
+      await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+    try {
+      await client.request({ action: "controller.shutdown", payload: {} });
+    } finally {
+      client.close();
+    }
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (discoverControllerRuntime(runtimeRoot, runId) === null) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(discoverControllerRuntime(runtimeRoot, runId), null);
+
+    const status = await gateway.execute({ action: "status", runId });
+    assert.equal(status.notificationType, "error");
+    assert.match(status.text, /no active controller found/u);
+    assert.equal(discoverControllerRuntime(runtimeRoot, runId), null);
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
 test("status from another pane restores management beside the controller-recorded origin", async () => {
   const runtimeRoot = mkdtempSync(
     join(tmpdir(), "agentworks-management-pane-"),

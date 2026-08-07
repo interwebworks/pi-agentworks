@@ -38,6 +38,12 @@ import type { LoadedRole } from "../role-packs/file-role-pack-repository.ts";
 import type { StoryAgentKind } from "../../application/launch/assignment-preparation.ts";
 import type { GitAssignmentEvidence } from "../../application/launch/assignment-resource-evidence.ts";
 import { composeTeam } from "../../domain/team-composition.ts";
+import { DeterministicAssignmentPreparation } from "../../application/launch/assignment-preparation.ts";
+import {
+  AgentPaneRestorationController,
+  type RestorationRepository,
+} from "../../application/recovery/agent-pane-restoration.ts";
+import type { ControllerSnapshot } from "../../application/ports/controller-repository.ts";
 
 export class ProductionOrchestrationProviderError extends Error {
   constructor(message: string) {
@@ -229,6 +235,22 @@ function stableUuid(value: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20)}`;
 }
 
+const paneRestorations = new WeakMap<
+  ControllerRuntime,
+  AgentPaneRestorationController
+>();
+
+function supportsPaneRestoration(
+  repository: ControllerRuntime["repository"],
+): repository is ControllerRuntime["repository"] & RestorationRepository {
+  return (
+    repository.reserveAgentPaneRestoration !== undefined &&
+    repository.bindAgentPaneRestoration !== undefined &&
+    repository.confirmAgentPaneRestoration !== undefined &&
+    repository.readAgentPaneRestoration !== undefined
+  );
+}
+
 function hostNetworkApproved(value: string | undefined): boolean {
   if (value === undefined || value === "0") return false;
   if (value !== "1") {
@@ -386,12 +408,18 @@ export function createProductionOrchestrationProvider(
       const git = new GitCliWorkspaceGateway();
       const discovery = await discoverRolePacks({
         roots: [
-          { scope: "builtin", path: join(agentworksPackagePath, "role-packs") },
+          {
+            scope: "builtin",
+            path: join(agentworksPackagePath, "role-packs"),
+          },
           {
             scope: "user",
             path: join(homedir(), ".config", "pi-agentworks", "role-packs"),
           },
-          { scope: "project", path: join(run.originalCheckout, "role-packs") },
+          {
+            scope: "project",
+            path: join(run.originalCheckout, "role-packs"),
+          },
         ],
         projectTrusted: false,
       });
@@ -520,6 +548,180 @@ export function createProductionOrchestrationProvider(
       const sandbox = new BubblewrapSandboxGateway(
         new ProductionSandboxLaunchGate(new BubblewrapCapabilityDoctor()),
       );
+      const piLauncher = new SecurePiAgentLauncher(sandbox, herdr);
+      const controllerRepository = runtime.repository;
+      if (!supportsPaneRestoration(controllerRepository)) {
+        throw new ProductionOrchestrationProviderError(
+          "controller repository does not support pane restoration reservations",
+        );
+      }
+      const restorationRepository: RestorationRepository = controllerRepository;
+      paneRestorations.set(
+        runtime,
+        new AgentPaneRestorationController({
+          repository: restorationRepository,
+          herdr,
+          processEvidence: new LinuxPaneProcessEvidenceGateway(herdr),
+          lifecycle: paneLifecycle,
+          launcher: piLauncher,
+          preparation: {
+            async prepare(input) {
+              const current = input.snapshot;
+              const currentAgent = current.agents.find(
+                (agent) => agent.id === input.agent.id,
+              );
+              if (currentAgent === undefined) {
+                throw new ProductionOrchestrationProviderError(
+                  `restoration agent ${input.agent.id} is absent from the controller roster`,
+                );
+              }
+              const role = await roleCatalog.find(currentAgent.roleRuntimeId);
+              if (role === null) {
+                throw new ProductionOrchestrationProviderError(
+                  `restoration role ${currentAgent.roleRuntimeId} is unavailable`,
+                );
+              }
+              const kind: StoryAgentKind =
+                role.authority === "project-manager"
+                  ? "project-manager"
+                  : role.authority === "advisor"
+                    ? "advisor"
+                    : role.authority === "reviewer"
+                      ? "reviewer"
+                      : "writer";
+              const sourceStory =
+                currentAgent.taskId === null
+                  ? current.stories[0]
+                  : current.stories.find(
+                      (story) => story.id === currentAgent.taskId,
+                    );
+              if (sourceStory === undefined) {
+                throw new ProductionOrchestrationProviderError(
+                  `restoration agent ${currentAgent.id} has no exact story authority`,
+                );
+              }
+              const target =
+                kind === "project-manager"
+                  ? Object.freeze({
+                      ...sourceStory,
+                      id: `${sourceStory.id}-management`,
+                      branchName: current.run.integrationBranch,
+                      worktreePath: current.run.integrationWorktree,
+                    })
+                  : sourceStory;
+              const configuration = await launchConfiguration.resolve(
+                kind,
+                role,
+                currentAgent,
+                target,
+                current.run,
+                current,
+              );
+              if (configuration.sessionId !== input.sessionId) {
+                throw new ProductionOrchestrationProviderError(
+                  `restoration session ${input.sessionId} conflicts with deterministic launch authority`,
+                );
+              }
+              const session = await sessions.create(
+                current.run,
+                target,
+                currentAgent.id,
+              );
+              let writerLease =
+                kind === "writer"
+                  ? runtime.repository.readWriterLease(
+                      current.run.id,
+                      sourceStory.id,
+                    )
+                  : null;
+              if (
+                kind === "writer" &&
+                (writerLease?.ownerAgentId !== currentAgent.id ||
+                  writerLease.expiresAt === null ||
+                  writerLease.expiresAt <= write.now)
+              ) {
+                writerLease = runtime.repository.acquireWriterLease({
+                  write,
+                  runId: current.run.id,
+                  storyId: sourceStory.id,
+                  ownerAgentId: currentAgent.id,
+                  ttlMs: 15_000,
+                });
+              }
+              const writerLeaseActive =
+                kind !== "writer" ||
+                (writerLease?.ownerAgentId === currentAgent.id &&
+                  writerLease.expiresAt !== null &&
+                  writerLease.expiresAt > write.now);
+              const preparation = new DeterministicAssignmentPreparation({
+                resolveRole: () =>
+                  Promise.resolve({
+                    role,
+                    runtimeId: role.runtimeId,
+                    rolePrompt: role.systemPrompt,
+                  }),
+                resolveResources: () =>
+                  Promise.resolve({
+                    agent: currentAgent,
+                    paneId: input.paneId,
+                    sessionId: input.sessionId,
+                    sessionPath: session.sessionPath,
+                    configPath: session.configPath,
+                    runtimePath: configuration.runtimePath,
+                    controllerSocketPath: configuration.controllerSocketPath,
+                    controllerChildAuthToken: session.controllerChildAuthToken,
+                    piCliPath: configuration.piCliPath,
+                    piPackagePath: configuration.piPackagePath,
+                    agentworksPackagePath: configuration.agentworksPackagePath,
+                    childBridgePath: configuration.childBridgePath,
+                    nodePath: configuration.nodePath,
+                    gitMetadataPaths: configuration.gitMetadataPaths,
+                    additionalReadOnlyPaths:
+                      configuration.additionalReadOnlyPaths,
+                    provider: configuration.provider,
+                    model: configuration.model,
+                    thinking: configuration.thinking,
+                    writerLeaseActive,
+                    controllerFenceCurrent:
+                      configuration.controllerFenceCurrent,
+                    expectedRevisionMatches:
+                      configuration.expectedRevisionMatches,
+                  }),
+              });
+              const prepared = await (kind === "project-manager"
+                ? preparation.prepareProjectManager(
+                    sourceStory,
+                    current.run,
+                    current,
+                  )
+                : kind === "advisor"
+                  ? preparation.prepareAdvisor(
+                      sourceStory,
+                      current.run,
+                      current,
+                    )
+                  : kind === "reviewer"
+                    ? preparation.prepareReviewer(
+                        sourceStory,
+                        current.run,
+                        current,
+                      )
+                    : preparation.prepareWriter(
+                        sourceStory,
+                        current.run,
+                        current,
+                      ));
+              return Object.freeze({
+                ...prepared.request,
+                requireExistingSession: true,
+                ...(currentAgent.piSessionPath === null
+                  ? {}
+                  : { expectedSessionFile: currentAgent.piSessionPath }),
+              });
+            },
+          },
+        }),
+      );
       const loop = createProductionOrchestrationLoop({
         repository: runtime.repository,
         git,
@@ -536,7 +738,7 @@ export function createProductionOrchestrationProvider(
         ),
         write,
         clock: Date.now,
-        piLauncher: new SecurePiAgentLauncher(sandbox, herdr),
+        piLauncher,
         roleCatalog,
         roleSelector,
         agentFactory: new ControllerAgentFactory(Date.now),
@@ -574,6 +776,37 @@ export function createProductionOrchestrationProvider(
           return action.type;
         }),
       };
+    },
+    async restorePanes(write: FencedWrite) {
+      const descriptor = runtime.descriptor;
+      if (descriptor === null) {
+        throw new ProductionOrchestrationProviderError(
+          "controller runtime is not running",
+        );
+      }
+      const current: ControllerSnapshot | null =
+        runtime.repository.loadSnapshot(descriptor.runId);
+      if (current === null) {
+        throw new ProductionOrchestrationProviderError(
+          "controller run is unavailable",
+        );
+      }
+      const paneRestoration = paneRestorations.get(runtime);
+      if (paneRestoration === undefined) {
+        if (current.agents.length === 0) {
+          return { restored: false };
+        }
+        throw new ProductionOrchestrationProviderError(
+          "pane restoration requires the original trusted live orchestration composition",
+        );
+      }
+      const result = await paneRestoration.restoreMissingPane({
+        runId: descriptor.runId,
+        workspaceId,
+        write,
+        metadataSequence: current.revision,
+      });
+      return { ...result };
     },
   });
 }
