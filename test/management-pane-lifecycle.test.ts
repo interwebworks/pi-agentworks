@@ -276,6 +276,8 @@ test("globally rejects duplicate operation ownership before splitting", async ()
   );
   assert.deepEqual(fixture.herdr.listWorkspaceIds, [undefined]);
   assert.equal(fixture.herdr.splitRequests.length, 0);
+  assert.equal(fixture.herdr.renames.length, 0);
+  assert.equal(fixture.herdr.metadata.length, 0);
 });
 
 test("rejects interrupted ownership with parent or pane-location drift before splitting", async () => {

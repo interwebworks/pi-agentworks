@@ -287,6 +287,67 @@ test("management pane failure prevents agents and status retries bootstrap", asy
   }
 });
 
+test("status never adopts the caller origin when controller state has none", async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-origin-refusal-"));
+  let launcherCalls = 0;
+  let runId: string | undefined;
+  try {
+    const gateway = createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      process.cwd(),
+      {
+        managementPaneLauncher: {
+          ensure() {
+            launcherCalls += 1;
+            return Promise.resolve({
+              paneId: "w1P:p2",
+              paneCreated: true,
+              dashboardStarted: true,
+            });
+          },
+        },
+      },
+    );
+    const launch = await gateway.execute({
+      action: "launch",
+      mode: "NORMAL",
+      task: "refuse mutable recovery origin",
+    });
+    runId = /Agentworks run (\S+) was saved/u.exec(launch.text)?.[1];
+    assert.ok(runId);
+    assert.equal(launch.notificationType, "error");
+    assert.match(launch.text, /controller has no authoritative parent origin/u);
+    assert.equal(launcherCalls, 0);
+
+    const status = await gateway.execute({
+      action: "status",
+      runId,
+      runtime: {
+        workspaceId: "w1P",
+        origin: { tabId: "w1P:t9", paneId: "w1P:p9" },
+        provider: "local-sglang",
+        model: "Qwen/Qwen3.5-2B",
+        thinking: "off",
+        allowHostNetwork: true,
+      },
+    });
+    assert.equal(status.notificationType, "warning");
+    assert.match(status.text, /controller has no authoritative parent origin/u);
+    assert.equal(launcherCalls, 0);
+  } finally {
+    if (runId !== undefined) {
+      const client =
+        await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+      try {
+        await client.request({ action: "controller.shutdown", payload: {} });
+      } finally {
+        client.close();
+      }
+    }
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
 test("live launch explains that an unborn repository needs an initial commit", async () => {
   const repository = mkdtempSync(join(tmpdir(), "agentworks-unborn-repo-"));
   const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-parent-gateway-"));
