@@ -98,6 +98,7 @@ export function createProductionOrchestrationLoop(
     panes: dependencies.paneAllocator,
     sessions: dependencies.sessions,
     configuration: dependencies.launchConfiguration,
+    roles: dependencies.roleCatalog,
     gitRollback: dependencies.gitRollback,
   });
   const resources = new ControllerOwnedAssignmentResourceProvider({

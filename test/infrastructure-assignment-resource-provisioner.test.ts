@@ -4,6 +4,7 @@ import {
   createAgentState,
   createRunState,
   createStoryState,
+  transitionAgent,
 } from "../src/domain/controller-state.ts";
 import type { AssignmentInfrastructureEvidence } from "../src/application/launch/assignment-resource-evidence.ts";
 import {
@@ -16,7 +17,7 @@ import type { ControllerSnapshot } from "../src/application/ports/controller-rep
 const role: RoleCatalogEntry = {
   id: "backend-developer",
   runtimeId: "pack/backend-developer",
-  label: "Backend Developer",
+  label: "Canonical API Builder",
   description: "Builds backend changes.",
   authority: "worker",
   required: false,
@@ -58,11 +59,22 @@ function fixture() {
     worktreePath: story.worktreePath,
     createdAt: 1,
   });
+  const existingAgent = transitionAgent(
+    createAgentState({
+      id: "agent-existing",
+      runId: run.id,
+      roleRuntimeId: role.runtimeId,
+      taskId: story.id,
+      worktreePath: story.worktreePath,
+      createdAt: 1,
+    }),
+    { type: "launch-requested", paneId: "pane-existing", at: 2 },
+  );
   const snapshot: ControllerSnapshot = {
     revision: 4,
     run,
     stories: [story],
-    agents: [agent],
+    agents: [existingAgent],
   };
   const git: AssignmentInfrastructureEvidence["git"] = {
     commonGitDirectory: "/repo/.git",
@@ -112,11 +124,17 @@ test("resource provisioner composes Git, pane, session, and launch evidence", as
   const { run, story, agent, snapshot, git, pane, session, configuration } =
     fixture();
   let rolledBack = false;
+  let expectedLabels: readonly string[] = [];
   const provisioner = new InfrastructureAssignmentResourceProvisioner({
     agents: { create: () => Promise.resolve(agent) },
     git: { provisionGit: () => git },
     panes: {
-      allocate: () => Promise.resolve(pane as never),
+      allocate: (request) => {
+        expectedLabels = (request.expectedAgents ?? []).map(
+          (entry) => entry.label,
+        );
+        return Promise.resolve(pane as never);
+      },
       release: () => Promise.resolve(),
     },
     sessions: {
@@ -124,6 +142,10 @@ test("resource provisioner composes Git, pane, session, and launch evidence", as
       cleanup: () => Promise.resolve(),
     },
     configuration: { resolve: () => Promise.resolve(configuration) },
+    roles: {
+      find: (runtimeId) =>
+        Promise.resolve(runtimeId === role.runtimeId ? role : null),
+    },
     gitRollback: {
       rollback: () => {
         rolledBack = true;
@@ -142,6 +164,7 @@ test("resource provisioner composes Git, pane, session, and launch evidence", as
   assert.equal(result.agent.id, agent.id);
   assert.equal(result.paneId, pane.paneId);
   assert.equal(result.sessionId, configuration.sessionId);
+  assert.deepEqual(expectedLabels, ["Canonical API Builder"]);
   assert.equal(rolledBack, false);
 });
 
@@ -171,6 +194,10 @@ test("resource provisioner cleans session, pane, and Git workspace on evidence f
     configuration: {
       resolve: () =>
         Promise.resolve({ ...configuration, controllerFenceCurrent: false }),
+    },
+    roles: {
+      find: (runtimeId) =>
+        Promise.resolve(runtimeId === role.runtimeId ? role : null),
     },
     gitRollback: {
       rollback: () => {

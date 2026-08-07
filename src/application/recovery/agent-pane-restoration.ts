@@ -102,8 +102,8 @@ export interface AgentPaneRestorationControllerDependencies {
   readonly processEvidence: PaneProcessEvidenceGateway;
   readonly lifecycle: Pick<AgentsTabLifecycle, "ensure">;
   readonly launcher: PiAgentLauncher;
+  readonly resolveRoleLabel: (agent: AgentState) => Promise<string>;
   readonly preparation: AgentPaneRestorationLaunchPreparer;
-  readonly resolveLabel?: (agent: AgentState) => Promise<string>;
   readonly restorationId?: () => string;
   readonly processExists?: (processId: number) => boolean;
   readonly afterPhase?: (
@@ -131,15 +131,6 @@ const inFlightRestorations = new WeakMap<
   Map<string, Promise<AgentPaneRestorationResult>>
 >();
 
-function roleLabel(runtimeId: string): string {
-  const roleId = runtimeId.split("/").at(-1) ?? runtimeId;
-  return roleId
-    .split(/[-_]/u)
-    .filter((part) => part.length > 0)
-    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
-}
-
 function exactSlot(value: string | undefined): number | null {
   if (value === undefined || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
     return null;
@@ -166,8 +157,8 @@ export class AgentPaneRestorationController {
   readonly #processEvidence: PaneProcessEvidenceGateway;
   readonly #lifecycle: Pick<AgentsTabLifecycle, "ensure">;
   readonly #launcher: PiAgentLauncher;
+  readonly #resolveRoleLabel: (agent: AgentState) => Promise<string>;
   readonly #preparation: AgentPaneRestorationLaunchPreparer;
-  readonly #resolveLabel: (agent: AgentState) => Promise<string>;
   readonly #restorationId: () => string;
   readonly #processExists: (processId: number) => boolean;
   readonly #afterPhase: NonNullable<
@@ -180,10 +171,8 @@ export class AgentPaneRestorationController {
     this.#processEvidence = dependencies.processEvidence;
     this.#lifecycle = dependencies.lifecycle;
     this.#launcher = dependencies.launcher;
+    this.#resolveRoleLabel = dependencies.resolveRoleLabel;
     this.#preparation = dependencies.preparation;
-    this.#resolveLabel =
-      dependencies.resolveLabel ??
-      ((agent) => Promise.resolve(roleLabel(agent.roleRuntimeId)));
     this.#restorationId = dependencies.restorationId ?? randomUUID;
     this.#processExists =
       dependencies.processExists ??
@@ -364,11 +353,11 @@ export class AgentPaneRestorationController {
     });
     await this.#afterPhase("reserved", reservation);
 
-    const labels = new Map(
+    const canonicalRoleLabels = new Map(
       await Promise.all(
         roster.map(async (entry) => {
-          const label = (await this.#resolveLabel(entry.agent)).trim();
-          if (label.length === 0) {
+          const label = await this.#resolveRoleLabel(entry.agent);
+          if (label.trim().length === 0) {
             throw new AgentPaneRestorationError(
               `agent ${entry.agent.id} has no canonical role label`,
             );
@@ -393,16 +382,28 @@ export class AgentPaneRestorationController {
           "surviving pane is absent from the controller roster",
         );
       }
+      const label = canonicalRoleLabels.get(entry.agent.id);
+      if (label === undefined) {
+        throw new AgentPaneRestorationError(
+          `agent ${entry.agent.id} canonical role label disappeared`,
+        );
+      }
       assignments[candidate.slot] = {
         agentId: entry.agent.id,
-        label: labels.get(entry.agent.id) ?? "",
+        label,
         cwd: entry.agent.worktreePath,
       };
       expectedPaneIds[candidate.slot] = entry.launch.paneId;
     }
+    const targetLabel = canonicalRoleLabels.get(target.agent.id);
+    if (targetLabel === undefined) {
+      throw new AgentPaneRestorationError(
+        `agent ${target.agent.id} canonical role label disappeared`,
+      );
+    }
     assignments[slot] = {
       agentId: target.agent.id,
-      label: labels.get(target.agent.id) ?? "",
+      label: targetLabel,
       cwd: target.agent.worktreePath,
       restorationId: reservation.restorationId,
     };

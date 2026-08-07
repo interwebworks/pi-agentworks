@@ -347,6 +347,8 @@ function createFixture(): Fixture {
         herdr,
         processEvidence: herdr.processEvidence,
         lifecycle,
+        resolveRoleLabel: (agent) =>
+          Promise.resolve(`Canonical ${agent.roleRuntimeId}`),
         restorationId: () => "restore-middle-slot-1",
         processExists,
         ...(afterPhase === undefined

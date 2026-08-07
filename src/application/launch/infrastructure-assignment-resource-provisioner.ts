@@ -3,7 +3,10 @@ import type {
   RunState,
   StoryState,
 } from "../../domain/controller-state.ts";
-import type { RoleCatalogEntry } from "./role-resource-resolver.ts";
+import type {
+  RoleCatalog,
+  RoleCatalogEntry,
+} from "./role-resource-resolver.ts";
 import type {
   AssignmentLaunchResources,
   StoryAgentKind,
@@ -102,14 +105,6 @@ function assignmentTarget(
       })
     : story;
 }
-function roleLabel(runtimeId: string): string {
-  const roleId = runtimeId.split("/").at(-1) ?? runtimeId;
-  return roleId
-    .split(/[-_]/u)
-    .filter((part) => part.length > 0)
-    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
-}
 
 type HerdrAssignmentPaneProvisioner = Pick<
   HerdrAgentPaneAllocator,
@@ -122,6 +117,7 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
   readonly #panes: Pick<HerdrAgentPaneAllocator, "allocate" | "release">;
   readonly #sessions: PrivateSessionProvider;
   readonly #configuration: AssignmentLaunchConfigurationResolver;
+  readonly #roles: RoleCatalog;
   readonly #gitRollback: GitWorkspaceRollback;
 
   constructor(dependencies: {
@@ -130,6 +126,7 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
     readonly panes: HerdrAssignmentPaneProvisioner;
     readonly sessions: PrivateSessionProvider;
     readonly configuration: AssignmentLaunchConfigurationResolver;
+    readonly roles: RoleCatalog;
     readonly gitRollback: GitWorkspaceRollback;
   }) {
     this.#agents = dependencies.agents;
@@ -137,6 +134,7 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
     this.#panes = dependencies.panes;
     this.#sessions = dependencies.sessions;
     this.#configuration = dependencies.configuration;
+    this.#roles = dependencies.roles;
     this.#gitRollback = dependencies.gitRollback;
   }
 
@@ -162,6 +160,27 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
     let session: Awaited<ReturnType<PrivateSessionProvider["create"]>> | null =
       null;
     try {
+      const expectedAgents = await Promise.all(
+        snapshot.agents
+          .filter(
+            (existing) =>
+              existing.paneId !== null && existing.status !== "closed",
+          )
+          .map(async (existing) => {
+            const existingRole = await this.#roles.find(existing.roleRuntimeId);
+            if (existingRole === null) {
+              throw new InfrastructureAssignmentProvisionerError(
+                `existing agent ${existing.id} role ${existing.roleRuntimeId} is unavailable`,
+              );
+            }
+            return Object.freeze({
+              agentId: existing.id,
+              paneId: existing.paneId ?? "",
+              label: existingRole.label,
+              cwd: existing.worktreePath,
+            });
+          }),
+      );
       const pane = await this.#panes.allocate({
         runId: run.id,
         operationId: configuration.operationId,
@@ -172,17 +191,7 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
         expectedTabId: configuration.expectedTabId,
         expectedPaneId: configuration.expectedPaneId,
         metadataSequence: configuration.metadataSequence,
-        expectedAgents: snapshot.agents
-          .filter(
-            (existing) =>
-              existing.paneId !== null && existing.status !== "closed",
-          )
-          .map((existing) => ({
-            agentId: existing.id,
-            paneId: existing.paneId ?? "",
-            label: roleLabel(existing.roleRuntimeId),
-            cwd: existing.worktreePath,
-          })),
+        expectedAgents,
       });
       paneId = pane.paneId;
       session = await this.#sessions.create(run, target, agent.id);
