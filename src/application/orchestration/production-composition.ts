@@ -116,6 +116,8 @@ export function createProductionOrchestrationLoop(
   const launcher = new SecureStoryAgentLauncherAdapter({
     launcher: dependencies.piLauncher,
     preparation,
+    launchAuthority: dependencies.repository,
+    write: dependencies.write,
     clock: dependencies.clock,
   });
   const effects = new ControllerOrchestrationEffects({

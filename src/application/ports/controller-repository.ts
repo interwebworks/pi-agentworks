@@ -88,6 +88,28 @@ export interface MaterializeAgentLaunchInput {
   readonly write: FencedWrite;
   readonly agent: AgentState;
   readonly paneId: string;
+  readonly sessionId: string;
+}
+
+export interface ConfirmAgentLaunchInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly agentId: string;
+  readonly paneId: string;
+  readonly sessionId: string;
+  readonly processIds: readonly number[];
+  readonly commandSha256: string;
+}
+
+export interface AgentLaunchRecord {
+  readonly runId: string;
+  readonly agentId: string;
+  readonly paneId: string;
+  readonly sessionId: string;
+  readonly status: "materialized" | "confirmed";
+  readonly processIds: readonly number[];
+  readonly commandSha256: string | null;
+  readonly updatedAt: number;
 }
 
 export interface InitializeRunInput {
@@ -125,6 +147,8 @@ export interface ControllerRepository {
   acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease;
   /** Optional during test-only/in-memory composition; production SQLite implements it. */
   materializeAgentLaunch?(input: MaterializeAgentLaunchInput): AgentState;
+  confirmAgentLaunch(input: ConfirmAgentLaunchInput): AgentLaunchRecord;
+  readAgentLaunch(runId: string, agentId: string): AgentLaunchRecord | null;
   renewWriterLease(input: HeldWriterLeaseInput, ttlMs: number): WriterLease;
   releaseWriterLease(input: HeldWriterLeaseInput): WriterLease;
   revokeWriterLease(input: RevokeWriterLeaseInput): WriterLease;

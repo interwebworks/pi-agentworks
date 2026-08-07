@@ -437,25 +437,33 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     });
 
     const command = [plan.executablePath, ...plan.arguments];
-    const scriptPath = launchScript(
-      runtimePath,
-      request.task.assignedAgentId,
-      request.sessionId,
-      command,
-    );
-    await this.#herdr.runCommand(request.paneId, ["/bin/sh", scriptPath]);
-    const processInfo = await this.#awaitProcessEvidence(
+    let processIds = await this.#inspectProcessEvidence(
       request.paneId,
+      nodePath,
       piCliPath,
       request.sessionId,
       artifacts.task.path,
     );
+    if (processIds === null) {
+      const scriptPath = launchScript(
+        runtimePath,
+        request.task.assignedAgentId,
+        request.sessionId,
+        command,
+      );
+      await this.#herdr.runCommand(request.paneId, ["/bin/sh", scriptPath]);
+      processIds = await this.#awaitProcessEvidence(
+        request.paneId,
+        nodePath,
+        piCliPath,
+        request.sessionId,
+        artifacts.task.path,
+      );
+    }
     return Object.freeze({
       paneId: request.paneId,
       sessionId: request.sessionId,
-      processIds: Object.freeze(
-        processInfo.foregroundProcesses.map((process) => process.pid),
-      ),
+      processIds,
       sandbox: plan.evidence,
       rolePromptPath: artifacts.role.path,
       taskPromptPath: artifacts.task.path,
@@ -520,28 +528,64 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     }
   }
 
-  async #awaitProcessEvidence(
+  async #inspectProcessEvidence(
     paneId: string,
+    nodePath: string,
     piCliPath: string,
     sessionId: string,
     taskPath: string,
-  ): Promise<HerdrPaneProcessInfo> {
+  ): Promise<readonly number[] | null> {
+    const info: HerdrPaneProcessInfo =
+      await this.#herdr.getPaneProcessInfo(paneId);
+    if (info.paneId !== paneId) {
+      throw new SecurePiAgentLaunchError(
+        "Herdr process evidence belongs to a different pane",
+      );
+    }
+    const exact = info.foregroundProcesses.filter((process) => {
+      const argv = process.argv ?? [];
+      return (
+        argv[0] === nodePath &&
+        argv.includes(piCliPath) &&
+        argv.includes("--session-id") &&
+        argv.includes(sessionId) &&
+        argv.includes(`@${taskPath}`)
+      );
+    });
+    const conflictingPi = info.foregroundProcesses.some((process) => {
+      const argv = process.argv ?? [];
+      return (
+        argv[0] === nodePath &&
+        argv.includes(piCliPath) &&
+        !exact.includes(process)
+      );
+    });
+    if (conflictingPi || exact.length > 1) {
+      throw new SecurePiAgentLaunchError(
+        "Herdr pane contains conflicting or duplicate interactive Pi process evidence",
+      );
+    }
+    return exact.length === 1
+      ? Object.freeze(exact.map((process) => process.pid))
+      : null;
+  }
+
+  async #awaitProcessEvidence(
+    paneId: string,
+    nodePath: string,
+    piCliPath: string,
+    sessionId: string,
+    taskPath: string,
+  ): Promise<readonly number[]> {
     for (let attempt = 0; attempt < this.#processPollAttempts; attempt += 1) {
-      const info = await this.#herdr.getPaneProcessInfo(paneId);
-      if (
-        info.paneId === paneId &&
-        info.foregroundProcesses.some((process) => {
-          const argv = process.argv ?? [];
-          return (
-            argv.includes(piCliPath) &&
-            argv.includes("--session-id") &&
-            argv.includes(sessionId) &&
-            argv.includes(`@${taskPath}`)
-          );
-        })
-      ) {
-        return info;
-      }
+      const processIds = await this.#inspectProcessEvidence(
+        paneId,
+        nodePath,
+        piCliPath,
+        sessionId,
+        taskPath,
+      );
+      if (processIds !== null) return processIds;
       if (attempt + 1 < this.#processPollAttempts) {
         await this.#sleep(this.#processPollIntervalMs);
       }

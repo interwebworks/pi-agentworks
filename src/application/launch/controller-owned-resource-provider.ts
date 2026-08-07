@@ -153,6 +153,7 @@ export class ControllerOwnedAssignmentResourceProvider {
           write: this.#write,
           agent: resources.agent,
           paneId: resources.paneId,
+          sessionId: resources.sessionId,
         });
         resources = Object.freeze({ ...resources, agent: launchedAgent });
       }

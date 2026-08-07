@@ -56,6 +56,12 @@ class FakeRepository implements ControllerRepository {
   acquireWriterLease(): never {
     throw new Error("unused");
   }
+  confirmAgentLaunch(): never {
+    throw new Error("unused");
+  }
+  readAgentLaunch(): null {
+    return null;
+  }
   renewWriterLease(): never {
     throw new Error("unused");
   }

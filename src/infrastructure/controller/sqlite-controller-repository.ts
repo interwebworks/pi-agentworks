@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
   AcquireWriterLeaseInput,
+  AgentLaunchRecord,
   CommitResult,
   CommitSnapshotInput,
   ControllerEventCursor,
@@ -12,6 +13,7 @@ import type {
   ControllerLease,
   ControllerRepository,
   ControllerSnapshot,
+  ConfirmAgentLaunchInput,
   FencedWrite,
   HeldWriterLeaseInput,
   InitializeRunInput,
@@ -33,7 +35,9 @@ import {
   countOccupiedAgentSlots,
 } from "../../domain/scheduling.ts";
 
-const DATABASE_SCHEMA_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 3;
+const SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_EVENT_READ_LIMIT = 1_000;
 const MAX_EVENTS_PER_COMMIT = 100;
 
@@ -88,6 +92,17 @@ interface WriterLeaseRow {
 interface ActiveWriterLeaseRow extends WriterLeaseRow {
   readonly owner_agent_id: string;
   readonly expires_at: number;
+}
+
+interface AgentLaunchRow {
+  readonly run_id: string;
+  readonly agent_id: string;
+  readonly pane_id: string;
+  readonly session_id: string;
+  readonly process_ids_json: string | null;
+  readonly command_sha256: string | null;
+  readonly confirmed_at: number | null;
+  readonly updated_at: number;
 }
 
 function isActiveWriterLeaseRow(
@@ -392,6 +407,74 @@ function parseWriterLease(row: WriterLeaseRow): WriterLease {
   });
 }
 
+function parseAgentLaunch(row: AgentLaunchRow): AgentLaunchRecord {
+  const updatedAt = asSafeInteger(row.updated_at, "agent launch timestamp");
+  const confirmed = row.confirmed_at !== null;
+  if (row.confirmed_at !== null) {
+    asSafeInteger(row.confirmed_at, "agent launch confirmation timestamp");
+  }
+  if (
+    confirmed !== (row.process_ids_json !== null) ||
+    confirmed !== (row.command_sha256 !== null)
+  ) {
+    throw new ControllerDatabaseIntegrityError(
+      "agent launch confirmation evidence is incomplete",
+    );
+  }
+  let processIds: readonly number[] = [];
+  if (row.process_ids_json !== null) {
+    const parsed: unknown = JSON.parse(row.process_ids_json);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new ControllerDatabaseIntegrityError(
+        "agent launch process evidence is invalid",
+      );
+    }
+    const validated: number[] = [];
+    for (const pid of parsed as readonly unknown[]) {
+      if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid < 1) {
+        throw new ControllerDatabaseIntegrityError(
+          "agent launch process evidence is invalid",
+        );
+      }
+      validated.push(pid);
+    }
+    if (new Set(validated).size !== validated.length) {
+      throw new ControllerDatabaseIntegrityError(
+        "agent launch process evidence is invalid",
+      );
+    }
+    processIds = Object.freeze(validated);
+  }
+  if (
+    row.command_sha256 !== null &&
+    !/^[a-f0-9]{64}$/u.test(row.command_sha256)
+  ) {
+    throw new ControllerDatabaseIntegrityError(
+      "agent launch command digest is invalid",
+    );
+  }
+  return Object.freeze({
+    runId: row.run_id,
+    agentId: row.agent_id,
+    paneId: nonEmpty(row.pane_id, "agent launch pane id"),
+    sessionId: nonEmpty(row.session_id, "agent launch session id"),
+    status: confirmed ? "confirmed" : "materialized",
+    processIds,
+    commandSha256: row.command_sha256,
+    updatedAt,
+  });
+}
+
+function sameAgentIdentity(left: AgentState, right: AgentState): boolean {
+  return (
+    left.id === right.id &&
+    left.runId === right.runId &&
+    left.roleRuntimeId === right.roleRuntimeId &&
+    left.taskId === right.taskId &&
+    left.worktreePath === right.worktreePath
+  );
+}
+
 function parseCommitResult(
   serialized: string,
   replayed: boolean,
@@ -532,38 +615,70 @@ export class SqliteControllerRepository implements ControllerRepository {
     readonly write: FencedWrite;
     readonly agent: AgentState;
     readonly paneId: string;
+    readonly sessionId: string;
   }): AgentState {
     this.#assertOpen();
     const paneId = nonEmpty(input.paneId, "agent launch pane id");
-    const launched = transitionAgent(input.agent, {
-      type: "launch-requested",
-      paneId,
-      at: Math.max(input.write.now, input.agent.updatedAt),
-    });
-    this.#transaction(() => {
+    const sessionId = nonEmpty(input.sessionId, "agent launch session id");
+    if (!SESSION_ID_PATTERN.test(sessionId)) {
+      throw new ControllerRepositoryError(
+        "agent launch session id must be an exact UUID",
+      );
+    }
+    const launched = this.#transaction(() => {
       this.#assertFence(input.write);
       const existing = this.#database
         .prepare(
           "SELECT state_json FROM agents WHERE run_id = ? AND agent_id = ?",
         )
-        .get(launched.runId, launched.id) as unknown as StateRow | undefined;
+        .get(input.agent.runId, input.agent.id) as unknown as
+        StateRow | undefined;
+      let current: AgentState = input.agent;
       if (existing !== undefined) {
-        const current = parseJsonObject(
+        const persisted = parseJsonObject(
           existing.state_json,
           "agent launch state",
         );
-        if (!isAgentState(current)) {
+        if (!isAgentState(persisted)) {
           throw new ControllerDatabaseIntegrityError(
             "agent launch state is invalid",
           );
         }
-        if (current.status !== "planned") {
-          throw new StaleWriterLeaseError(
-            `agent ${launched.id} is already ${current.status}`,
-          );
-        }
+        current = persisted;
       } else {
-        this.#assertAgentSlotAvailable(launched.runId);
+        this.#assertAgentSlotAvailable(input.agent.runId);
+      }
+      if (!sameAgentIdentity(current, input.agent)) {
+        throw new StaleWriterLeaseError(
+          `agent ${input.agent.id} has different controller identity`,
+        );
+      }
+      if (current.status !== "planned" && current.status !== "launching") {
+        throw new StaleWriterLeaseError(
+          `agent ${input.agent.id} is already ${current.status}`,
+        );
+      }
+      if (current.status === "launching" && current.paneId !== paneId) {
+        throw new StaleWriterLeaseError(
+          `agent ${input.agent.id} is launching in a different pane`,
+        );
+      }
+      const next =
+        current.status === "launching"
+          ? current
+          : transitionAgent(current, {
+              type: "launch-requested",
+              paneId,
+              at: Math.max(input.write.now, current.updatedAt),
+            });
+      const reservation = this.#agentLaunchRow(next.runId, next.id);
+      if (
+        reservation !== null &&
+        (reservation.pane_id !== paneId || reservation.session_id !== sessionId)
+      ) {
+        throw new StaleWriterLeaseError(
+          `agent ${next.id} has different pane or session launch evidence`,
+        );
       }
       this.#database
         .prepare(
@@ -575,15 +690,118 @@ export class SqliteControllerRepository implements ControllerRepository {
              state_json = excluded.state_json`,
         )
         .run(
-          launched.id,
-          launched.runId,
-          launched.schemaVersion,
-          launched.status,
-          JSON.stringify(launched),
+          next.id,
+          next.runId,
+          next.schemaVersion,
+          next.status,
+          JSON.stringify(next),
         );
+      if (reservation === null) {
+        this.#database
+          .prepare(
+            `INSERT INTO agent_launches(
+               run_id, agent_id, pane_id, session_id, process_ids_json,
+               command_sha256, confirmed_at, updated_at
+             ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)`,
+          )
+          .run(next.runId, next.id, paneId, sessionId, input.write.now);
+      }
+      return next;
     });
     this.#protectDatabaseFiles();
     return launched;
+  }
+
+  confirmAgentLaunch(input: ConfirmAgentLaunchInput): AgentLaunchRecord {
+    this.#assertOpen();
+    const runId = nonEmpty(input.runId, "agent launch run id");
+    const agentId = nonEmpty(input.agentId, "agent launch agent id");
+    const paneId = nonEmpty(input.paneId, "agent launch pane id");
+    const sessionId = nonEmpty(input.sessionId, "agent launch session id");
+    if (!SESSION_ID_PATTERN.test(sessionId)) {
+      throw new ControllerRepositoryError(
+        "agent launch session id must be an exact UUID",
+      );
+    }
+    const commandSha256 = nonEmpty(
+      input.commandSha256,
+      "agent launch command digest",
+    );
+    if (!/^[a-f0-9]{64}$/u.test(commandSha256)) {
+      throw new ControllerRepositoryError(
+        "agent launch command digest must be lowercase SHA-256",
+      );
+    }
+    const processIds = [...input.processIds].sort(
+      (left, right) => left - right,
+    );
+    if (
+      processIds.length === 0 ||
+      processIds.some((pid) => !Number.isSafeInteger(pid) || pid < 1) ||
+      new Set(processIds).size !== processIds.length
+    ) {
+      throw new ControllerRepositoryError(
+        "agent launch process ids must be unique positive integers",
+      );
+    }
+    const confirmed = this.#transaction(() => {
+      this.#assertFence(input.write);
+      const row = this.#agentLaunchRow(runId, agentId);
+      if (row === null) {
+        throw new StaleWriterLeaseError(
+          `agent ${agentId} has no materialized launch`,
+        );
+      }
+      const current = parseAgentLaunch(row);
+      if (current.paneId !== paneId || current.sessionId !== sessionId) {
+        throw new StaleWriterLeaseError(
+          `agent ${agentId} launch evidence has a different pane or session`,
+        );
+      }
+      if (current.status === "confirmed") {
+        if (
+          current.commandSha256 !== commandSha256 ||
+          JSON.stringify(current.processIds) !== JSON.stringify(processIds)
+        ) {
+          throw new StaleWriterLeaseError(
+            `agent ${agentId} has conflicting process launch evidence`,
+          );
+        }
+        return current;
+      }
+      this.#database
+        .prepare(
+          `UPDATE agent_launches
+           SET process_ids_json = ?, command_sha256 = ?, confirmed_at = ?, updated_at = ?
+           WHERE run_id = ? AND agent_id = ?`,
+        )
+        .run(
+          JSON.stringify(processIds),
+          commandSha256,
+          input.write.now,
+          input.write.now,
+          runId,
+          agentId,
+        );
+      const updated = this.#agentLaunchRow(runId, agentId);
+      if (updated === null) {
+        throw new ControllerDatabaseIntegrityError(
+          "confirmed agent launch disappeared",
+        );
+      }
+      return parseAgentLaunch(updated);
+    });
+    this.#protectDatabaseFiles();
+    return confirmed;
+  }
+
+  readAgentLaunch(runId: string, agentId: string): AgentLaunchRecord | null {
+    this.#assertOpen();
+    const row = this.#agentLaunchRow(
+      nonEmpty(runId, "agent launch run id"),
+      nonEmpty(agentId, "agent launch agent id"),
+    );
+    return row === null ? null : parseAgentLaunch(row);
   }
 
   acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease {
@@ -1079,6 +1297,14 @@ export class SqliteControllerRepository implements ControllerRepository {
       )
       .all() as unknown as readonly WriterLeaseRow[];
     for (const row of leaseRows) parseWriterLease(row);
+    const launchRows = this.#database
+      .prepare(
+        `SELECT run_id, agent_id, pane_id, session_id, process_ids_json,
+                command_sha256, confirmed_at, updated_at
+         FROM agent_launches`,
+      )
+      .all() as unknown as readonly AgentLaunchRow[];
+    for (const row of launchRows) parseAgentLaunch(row);
     const leaseRunIds = new Set(leaseRows.map((row) => row.run_id));
     for (const runId of leaseRunIds) {
       const snapshot = this.loadSnapshot(runId);
@@ -1198,7 +1424,7 @@ export class SqliteControllerRepository implements ControllerRepository {
           INSERT INTO controller_lease(singleton, owner_id, fencing_token, expires_at)
           VALUES (1, NULL, 0, NULL);
 
-          PRAGMA user_version = 2;
+          PRAGMA user_version = 3;
         `);
       }
       if (version < 2) {
@@ -1239,6 +1465,35 @@ export class SqliteControllerRepository implements ControllerRepository {
             ON writer_lease_events(run_id, story_id, writer_lease_event_id);
 
           PRAGMA user_version = 2;
+        `);
+      }
+      if (version < 3) {
+        this.#database.exec(`
+          CREATE TABLE agent_launches (
+            run_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            pane_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            process_ids_json TEXT CHECK (
+              process_ids_json IS NULL OR json_valid(process_ids_json)
+            ),
+            command_sha256 TEXT,
+            confirmed_at INTEGER,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (run_id, agent_id),
+            FOREIGN KEY (run_id, agent_id)
+              REFERENCES agents(run_id, agent_id) ON DELETE CASCADE,
+            CHECK (
+              (process_ids_json IS NULL AND command_sha256 IS NULL AND confirmed_at IS NULL) OR
+              (process_ids_json IS NOT NULL AND command_sha256 IS NOT NULL AND confirmed_at IS NOT NULL)
+            )
+          ) STRICT;
+          CREATE UNIQUE INDEX agent_launches_by_pane
+            ON agent_launches(run_id, pane_id);
+          CREATE UNIQUE INDEX agent_launches_by_session
+            ON agent_launches(run_id, session_id);
+
+          PRAGMA user_version = 3;
         `);
       }
     });
@@ -1286,6 +1541,18 @@ export class SqliteControllerRepository implements ControllerRepository {
         );
       }
     }
+  }
+
+  #agentLaunchRow(runId: string, agentId: string): AgentLaunchRow | null {
+    const row = this.#database
+      .prepare(
+        `SELECT run_id, agent_id, pane_id, session_id, process_ids_json,
+                command_sha256, confirmed_at, updated_at
+         FROM agent_launches
+         WHERE run_id = ? AND agent_id = ?`,
+      )
+      .get(runId, agentId) as unknown as AgentLaunchRow | undefined;
+    return row ?? null;
   }
 
   #requiredWriterLeaseRow(runId: string, storyId: string): WriterLeaseRow {

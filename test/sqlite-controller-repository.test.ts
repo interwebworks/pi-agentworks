@@ -142,7 +142,7 @@ test("repository enables WAL, migrates once, and protects runtime files", () => 
     database.close();
 
     assert.equal(journal.journal_mode, "wal");
-    assert.equal(version.user_version, 2);
+    assert.equal(version.user_version, 3);
     assert.equal(
       statSync(join(fixture.directory, "runtime")).mode & 0o777,
       0o700,
@@ -214,6 +214,7 @@ test("agent launch capacity is atomic across reloads and releases only after ver
         },
         agent: reserved[0] ?? agent("missing"),
         paneId: "pane-1",
+        sessionId: "11111111-1111-4111-8111-111111111111",
       }).status,
       "launching",
     );
@@ -230,6 +231,7 @@ test("agent launch capacity is atomic across reloads and releases only after ver
           },
           agent: agent("agent-5"),
           paneId: "pane-5",
+          sessionId: "55555555-5555-4555-8555-555555555555",
         }),
       AgentCapacityExceededError,
     );
@@ -276,6 +278,7 @@ test("agent launch capacity is atomic across reloads and releases only after ver
           },
           agent: agent("agent-5"),
           paneId: "pane-5",
+          sessionId: "55555555-5555-4555-8555-555555555555",
         }),
       AgentCapacityExceededError,
     );
@@ -326,6 +329,7 @@ test("agent launch capacity is atomic across reloads and releases only after ver
         },
         agent: agent("agent-5"),
         paneId: "pane-5",
+        sessionId: "55555555-5555-4555-8555-555555555555",
       }).status,
       "launching",
     );
@@ -398,6 +402,7 @@ test("version one databases migrate writer lease tables without losing runs", ()
 
     const database = new DatabaseSync(fixture.databasePath);
     database.exec(`
+      DROP TABLE agent_launches;
       DROP TABLE writer_lease_events;
       DROP TABLE writer_leases;
       PRAGMA user_version = 1;
@@ -418,8 +423,91 @@ test("version one databases migrate writer lease tables without losing runs", ()
       )
       .get() as unknown as { readonly name: string } | undefined;
     migrated.close();
-    assert.equal(version.user_version, 2);
+    assert.equal(version.user_version, 3);
     assert.equal(leaseTable?.name, "writer_leases");
+  } finally {
+    reopened?.close();
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("materialized agent launches survive kill points and reconcile exact evidence idempotently", () => {
+  const fixture = createFixture();
+  let reopened: SqliteControllerRepository | null = null;
+  try {
+    const lease = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, lease.fencingToken);
+    const write = {
+      ownerId: "controller-a",
+      fencingToken: lease.fencingToken,
+      now: 1_200,
+    };
+    const first = fixture.repository.materializeAgentLaunch({
+      write,
+      agent: agent(),
+      paneId: "pane-1",
+      sessionId: "00000000-0000-4000-8000-000000000001",
+    });
+    assert.equal(first.status, "launching");
+    assert.equal(
+      fixture.repository.readAgentLaunch("run-1", "agent-1")?.status,
+      "materialized",
+    );
+
+    // Kill point: durable launch materialization landed, but no secure Pi
+    // process evidence was confirmed before the controller restarted.
+    fixture.repository.close();
+    reopened = new SqliteControllerRepository(fixture.databasePath);
+    const retryLease = reopened.acquireLease("controller-b", 11_000, 10_000);
+    const retryWrite = {
+      ownerId: "controller-b",
+      fencingToken: retryLease.fencingToken,
+      now: 11_100,
+    };
+    const retried = reopened.materializeAgentLaunch({
+      write: retryWrite,
+      agent: first,
+      paneId: "pane-1",
+      sessionId: "00000000-0000-4000-8000-000000000001",
+    });
+    assert.deepEqual(retried, first);
+    assert.throws(
+      () =>
+        reopened?.materializeAgentLaunch({
+          write: retryWrite,
+          agent: first,
+          paneId: "pane-other",
+          sessionId: "00000000-0000-4000-8000-000000000002",
+        }),
+      StaleWriterLeaseError,
+    );
+
+    const confirmation = {
+      write: retryWrite,
+      runId: "run-1",
+      agentId: "agent-1",
+      paneId: "pane-1",
+      sessionId: "00000000-0000-4000-8000-000000000001",
+      processIds: [42],
+      commandSha256: "a".repeat(64),
+    } as const;
+    const confirmed = reopened.confirmAgentLaunch(confirmation);
+    assert.equal(confirmed.status, "confirmed");
+    assert.deepEqual(confirmed.processIds, [42]);
+    assert.deepEqual(reopened.confirmAgentLaunch(confirmation), confirmed);
+    assert.throws(
+      () =>
+        reopened?.confirmAgentLaunch({
+          ...confirmation,
+          processIds: [43],
+        }),
+      StaleWriterLeaseError,
+    );
   } finally {
     reopened?.close();
     fixture.repository.close();

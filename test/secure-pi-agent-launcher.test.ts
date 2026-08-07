@@ -253,7 +253,7 @@ test("composes one fenced interactive Pi process through Bubblewrap and Herdr", 
     assert.deepEqual(evidence.processIds, [201]);
     assert.match(evidence.rolePromptSha256, /^[a-f0-9]{64}$/u);
     assert.match(evidence.commandSha256, /^[a-f0-9]{64}$/u);
-    assert.deepEqual(current.sleeps, [5]);
+    assert.deepEqual(current.sleeps, []);
     assert.equal(current.sandbox.requests.length, 1);
     const sandbox = current.sandbox.requests[0];
     assert.ok(sandbox);
@@ -404,7 +404,7 @@ test("launch refuses stale authority, pane mismatch, tool widening, and missing 
       missing.launcher.launch(missing.request),
       SecurePiAgentLaunchError,
     );
-    assert.equal(missing.herdr.processPolls, 3);
+    assert.equal(missing.herdr.processPolls, 4);
     assert.deepEqual(missing.sleeps, [5, 5]);
   } finally {
     rmSync(missing.root, { recursive: true, force: true });
@@ -418,6 +418,8 @@ test("relaunch after a kill point reuses the private artifacts idempotently", as
     // Simulates a crash after artifacts were written but before the agent was
     // confirmed: the artifacts already exist on the retry and must be reused.
     const second = await current.launcher.launch(current.request);
+    assert.equal(current.herdr.commands.length, 1);
+    assert.deepEqual(second.processIds, first.processIds);
     assert.equal(second.rolePromptPath, first.rolePromptPath);
     assert.equal(second.taskPromptPath, first.taskPromptPath);
     assert.equal(
@@ -427,6 +429,27 @@ test("relaunch after a kill point reuses the private artifacts idempotently", as
     assert.equal(second.rolePromptSha256, first.rolePromptSha256);
     assert.equal(second.taskPromptSha256, first.taskPromptSha256);
     assert.equal(second.commandSha256, first.commandSha256);
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("reconciliation refuses conflicting Pi session evidence without sending another command", async () => {
+  const current = fixture();
+  try {
+    await current.launcher.launch(current.request);
+    current.herdr.processArgv = [
+      current.request.nodePath,
+      current.request.piCliPath,
+      "--session-id",
+      "00000000-0000-4000-8000-000000000099",
+      `@${join(current.request.sessionPath, "task-assignment.md")}`,
+    ];
+    await assert.rejects(
+      current.launcher.launch(current.request),
+      /conflicting or duplicate interactive Pi process evidence/u,
+    );
+    assert.equal(current.herdr.commands.length, 1);
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }

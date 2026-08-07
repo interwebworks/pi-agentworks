@@ -132,7 +132,15 @@ export class OrchestrationLoop {
     const primaryStory = snapshot.stories[0];
     if (this.#initialTeam !== null && primaryStory !== undefined) {
       const launchedRoles = new Set(
-        snapshot.agents.map((agent) => agent.roleRuntimeId),
+        snapshot.agents
+          .filter((agent) => {
+            if (agent.status !== "launching") return true;
+            return (
+              this.#repository.readAgentLaunch(snapshot.run.id, agent.id)
+                ?.status === "confirmed"
+            );
+          })
+          .map((agent) => agent.roleRuntimeId),
       );
       if (!launchedRoles.has(this.#initialTeam.projectManagerRoleRuntimeId)) {
         actions.push({
@@ -171,11 +179,26 @@ export class OrchestrationLoop {
       });
     }
 
-    const commit = (base: ControllerSnapshot): void => {
+    const commit = (base: ControllerSnapshot): boolean => {
       const merged =
         base === snapshot
           ? current
           : mergeAfterConcurrentChildMessage(base, current);
+      if (
+        base !== snapshot &&
+        JSON.stringify({
+          run: base.run,
+          stories: base.stories,
+          agents: base.agents,
+        }) ===
+          JSON.stringify({
+            run: merged.run,
+            stories: merged.stories,
+            agents: merged.agents,
+          })
+      ) {
+        return false;
+      }
       this.#repository.commitSnapshot({
         write,
         runId: this.#runId,
@@ -187,16 +210,18 @@ export class OrchestrationLoop {
         agents: merged.agents,
         events,
       });
+      return true;
     };
+    let committed = false;
     try {
-      commit(snapshot);
+      committed = commit(snapshot);
     } catch (error) {
       if (!isStaleRevision(error)) throw error;
       const latest = this.#repository.loadSnapshot(this.#runId);
       if (latest === null) throw error;
-      commit(latest);
+      committed = commit(latest);
     }
 
-    return Object.freeze({ actions: admittedActions, committed: true });
+    return Object.freeze({ actions: admittedActions, committed });
   }
 }

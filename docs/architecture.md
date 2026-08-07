@@ -81,6 +81,7 @@ It stores the bounded role system prompt and strict task assignment as private c
 The Pi CLI receives explicit provider, model, thinking level, tool allowlist, child extension, task file, UUID session identity, session name, no-project-approval policy, and disabled ambient extension/skill/prompt/theme discovery.
 A dedicated per-agent Pi config directory is the only credential/config surface; the host Pi home is masked, credentials never appear in the Bubblewrap or Herdr argv, and the controller socket is referenced by path inside the read-only runtime mount.
 The launcher gives story writers a writable assigned worktree only with an active writer lease, gives reviewers and advisors a read-only worktree, and polls Herdr until the exact Pi CLI, session ID, and task artifact appear in foreground process argv evidence.
+Before secure Pi execution, the controller durably materializes one deterministic agent/pane/session reservation. Exact process IDs and the launch-command digest are confirmed in a separate fenced transaction only after Herdr proves the matching foreground Pi process. A materialized reservation without confirmation remains retryable for Project Manager, advisor, writer, and reviewer launch actions; concurrent retries coalesce inside the authoritative controller, and a post-crash retry adopts only an exact already-running process before sending any new terminal command.
 
 `NotificationGateway` emits Herdr-native visual and audio alerts, mapping info/success/attention/failure to none/done/request/request sounds.
 A bounded serialized deduplicator suppresses concurrent or repeated alerts only when both the caller key and SHA-256 content fingerprint match inside the cooldown window; changed state remains visible, failed CLI calls remain retryable, and Herdr shown/disabled/rate-limited/no-client/busy evidence is preserved.
@@ -186,7 +187,8 @@ On reconnect, the extension validates the descriptor and token, then queries con
 Missing panes become disconnected.
 The user can restore a recoverable session or explicitly abandon it.
 Unmerged worktrees are never deleted during recovery.
-Controller recovery is idempotent at every external side-effect boundary, including worktree creation, pane creation, child registration, candidate commit, review, merge, and cleanup.
+Controller recovery is idempotent at every external side-effect boundary, including worktree creation, pane creation, secure Pi process confirmation, child registration, candidate commit, review, merge, and cleanup.
+A crash or launch error after agent materialization leaves a fenced, identity-bound launch reservation rather than an ambiguous roster entry. Recovery recreates the same deterministic resources, refuses conflicting pane/session/process evidence, and confirms or reuses one exact process without creating another.
 
 ## Test strategy
 

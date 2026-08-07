@@ -136,6 +136,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
 - [ ] Complete live child completion/recovery proof after the first production orchestration tick.
   - [x] Launch the initial composed Project Manager, advisor, and story writer into one incrementally reconciled `Pi Agents` tab with controller-roster ownership.
+  - [x] Reconcile materialized-but-unconfirmed secure Pi launches from exact controller-owned pane, session, process, and command evidence without duplicating panes, sessions, leases, or processes.
   - [x] Propagate the active parent Pi model/provider into detached composition, provision its selected private model configuration, and prove authenticated child session/operation events in a real Herdr tab.
   - [x] Temporarily retain host networking for active model access, accepting that child task tools share the widened network boundary until mediated model egress is implemented.
   - [x] Copy only the selected provider credential into each private child configuration so authenticated providers work without exposing unrelated provider credentials.
