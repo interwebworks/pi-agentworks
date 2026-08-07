@@ -176,6 +176,61 @@ function deferredInitialResumeResult(
   });
 }
 
+interface RestoredPaneSummary {
+  readonly agentId: string;
+  readonly slot: number;
+  readonly sessionId: string;
+}
+
+function restoredPaneSummaries(
+  restoration: Readonly<Record<string, JsonValue>>,
+): readonly RestoredPaneSummary[] {
+  if (restoration.restored !== true) return Object.freeze([]);
+  const values = Array.isArray(restoration.restorations)
+    ? restoration.restorations
+    : [restoration];
+  if (values.length === 0 || values.length > 16) {
+    throw new ParentManagementGatewayError(
+      "controller returned invalid pane restoration evidence",
+    );
+  }
+  const summaries = values.map((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new ParentManagementGatewayError(
+        "controller returned invalid pane restoration evidence",
+      );
+    }
+    const current = value as Readonly<Record<string, JsonValue>>;
+    const agentId = current.agentId;
+    const slot = current.slot;
+    const sessionId = current.sessionId;
+    if (
+      typeof agentId !== "string" ||
+      agentId.length === 0 ||
+      typeof slot !== "number" ||
+      !Number.isSafeInteger(slot) ||
+      slot < 0 ||
+      typeof sessionId !== "string" ||
+      sessionId.length === 0
+    ) {
+      throw new ParentManagementGatewayError(
+        "controller returned invalid pane restoration evidence",
+      );
+    }
+    return Object.freeze({ agentId, slot, sessionId });
+  });
+  if (
+    new Set(summaries.map((summary) => summary.agentId)).size !==
+      summaries.length ||
+    new Set(summaries.map((summary) => summary.slot)).size !== summaries.length
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller returned duplicate pane restoration evidence",
+    );
+  }
+  return Object.freeze(summaries);
+}
+
 async function requestAgentPaneRestoration(
   clientFactory: ParentControllerClientFactory,
   runId: string,
@@ -876,21 +931,16 @@ export function createDiscoveredParentManagementGateway(
             clientFactory,
             input.runId,
           );
-          if (restoration?.restored === true) {
-            const agentId = restoration.agentId;
-            const slot = restoration.slot;
-            const sessionId = restoration.sessionId;
-            if (
-              typeof agentId !== "string" ||
-              typeof slot !== "number" ||
-              !Number.isSafeInteger(slot) ||
-              typeof sessionId !== "string"
-            ) {
-              throw new ParentManagementGatewayError(
-                "controller returned invalid pane restoration evidence",
-              );
+          if (restoration !== null) {
+            const summaries = restoredPaneSummaries(restoration);
+            if (summaries.length > 0) {
+              restorationText = ` Restored ${summaries
+                .map(
+                  (summary) =>
+                    `agent ${summary.agentId} in exact slot ${String(summary.slot)} with Pi session ${summary.sessionId}`,
+                )
+                .join("; ")}.`;
             }
-            restorationText = ` Restored agent ${agentId} in exact slot ${String(slot)} with Pi session ${sessionId}.`;
           }
         } catch (error) {
           return Object.freeze({

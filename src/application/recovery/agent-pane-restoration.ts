@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentLaunchRecord,
   AgentPaneRestorationRecord,
@@ -22,10 +22,6 @@ import type {
   AgentsTabLifecycle,
 } from "../herdr/agents-tab-lifecycle.ts";
 import type { AgentState } from "../../domain/controller-state.ts";
-import {
-  agentsNeedingRestoration,
-  assessAgentConnections,
-} from "../../domain/agent-connection.ts";
 
 const ACTIVE_AGENT_STATUSES: ReadonlySet<AgentState["status"]> = new Set([
   "launching",
@@ -58,8 +54,19 @@ export interface AgentPaneRestorationLaunchPreparer {
   }): Promise<PiAgentLaunchRequest>;
 }
 
+export interface RestoredAgentPane {
+  readonly agentId: string;
+  readonly slot: number;
+  readonly priorPaneId: string;
+  readonly replacementPaneId: string;
+  readonly sessionId: string;
+  readonly processIds: readonly number[];
+}
+
 export interface AgentPaneRestorationResult {
   readonly restored: boolean;
+  readonly restorations: readonly RestoredAgentPane[];
+  /** Compatibility projection for callers that predate restoration sets. */
   readonly agentId: string | null;
   readonly slot: number | null;
   readonly priorPaneId: string | null;
@@ -77,7 +84,7 @@ export type RestorationRepository = Required<
     | "loadSnapshot"
     | "readAgentLaunch"
     | "readAgentPaneRestoration"
-    | "reserveAgentPaneRestoration"
+    | "reserveAgentPaneRestorations"
   >
 >;
 
@@ -139,16 +146,49 @@ function exactSlot(value: string | undefined): number | null {
   return Number.isSafeInteger(slot) ? slot : null;
 }
 
-function emptyResult(): AgentPaneRestorationResult {
+function restorationResult(
+  restorations: readonly RestoredAgentPane[],
+): AgentPaneRestorationResult {
+  const ordered = Object.freeze(
+    [...restorations].sort((left, right) => left.slot - right.slot),
+  );
+  const first = ordered[0] ?? null;
   return Object.freeze({
-    restored: false,
-    agentId: null,
-    slot: null,
-    priorPaneId: null,
-    replacementPaneId: null,
-    sessionId: null,
-    processIds: Object.freeze([]),
+    restored: ordered.length > 0,
+    restorations: ordered,
+    agentId: first?.agentId ?? null,
+    slot: first?.slot ?? null,
+    priorPaneId: first?.priorPaneId ?? null,
+    replacementPaneId: first?.replacementPaneId ?? null,
+    sessionId: first?.sessionId ?? null,
+    processIds: first?.processIds ?? Object.freeze([]),
   });
+}
+
+function emptyResult(): AgentPaneRestorationResult {
+  return restorationResult([]);
+}
+
+function stableRestorationOperationId(
+  runId: string,
+  roster: readonly RosterEntry[],
+  targets: readonly RosterEntry[],
+): string {
+  const targetIds = new Set(targets.map((entry) => entry.agent.id));
+  const identity = roster
+    .map((entry) => ({
+      agentId: entry.agent.id,
+      paneId: entry.launch.paneId,
+      sessionId: entry.launch.sessionId,
+      slot: entry.launch.slot,
+      missing: targetIds.has(entry.agent.id),
+    }))
+    .sort((left, right) => left.agentId.localeCompare(right.agentId));
+  const digest = createHash("sha256")
+    .update(JSON.stringify({ runId, identity }))
+    .digest("hex")
+    .slice(0, 32);
+  return `restore-${digest}`;
 }
 
 export class AgentPaneRestorationController {
@@ -225,133 +265,213 @@ export class AgentPaneRestorationController {
     const panes = await this.#herdr.listPanes(request.workspaceId);
     const owned = await this.#strictOwnedPanes(request, roster, panes);
 
-    const pendingBound = roster.find(
+    const ownedByAgent = new Map(
+      owned.map((candidate) => [candidate.agentId, candidate] as const),
+    );
+    const hasPendingRestoration = roster.some(
       (entry) =>
-        entry.restoration?.status === "bound" &&
-        entry.restoration.replacementPaneId === entry.launch.paneId,
+        entry.restoration !== null && entry.restoration.status !== "confirmed",
     );
-    if (pendingBound !== undefined) {
-      const restoration = pendingBound.restoration;
-      if (restoration?.replacementPaneId == null) {
-        throw new AgentPaneRestorationError(
-          "bound restoration evidence is incomplete",
-        );
-      }
-      const pane = owned.find(
-        (candidate) =>
-          candidate.agentId === pendingBound.agent.id &&
-          candidate.pane.paneId === restoration.replacementPaneId &&
-          candidate.slot === restoration.slot,
-      );
-      if (pane === undefined) {
-        throw new AgentPaneRestorationError(
-          "bound replacement pane is absent or has conflicting ownership",
-        );
-      }
-      return this.#launchBound(request, snapshot, pendingBound, restoration);
+    if (
+      !hasPendingRestoration &&
+      roster.every(
+        (entry) =>
+          ownedByAgent.get(entry.agent.id)?.pane.paneId === entry.launch.paneId,
+      )
+    ) {
+      return emptyResult();
     }
-
-    const surviving = owned.filter((candidate) => {
-      const entry = roster.find((item) => item.agent.id === candidate.agentId);
-      return entry?.launch.paneId === candidate.pane.paneId;
-    });
-    const assessments = agentsNeedingRestoration(
-      assessAgentConnections(
-        roster.map((entry) => ({
-          agentId: entry.agent.id,
-          paneId: entry.launch.paneId,
-          ownershipToken: entry.agent.id,
-          sessionPresent: entry.launch.sessionId.length > 0,
-          status: entry.agent.status,
-        })),
-        surviving.map((candidate) => ({
-          paneId: candidate.pane.paneId,
-          ownershipToken: candidate.agentId,
-        })),
-      ),
-    );
-    const missing = assessments.map((assessment) => {
-      if (assessment.restoration !== "resume-session") {
+    const rosterSlots = new Set<number>();
+    for (const entry of roster) {
+      const slot = entry.launch.slot;
+      if (
+        slot === null ||
+        slot < 0 ||
+        slot >= roster.length ||
+        rosterSlots.has(slot)
+      ) {
         throw new AgentPaneRestorationError(
-          `agent ${assessment.agentId} lacks exact reusable Pi session evidence`,
+          "controller roster lacks complete unique durable slot evidence",
         );
       }
-      const entry = roster.find(
-        (candidate) => candidate.agent.id === assessment.agentId,
-      );
-      if (entry === undefined) {
+      rosterSlots.add(slot);
+      const candidate = ownedByAgent.get(entry.agent.id);
+      if (candidate !== undefined && candidate.slot !== slot) {
         throw new AgentPaneRestorationError(
-          "pane-loss assessment returned an unknown controller agent",
+          `agent ${entry.agent.id} live slot conflicts with durable launch authority`,
         );
       }
-      return entry;
-    });
-    if (missing.length === 0) return emptyResult();
-    if (missing.length !== 1 || surviving.length !== roster.length - 1) {
-      throw new AgentPaneRestorationError(
-        "exactly one controller-owned pane must be missing",
-      );
-    }
-    const target = missing[0];
-    if (target === undefined) {
-      throw new AgentPaneRestorationError("missing roster target disappeared");
-    }
-    if (panes.some((pane) => pane.paneId === target.launch.paneId)) {
-      throw new AgentPaneRestorationError(
-        "controller pane id still exists without exact ownership evidence",
-      );
+      if (entry.restoration !== null && entry.restoration.slot !== slot) {
+        throw new AgentPaneRestorationError(
+          `agent ${entry.agent.id} restoration slot conflicts with durable launch authority`,
+        );
+      }
     }
     if (
-      target.launch.processIds.length === 0 ||
-      target.launch.processIds.some((processId) =>
-        this.#processExists(processId),
+      Array.from({ length: roster.length }, (_, slot) => slot).some(
+        (slot) => !rosterSlots.has(slot),
       )
     ) {
       throw new AgentPaneRestorationError(
-        "prior Pi process evidence is missing, still alive, or identity-indeterminate",
+        "controller roster durable slots are not complete and contiguous",
       );
     }
-    const occupiedSlots = new Set(surviving.map((candidate) => candidate.slot));
-    if (
-      occupiedSlots.size !== surviving.length ||
-      [...occupiedSlots].some((slot) => slot < 0 || slot >= roster.length)
-    ) {
-      throw new AgentPaneRestorationError(
-        "surviving pane slots are duplicate or outside the controller roster",
+
+    const pending = roster.filter(
+      (entry) =>
+        entry.restoration !== null && entry.restoration.status !== "confirmed",
+    );
+    let targets: readonly RosterEntry[];
+    let reservations: readonly AgentPaneRestorationRecord[];
+    if (pending.length > 0) {
+      const operationIds = new Set(
+        pending.map((entry) => entry.restoration?.operationId),
       );
-    }
-    const holes = Array.from(
-      { length: roster.length },
-      (_, slot) => slot,
-    ).filter((slot) => !occupiedSlots.has(slot));
-    if (holes.length !== 1) {
-      throw new AgentPaneRestorationError(
-        "surviving panes do not prove one exact missing slot",
+      if (operationIds.size !== 1 || operationIds.has(undefined)) {
+        throw new AgentPaneRestorationError(
+          "pending pane restorations have mixed operation identities",
+        );
+      }
+      targets = Object.freeze(
+        [...pending].sort(
+          (left, right) => (left.launch.slot ?? 0) - (right.launch.slot ?? 0),
+        ),
       );
+      reservations = Object.freeze(
+        targets.map((entry) => {
+          const restoration = entry.restoration;
+          if (restoration === null) {
+            throw new AgentPaneRestorationError(
+              "pending restoration disappeared from the controller roster",
+            );
+          }
+          return restoration;
+        }),
+      );
+      const targetIds = new Set(targets.map((entry) => entry.agent.id));
+      for (const entry of roster) {
+        const candidate = ownedByAgent.get(entry.agent.id);
+        if (!targetIds.has(entry.agent.id)) {
+          if (candidate?.pane.paneId !== entry.launch.paneId) {
+            throw new AgentPaneRestorationError(
+              "pending restoration set is mixed with an unreserved pane loss",
+            );
+          }
+          continue;
+        }
+        const restoration = entry.restoration;
+        if (restoration === null) {
+          throw new AgentPaneRestorationError(
+            "pending restoration authority disappeared",
+          );
+        }
+        if (
+          restoration.status === "bound" &&
+          (candidate === undefined ||
+            restoration.replacementPaneId !== entry.launch.paneId ||
+            candidate.pane.paneId !== restoration.replacementPaneId)
+        ) {
+          throw new AgentPaneRestorationError(
+            "bound replacement pane is absent or has conflicting ownership",
+          );
+        }
+        if (
+          restoration.status === "reserved" &&
+          (entry.launch.processIds.length === 0 ||
+            entry.launch.processIds.some((processId) =>
+              this.#processExists(processId),
+            ))
+        ) {
+          throw new AgentPaneRestorationError(
+            "prior Pi process evidence is missing, still alive, or identity-indeterminate",
+          );
+        }
+      }
+    } else {
+      targets = Object.freeze(
+        roster
+          .filter((entry) => ownedByAgent.get(entry.agent.id) === undefined)
+          .sort(
+            (left, right) => (left.launch.slot ?? 0) - (right.launch.slot ?? 0),
+          ),
+      );
+      if (targets.length === 0) return emptyResult();
+      for (const target of targets) {
+        if (target.restoration?.status === "confirmed") {
+          throw new AgentPaneRestorationError(
+            `agent ${target.agent.id} requires a new restoration generation`,
+          );
+        }
+        if (panes.some((pane) => pane.paneId === target.launch.paneId)) {
+          throw new AgentPaneRestorationError(
+            "controller pane id still exists without exact ownership evidence",
+          );
+        }
+        if (
+          target.launch.status !== "confirmed" ||
+          target.launch.processIds.length === 0 ||
+          target.launch.processIds.some((processId) =>
+            this.#processExists(processId),
+          )
+        ) {
+          throw new AgentPaneRestorationError(
+            "prior Pi process evidence is missing, still alive, or identity-indeterminate",
+          );
+        }
+      }
+      const operationId = stableRestorationOperationId(
+        request.runId,
+        roster,
+        targets,
+      );
+      reservations = this.#repository.reserveAgentPaneRestorations({
+        write: request.write,
+        runId: request.runId,
+        operationId,
+        expectedRevision: snapshot.revision,
+        expectedRoster: roster.map((entry) => ({
+          agentId: entry.agent.id,
+          slot: entry.launch.slot ?? -1,
+          paneId: entry.launch.paneId,
+          sessionId: entry.launch.sessionId,
+        })),
+        reservations: targets.map((target) => ({
+          agentId: target.agent.id,
+          restorationId: this.#restorationId(),
+          slot: target.launch.slot ?? -1,
+          priorPaneId: target.launch.paneId,
+          sessionId: target.launch.sessionId,
+        })),
+      });
+      if (reservations.length !== targets.length) {
+        throw new AgentPaneRestorationError(
+          "atomic restoration reservation set is incomplete",
+        );
+      }
+      for (const reservation of reservations) {
+        await this.#afterPhase("reserved", reservation);
+      }
     }
-    const slot = holes[0];
-    if (slot === undefined) {
-      throw new AgentPaneRestorationError("missing slot disappeared");
-    }
+
     const tabIds = new Set(owned.map((candidate) => candidate.pane.tabId));
     if (tabIds.size !== 1) {
       throw new AgentPaneRestorationError(
         "surviving controller panes do not prove one exact Herdr tab",
       );
     }
-    const existingReservation = target.restoration;
-    const reservation = this.#repository.reserveAgentPaneRestoration({
-      write: request.write,
-      runId: request.runId,
-      agentId: target.agent.id,
-      restorationId:
-        existingReservation?.restorationId ?? this.#restorationId(),
-      operationId: request.runId,
-      slot,
-      priorPaneId: target.launch.paneId,
-      sessionId: target.launch.sessionId,
-    });
-    await this.#afterPhase("reserved", reservation);
+    const tabId = [...tabIds][0];
+    if (
+      tabId === undefined ||
+      panes.some(
+        (pane) =>
+          pane.tabId === tabId &&
+          !owned.some((candidate) => candidate.pane.paneId === pane.paneId),
+      )
+    ) {
+      throw new AgentPaneRestorationError(
+        "controller agent tab contains ambiguous or unowned pane identity",
+      );
+    }
 
     const canonicalRoleLabels = new Map(
       await Promise.all(
@@ -366,101 +486,130 @@ export class AgentPaneRestorationController {
         }),
       ),
     );
+    const beforeMutation = this.#repository.loadSnapshot(request.runId);
+    if (
+      beforeMutation?.revision !== snapshot.revision ||
+      beforeMutation.agents.filter((agent) =>
+        ACTIVE_AGENT_STATUSES.has(agent.status),
+      ).length !== roster.length
+    ) {
+      throw new AgentPaneRestorationError(
+        "controller roster or capacity changed before Herdr mutation",
+      );
+    }
+    const restorationByAgent = new Map<string, AgentPaneRestorationRecord>();
+    for (const entry of roster) {
+      if (entry.restoration !== null) {
+        restorationByAgent.set(entry.agent.id, entry.restoration);
+      }
+    }
+    for (const reservation of reservations) {
+      restorationByAgent.set(reservation.agentId, reservation);
+    }
     const assignments: AgentPaneAssignment[] = Array.from({
       length: roster.length,
     });
     const expectedPaneIds: (string | null)[] = Array.from(
-      {
-        length: roster.length,
-      },
+      { length: roster.length },
       () => null,
     );
-    for (const candidate of surviving) {
-      const entry = roster.find((item) => item.agent.id === candidate.agentId);
-      if (entry === undefined) {
-        throw new AgentPaneRestorationError(
-          "surviving pane is absent from the controller roster",
-        );
-      }
+    for (const entry of roster) {
+      const slot = entry.launch.slot;
       const label = canonicalRoleLabels.get(entry.agent.id);
-      if (label === undefined) {
+      if (slot === null || label === undefined) {
         throw new AgentPaneRestorationError(
-          `agent ${entry.agent.id} canonical role label disappeared`,
+          `agent ${entry.agent.id} stable slot or canonical label disappeared`,
         );
       }
-      assignments[candidate.slot] = {
+      const restoration = restorationByAgent.get(entry.agent.id);
+      assignments[slot] = {
         agentId: entry.agent.id,
         label,
         cwd: entry.agent.worktreePath,
+        ...(restoration === undefined
+          ? {}
+          : { restorationId: restoration.restorationId }),
       };
-      expectedPaneIds[candidate.slot] = entry.launch.paneId;
+      expectedPaneIds[slot] =
+        restoration?.status === "reserved" ? null : entry.launch.paneId;
     }
-    const targetLabel = canonicalRoleLabels.get(target.agent.id);
-    if (targetLabel === undefined) {
-      throw new AgentPaneRestorationError(
-        `agent ${target.agent.id} canonical role label disappeared`,
-      );
-    }
-    assignments[slot] = {
-      agentId: target.agent.id,
-      label: targetLabel,
-      cwd: target.agent.worktreePath,
-      restorationId: reservation.restorationId,
-    };
     const evidence = await this.#lifecycle.ensure({
       runId: request.runId,
-      operationId: reservation.operationId,
+      operationId: request.runId,
       workspaceId: request.workspaceId,
-      expectedTabId: [...tabIds][0] ?? null,
+      expectedTabId: tabId,
       expectedPaneIds,
       assignments,
       metadataSequence: request.metadataSequence,
     });
-    const replacementPaneId = evidence.paneIds[slot];
-    if (
-      replacementPaneId === undefined ||
-      replacementPaneId === reservation.priorPaneId
-    ) {
-      throw new AgentPaneRestorationError(
-        "Herdr did not create a distinct pane in the reserved slot",
-      );
-    }
-    for (const candidate of surviving) {
+    for (const candidate of owned) {
       if (evidence.paneIds[candidate.slot] !== candidate.pane.paneId) {
         throw new AgentPaneRestorationError(
           "restoration moved or adopted a surviving controller pane",
         );
       }
     }
-    await this.#afterPhase("pane-created", reservation);
-    const bound = this.#repository.bindAgentPaneRestoration({
-      write: request.write,
-      runId: request.runId,
-      agentId: target.agent.id,
-      restorationId: reservation.restorationId,
-      replacementPaneId,
-    });
-    await this.#afterPhase("bound", bound);
+
+    const boundRecords: AgentPaneRestorationRecord[] = [];
+    for (const reservation of reservations) {
+      const replacementPaneId = evidence.paneIds[reservation.slot];
+      if (
+        replacementPaneId === undefined ||
+        replacementPaneId === reservation.priorPaneId
+      ) {
+        throw new AgentPaneRestorationError(
+          "Herdr did not create a distinct pane in every reserved slot",
+        );
+      }
+      await this.#afterPhase("pane-created", reservation);
+      const bound =
+        reservation.status === "reserved"
+          ? this.#repository.bindAgentPaneRestoration({
+              write: request.write,
+              runId: request.runId,
+              agentId: reservation.agentId,
+              restorationId: reservation.restorationId,
+              replacementPaneId,
+            })
+          : reservation;
+      if (
+        bound.status === "reserved" ||
+        bound.replacementPaneId !== replacementPaneId
+      ) {
+        throw new AgentPaneRestorationError(
+          "durable restoration binding returned conflicting pane evidence",
+        );
+      }
+      boundRecords.push(bound);
+      await this.#afterPhase("bound", bound);
+    }
     const reboundSnapshot = this.#repository.loadSnapshot(request.runId);
     if (reboundSnapshot === null) {
       throw new AgentPaneRestorationError(
         "controller snapshot disappeared after restoration binding",
       );
     }
-    const reboundAgent = reboundSnapshot.agents.find(
-      (agent) => agent.id === target.agent.id,
-    );
-    if (reboundAgent === undefined) {
-      throw new AgentPaneRestorationError(
-        "controller agent disappeared after restoration binding",
+    const restored: RestoredAgentPane[] = [];
+    for (const bound of boundRecords) {
+      const target = targets.find((entry) => entry.agent.id === bound.agentId);
+      const reboundAgent = reboundSnapshot.agents.find(
+        (agent) => agent.id === bound.agentId,
+      );
+      if (target === undefined || reboundAgent === undefined) {
+        throw new AgentPaneRestorationError(
+          "controller restoration target disappeared after binding",
+        );
+      }
+      restored.push(
+        await this.#launchBound(
+          request,
+          reboundSnapshot,
+          { ...target, agent: reboundAgent },
+          bound,
+        ),
       );
     }
-    return this.#launchBound(
-      request,
-      reboundSnapshot,
-      { ...target, agent: reboundAgent },
-      bound,
-    );
+    return restorationResult(restored);
   }
 
   #roster(snapshot: ControllerSnapshot): readonly RosterEntry[] {
@@ -534,9 +683,12 @@ export class AgentPaneRestorationController {
         );
       }
       const entry = roster.find((candidate) => candidate.agent.id === agentId);
-      if (entry?.agent.worktreePath !== pane.cwd) {
+      if (
+        entry?.agent.worktreePath !== pane.cwd ||
+        (entry.launch.slot !== null && entry.launch.slot !== slot)
+      ) {
         throw new AgentPaneRestorationError(
-          `pane ${pane.paneId} is absent from the exact controller roster`,
+          `pane ${pane.paneId} is absent from the exact durable controller roster`,
         );
       }
       if (pane.paneId !== entry.launch.paneId) {
@@ -583,7 +735,7 @@ export class AgentPaneRestorationController {
     snapshot: ControllerSnapshot,
     entry: RosterEntry,
     restoration: AgentPaneRestorationRecord,
-  ): Promise<AgentPaneRestorationResult> {
+  ): Promise<RestoredAgentPane> {
     if (
       restoration.replacementPaneId === null ||
       restoration.status === "reserved"
@@ -644,7 +796,6 @@ export class AgentPaneRestorationController {
       this.#repository.confirmAgentPaneRestoration(finalConfirmation);
     await this.#afterPhase("confirmed", confirmed);
     return Object.freeze({
-      restored: true,
       agentId: entry.agent.id,
       slot: restoration.slot,
       priorPaneId: restoration.priorPaneId,

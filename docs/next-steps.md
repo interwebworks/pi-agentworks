@@ -57,10 +57,12 @@ Acceptance evidence:
 
 ## 3. Complete controller and pane restoration
 
-Status: The exact single-missing-pane, trusted dead-controller restart, and parent Pi restart slices are implemented.
-Status recovery now assesses the controller roster against strict Herdr process and metadata evidence, reserves one durable slot restoration with a private nonce, reconstructs the missing pane in that exact slot, and relaunches through the secure launcher only when the exact recorded Pi session file survives.
-The three-pane `0, missing 1, 2` case and every restoration kill point converge without moving the surviving panes or duplicating a tab, pane, process, session, worktree, or agent.
-Missing, ambiguous, stale, conflicting, and spoofed pane or session evidence fails closed.
+Status: Exact multi-pane loss, trusted dead-controller restart, and parent Pi restart slices are implemented at deterministic process and protocol-shaped Herdr boundaries.
+Status recovery now assesses the controller roster against strict Herdr process and metadata evidence, requires complete durable per-agent slot evidence, reserves the complete missing set atomically under one deterministic operation identity, reconstructs every missing pane in its exact slot, and relaunches each agent through the secure launcher only when its exact recorded private Pi session file and UUID survive.
+The anchor case uses five slots with `0`, `2`, and `4` surviving while `1` and `3` are restored without moving or adopting survivors.
+A per-agent kill-point matrix across reservation, pane creation, binding, process launch, and confirmation converges without duplicating a tab, pane, process, session, worktree, agent, or reservation.
+Concurrent and repeated restoration requests share the existing orchestration-effects serialization and coalesce to one resource set.
+Missing, ambiguous, stale, mixed, partial, conflicting, duplicate, and spoofed pane, process, slot, reservation, roster, or session evidence fails closed before an unsafe relaunch.
 
 SQLite schema v5 now binds one immutable HMAC-authenticated, credential-free controller composition to each initialized run.
 The evidence records the exact provider, model, thinking level, Herdr workspace, host-network policy, controller lease policy, controller home, and canonical Herdr, Pi, Node, package, controller-entry, and child-bridge paths.
@@ -73,11 +75,14 @@ A process-level parent Pi restart test now launches through the model-callable e
 The fresh surface restores its session-bound background-work item for the unclosed agent, reuses the original management origin, restarts exactly one fenced controller, and preserves the one run, story, controller composition, agent, launch, management pane/dashboard, agent pane process, Pi session file, and two expected Git worktrees without a restoration reservation or capacity increase.
 Caller-runtime drift and pre-expiry takeover remain refused before management mutation.
 This is deterministic process-level evidence with a protocol-shaped fake Herdr agent-pane boundary and an injected idempotent management lifecycle, not a real live Herdr UI E2E claim.
-Real Herdr restart and multi-pane loss remain unclaimed.
+The deterministic multi-pane boundary uses a protocol-shaped fake Herdr implementation rather than a live UI.
+Real Herdr restart and live multi-pane-loss E2E remain unclaimed.
+SQLite schema v7 persists the stable Herdr slot on new launch records, backfills agents that already had a durable restoration record, and enforces collisions transactionally only across unclosed agents so a verified closed agent's slot can be reused.
+Older launch records without durable slot evidence remain usable for no-op status reads, but restoration fails closed until exact slot authority exists rather than inferring an ambiguous multi-pane mapping.
 
 Acceptance evidence:
 
-- A missing middle slot such as slots `0` and `2` remaining from a three-pane grid restores slot `1` without moving or adopting other panes.
+- Missing slots `1` and `3` from a five-pane grid with surviving slots `0`, `2`, and `4` restore together without moving or adopting survivors.
 - Controller restart does not create duplicate tabs, panes, dashboard processes, worktrees, sessions, or agents.
 - Parent Pi restart reconnects to active runs and restores the management surface.
 - Herdr reconnect and interrupted split recovery preserve operation and slot identities.
@@ -199,6 +204,7 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
    - [x] Restore one exact missing slot with exact on-disk Pi session reuse and crash-idempotent reservations.
    - [x] Add trusted status-triggered dead-controller restart with authenticated exact-composition rebuilding.
    - [x] Prove fresh parent Pi extension and gateway recovery at the process boundary.
+   - [x] Restore multiple exact missing slots through one atomic reservation set and a multi-agent kill-point matrix.
    - [ ] Run real Herdr restart and multi-pane-loss E2E proof.
 5. [x] Enforce the global active-agent budget.
 6. [ ] Complete repeated multi-story reviewer, merge, cleanup, and completion flow.

@@ -194,6 +194,16 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
         expectedAgents,
       });
       paneId = pane.paneId;
+      const paneSlot = Number(pane.tokens.aw_slot);
+      if (
+        !Number.isSafeInteger(paneSlot) ||
+        paneSlot < 0 ||
+        String(paneSlot) !== pane.tokens.aw_slot
+      ) {
+        throw new InfrastructureAssignmentProvisionerError(
+          "allocated pane lacks an exact stable grid slot",
+        );
+      }
       session = await this.#sessions.create(run, target, agent.id);
       const evidence: AssignmentInfrastructureEvidence = {
         git,
@@ -208,6 +218,7 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
       return Object.freeze({
         agent,
         paneId,
+        paneSlot,
         sessionId: configuration.sessionId,
         sessionPath: session.sessionPath,
         configPath: session.configPath,

@@ -38,8 +38,16 @@ const SESSION_IDS = [
   "00000000-0000-4000-8000-000000000001",
   "00000000-0000-4000-8000-000000000002",
   "00000000-0000-4000-8000-000000000003",
+  "00000000-0000-4000-8000-000000000004",
+  "00000000-0000-4000-8000-000000000005",
 ] as const;
-const AGENT_IDS = ["agent-0", "agent-1", "agent-2"] as const;
+const AGENT_IDS = [
+  "agent-0",
+  "agent-1",
+  "agent-2",
+  "agent-3",
+  "agent-4",
+] as const;
 
 function ownership(slot: number, restorationId?: string) {
   return {
@@ -103,26 +111,34 @@ class FakeProcessEvidence implements PaneProcessEvidenceGateway {
   }
 }
 
-class ThreePaneHerdr {
+class RosterHerdr {
   readonly processEvidence = new FakeProcessEvidence();
   readonly splitRequests: HerdrSplitPaneRequest[] = [];
   readonly createRequests: HerdrCreateTabRequest[] = [];
-  panes: HerdrPane[] = [pane(0), pane(2)];
-  readonly tabs: HerdrTab[] = [
-    {
-      tabId: "w1P:tA",
-      workspaceId: "w1P",
-      number: 1,
-      label: "Pi Agents",
-      focused: false,
-      paneCount: 2,
-      agentStatus: "unknown",
-    },
-  ];
+  readonly rosterSize: number;
+  panes: HerdrPane[];
+  readonly tabs: HerdrTab[];
 
-  constructor() {
-    this.processEvidence.environments.set("w1P:p0", ownership(0).environment);
-    this.processEvidence.environments.set("w1P:p2", ownership(2).environment);
+  constructor(rosterSize = 3, survivingSlots: readonly number[] = [0, 2]) {
+    this.rosterSize = rosterSize;
+    this.panes = survivingSlots.map((slot) => pane(slot));
+    this.tabs = [
+      {
+        tabId: "w1P:tA",
+        workspaceId: "w1P",
+        number: 1,
+        label: "Pi Agents",
+        focused: false,
+        paneCount: survivingSlots.length,
+        agentStatus: "unknown",
+      },
+    ];
+    for (const slot of survivingSlots) {
+      this.processEvidence.environments.set(
+        `w1P:p${String(slot)}`,
+        ownership(slot).environment,
+      );
+    }
   }
 
   listTabs(): Promise<readonly HerdrTab[]> {
@@ -148,7 +164,7 @@ class ThreePaneHerdr {
     const slot = Number(request.environment?.AGENTWORKS_PANE_SLOT);
     const restorationId = request.environment?.AGENTWORKS_PANE_RESTORATION_ID;
     const replacement = {
-      ...pane(slot, "w1P:p9"),
+      ...pane(slot, slot === 1 ? "w1P:p9" : `w1P:pR${String(slot)}`),
       tokens: ownership(slot, restorationId).tokens,
     };
     this.panes.push(replacement);
@@ -183,7 +199,7 @@ class ThreePaneHerdr {
   }
 
   getPaneLayout(): Promise<HerdrPaneLayout> {
-    const plan = planPaneGrid(3);
+    const plan = planPaneGrid(this.rosterSize);
     const bySlot = new Map(
       this.panes.map((candidate) => [
         Number(candidate.tokens.aw_slot),
@@ -224,17 +240,23 @@ interface Fixture {
     readonly fencingToken: number;
     readonly now: number;
   };
-  readonly herdr: ThreePaneHerdr;
+  readonly herdr: RosterHerdr;
   readonly processes: Map<string, number>;
   readonly preparedSessions: Set<string>;
   readonly launchedWorktrees: Set<string>;
   controller(
-    afterPhase?: (phase: AgentPaneRestorationPhase) => void | Promise<void>,
+    afterPhase?: (
+      phase: AgentPaneRestorationPhase,
+      agentId: string,
+    ) => void | Promise<void>,
     processExists?: (processId: number) => boolean,
   ): AgentPaneRestorationController;
 }
 
-function createFixture(): Fixture {
+function createFixture(
+  agentCount = 3,
+  survivingSlots: readonly number[] = [0, 2],
+): Fixture {
   const directory = mkdtempSync(join(tmpdir(), "agentworks-pane-restore-"));
   const repository = new SqliteControllerRepository(
     join(directory, "controller.sqlite"),
@@ -256,7 +278,8 @@ function createFixture(): Fixture {
     integrationWorktree: "/worktrees/integration",
     createdAt: 1,
   });
-  const stories = AGENT_IDS.map((_, slot) =>
+  const rosterAgentIds = AGENT_IDS.slice(0, agentCount);
+  const stories = rosterAgentIds.map((_, slot) =>
     createStoryState({
       id: `story-${String(slot)}`,
       runId: RUN_ID,
@@ -280,7 +303,7 @@ function createFixture(): Fixture {
       createdAt: 1,
     }),
   );
-  const agents = AGENT_IDS.map((agentId, slot) =>
+  const agents = rosterAgentIds.map((agentId, slot) =>
     createAgentState({
       id: agentId,
       runId: RUN_ID,
@@ -314,6 +337,7 @@ function createFixture(): Fixture {
       agent,
       paneId: `w1P:p${String(slot)}`,
       sessionId: SESSION_IDS[slot] ?? SESSION_IDS[0],
+      slot,
     });
     repository.confirmAgentLaunch({
       write,
@@ -325,12 +349,14 @@ function createFixture(): Fixture {
       commandSha256: String(slot).repeat(64),
     });
   }
-  const herdr = new ThreePaneHerdr();
+  const herdr = new RosterHerdr(agentCount, survivingSlots);
   const lifecycle = new AgentsTabLifecycle(herdr, herdr.processEvidence);
-  const processes = new Map<string, number>([
-    [SESSION_IDS[0], 100],
-    [SESSION_IDS[2], 102],
-  ]);
+  const processes = new Map<string, number>(
+    survivingSlots.map((slot) => [
+      SESSION_IDS[slot] ?? SESSION_IDS[0],
+      100 + slot,
+    ]),
+  );
   const preparedSessions = new Set<string>();
   const launchedWorktrees = new Set<string>();
   const fixture: Fixture = {
@@ -342,6 +368,7 @@ function createFixture(): Fixture {
     preparedSessions,
     launchedWorktrees,
     controller(afterPhase, processExists = () => false) {
+      let restorationSequence = 0;
       return new AgentPaneRestorationController({
         repository,
         herdr,
@@ -349,13 +376,13 @@ function createFixture(): Fixture {
         lifecycle,
         resolveRoleLabel: (agent) =>
           Promise.resolve(`Canonical ${agent.roleRuntimeId}`),
-        restorationId: () => "restore-middle-slot-1",
+        restorationId: () =>
+          `restore-missing-${String((restorationSequence += 1))}`,
         processExists,
         ...(afterPhase === undefined
           ? {}
           : {
-              afterPhase: (phase: AgentPaneRestorationPhase) =>
-                afterPhase(phase),
+              afterPhase: (phase, record) => afterPhase(phase, record.agentId),
             }),
         preparation: {
           prepare(input) {
@@ -376,7 +403,10 @@ function createFixture(): Fixture {
         launcher: {
           launch(request): Promise<PiAgentLaunchEvidence> {
             const existing = processes.get(request.sessionId);
-            const processId = existing ?? 201;
+            const agentSlot = AGENT_IDS.indexOf(
+              request.task.assignedAgentId as (typeof AGENT_IDS)[number],
+            );
+            const processId = existing ?? 200 + agentSlot;
             processes.set(request.sessionId, processId);
             return Promise.resolve({
               paneId: request.paneId,
@@ -420,6 +450,57 @@ function assertNoDuplicates(fixture: Fixture): void {
   assert.deepEqual([...fixture.launchedWorktrees], ["/worktrees/story-1"]);
 }
 
+test("restores missing slots 1 and 3 in a five-agent roster without moving surviving slots 0, 2, or 4", async () => {
+  const fixture = createFixture(5, [0, 2, 4]);
+  try {
+    const result = await fixture.controller().restoreMissingPane({
+      runId: RUN_ID,
+      workspaceId: "w1P",
+      write: fixture.write,
+      metadataSequence: 1,
+    });
+
+    assert.equal(result.restored, true);
+    assert.deepEqual(
+      result.restorations.map((restoration) => ({
+        agentId: restoration.agentId,
+        slot: restoration.slot,
+        sessionId: restoration.sessionId,
+      })),
+      [
+        { agentId: "agent-1", slot: 1, sessionId: SESSION_IDS[1] },
+        { agentId: "agent-3", slot: 3, sessionId: SESSION_IDS[3] },
+      ],
+    );
+    assert.deepEqual(
+      fixture.herdr.panes
+        .filter((entry) => [0, 2, 4].includes(Number(entry.tokens.aw_slot)))
+        .map((entry) => entry.paneId),
+      ["w1P:p0", "w1P:p2", "w1P:p4"],
+    );
+    assert.deepEqual(
+      fixture.herdr.splitRequests.map(
+        (request) => request.environment?.AGENTWORKS_PANE_SLOT,
+      ),
+      ["3", "1"],
+    );
+    assert.equal(fixture.herdr.createRequests.length, 0);
+    assert.equal(fixture.herdr.panes.length, 5);
+    assert.equal(
+      new Set(fixture.herdr.panes.map((entry) => entry.paneId)).size,
+      5,
+    );
+    assert.equal(fixture.processes.size, 5);
+    assert.deepEqual(
+      [...fixture.preparedSessions],
+      [SESSION_IDS[1], SESSION_IDS[3]],
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 test("restores missing middle slot 1 without moving slots 0 or 2 and reuses the exact Pi session", async () => {
   const fixture = createFixture();
   try {
@@ -432,6 +513,16 @@ test("restores missing middle slot 1 without moving slots 0 or 2 and reuses the 
 
     assert.deepEqual(result, {
       restored: true,
+      restorations: [
+        {
+          agentId: "agent-1",
+          slot: 1,
+          priorPaneId: "w1P:p1",
+          replacementPaneId: "w1P:p9",
+          sessionId: SESSION_IDS[1],
+          processIds: [201],
+        },
+      ],
       agentId: "agent-1",
       slot: 1,
       priorPaneId: "w1P:p1",
@@ -465,6 +556,136 @@ test("restores missing middle slot 1 without moving slots 0 or 2 and reuses the 
   } finally {
     fixture.repository.close();
     rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("reserves the complete missing set atomically before the first Herdr mutation", async () => {
+  const fixture = createFixture(5, [0, 2, 4]);
+  try {
+    let inspected = false;
+    await assert.rejects(
+      fixture
+        .controller((phase) => {
+          if (phase !== "reserved" || inspected) return;
+          inspected = true;
+          assert.equal(fixture.herdr.splitRequests.length, 0);
+          const reservations = ["agent-1", "agent-3"].map((agentId) =>
+            fixture.repository.readAgentPaneRestoration(RUN_ID, agentId),
+          );
+          assert.deepEqual(
+            reservations.map((reservation) => reservation?.status),
+            ["reserved", "reserved"],
+          );
+          assert.equal(
+            new Set(reservations.map((reservation) => reservation?.operationId))
+              .size,
+            1,
+          );
+          assert.match(
+            reservations[0]?.operationId ?? "",
+            /^restore-[a-f0-9]{32}$/u,
+          );
+          throw new Error("stop after atomic reservation proof");
+        })
+        .restoreMissingPane({
+          runId: RUN_ID,
+          workspaceId: "w1P",
+          write: fixture.write,
+          metadataSequence: 1,
+        }),
+      /stop after atomic reservation proof/u,
+    );
+    assert.equal(inspected, true);
+    assert.equal(fixture.herdr.splitRequests.length, 0);
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent multi-pane restoration requests coalesce to one exact resource set", async () => {
+  const fixture = createFixture(5, [0, 2, 4]);
+  try {
+    const first = fixture.controller();
+    const second = fixture.controller();
+    const request = {
+      runId: RUN_ID,
+      workspaceId: "w1P",
+      write: fixture.write,
+      metadataSequence: 1,
+    } as const;
+    const [left, right] = await Promise.all([
+      first.restoreMissingPane(request),
+      second.restoreMissingPane(request),
+    ]);
+    assert.deepEqual(left, right);
+    assert.equal(left.restorations.length, 2);
+    assert.equal(fixture.herdr.splitRequests.length, 2);
+    assert.equal(fixture.herdr.panes.length, 5);
+    assert.equal(fixture.processes.size, 5);
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("multi-agent restoration converges across every per-agent kill point", async () => {
+  const phases: readonly AgentPaneRestorationPhase[] = [
+    "reserved",
+    "pane-created",
+    "bound",
+    "process-launched",
+    "confirmed",
+  ];
+  for (const killPhase of phases) {
+    for (const killAgentId of ["agent-1", "agent-3"] as const) {
+      const fixture = createFixture(5, [0, 2, 4]);
+      let killed = false;
+      try {
+        await assert.rejects(
+          fixture
+            .controller((phase, agentId) => {
+              if (!killed && phase === killPhase && agentId === killAgentId) {
+                killed = true;
+                throw new Error(`kill ${agentId} after ${phase}`);
+              }
+            })
+            .restoreMissingPane({
+              runId: RUN_ID,
+              workspaceId: "w1P",
+              write: fixture.write,
+              metadataSequence: 1,
+            }),
+          new RegExp(`kill ${killAgentId} after ${killPhase}`, "u"),
+        );
+        assert.equal(killed, true);
+        await fixture.controller().restoreMissingPane({
+          runId: RUN_ID,
+          workspaceId: "w1P",
+          write: fixture.write,
+          metadataSequence: 1,
+        });
+        assert.equal(fixture.herdr.createRequests.length, 0);
+        assert.equal(fixture.herdr.panes.length, 5);
+        assert.equal(
+          new Set(fixture.herdr.panes.map((entry) => entry.paneId)).size,
+          5,
+        );
+        assert.equal(fixture.processes.size, 5);
+        assert.equal(fixture.repository.loadSnapshot(RUN_ID)?.agents.length, 5);
+        assert.deepEqual(
+          ["agent-1", "agent-3"].map(
+            (agentId) =>
+              fixture.repository.readAgentPaneRestoration(RUN_ID, agentId)
+                ?.status,
+          ),
+          ["confirmed", "confirmed"],
+        );
+      } finally {
+        fixture.repository.close();
+        rmSync(fixture.directory, { recursive: true, force: true });
+      }
+    }
   }
 });
 
@@ -509,6 +730,93 @@ test("every restoration kill point converges without duplicate tab, pane, proces
       fixture.repository.close();
       rmSync(fixture.directory, { recursive: true, force: true });
     }
+  }
+});
+
+test("multi-pane restoration refuses partial prior-process evidence before reserving any slot", async () => {
+  const fixture = createFixture(5, [0, 2, 4]);
+  try {
+    await assert.rejects(
+      fixture
+        .controller(undefined, (processId) => processId === 103)
+        .restoreMissingPane({
+          runId: RUN_ID,
+          workspaceId: "w1P",
+          write: fixture.write,
+          metadataSequence: 1,
+        }),
+      /prior Pi process evidence is missing, still alive, or identity-indeterminate/u,
+    );
+    assert.equal(fixture.herdr.splitRequests.length, 0);
+    assert.equal(
+      fixture.repository.readAgentPaneRestoration(RUN_ID, "agent-1"),
+      null,
+    );
+    assert.equal(
+      fixture.repository.readAgentPaneRestoration(RUN_ID, "agent-3"),
+      null,
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("restoration refuses a mixed partial reservation set before Herdr mutation", async () => {
+  const fixture = createFixture(5, [0, 2, 4]);
+  try {
+    fixture.repository.reserveAgentPaneRestoration({
+      write: fixture.write,
+      runId: RUN_ID,
+      agentId: "agent-1",
+      restorationId: "partial-reservation",
+      operationId: "mixed-operation",
+      slot: 1,
+      priorPaneId: "w1P:p1",
+      sessionId: SESSION_IDS[1],
+    });
+    await assert.rejects(
+      fixture.controller().restoreMissingPane({
+        runId: RUN_ID,
+        workspaceId: "w1P",
+        write: fixture.write,
+        metadataSequence: 1,
+      }),
+      /mixed with an unreserved pane loss/u,
+    );
+    assert.equal(fixture.herdr.splitRequests.length, 0);
+    assert.equal(
+      fixture.repository.readAgentPaneRestoration(RUN_ID, "agent-3"),
+      null,
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("restoration refuses an unowned pane in the exact agent tab before splitting", async () => {
+  const fixture = createFixture(5, [0, 2, 4]);
+  try {
+    fixture.herdr.panes.push({
+      ...pane(0, "w1P:pX"),
+      cwd: "/unowned",
+      foregroundCwd: "/unowned",
+      tokens: {},
+    });
+    await assert.rejects(
+      fixture.controller().restoreMissingPane({
+        runId: RUN_ID,
+        workspaceId: "w1P",
+        write: fixture.write,
+        metadataSequence: 1,
+      }),
+      /ambiguous or unowned pane identity/u,
+    );
+    assert.equal(fixture.herdr.splitRequests.length, 0);
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
   }
 });
 

@@ -256,7 +256,7 @@ function supportsPaneRestoration(
   repository: ControllerRuntime["repository"],
 ): repository is ControllerRuntime["repository"] & RestorationRepository {
   return (
-    repository.reserveAgentPaneRestoration !== undefined &&
+    repository.reserveAgentPaneRestorations !== undefined &&
     repository.bindAgentPaneRestoration !== undefined &&
     repository.confirmAgentPaneRestoration !== undefined &&
     repository.readAgentPaneRestoration !== undefined
@@ -776,7 +776,23 @@ export function createProductionOrchestrationProviderFromComposition(
             write,
             metadataSequence: snapshot.revision,
           });
-          return { ...result };
+          return {
+            restored: result.restored,
+            restorations: result.restorations.map((restoration) => ({
+              agentId: restoration.agentId,
+              slot: restoration.slot,
+              priorPaneId: restoration.priorPaneId,
+              replacementPaneId: restoration.replacementPaneId,
+              sessionId: restoration.sessionId,
+              processIds: [...restoration.processIds],
+            })),
+            agentId: result.agentId,
+            slot: result.slot,
+            priorPaneId: result.priorPaneId,
+            replacementPaneId: result.replacementPaneId,
+            sessionId: result.sessionId,
+            processIds: [...result.processIds],
+          };
         },
       };
     });

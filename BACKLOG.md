@@ -90,7 +90,8 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Restart a dead controller from status only after authenticated immutable composition, database, lease, socket, process-identity, and startup-recovery gates pass.
   - [ ] Extend recovery across the remaining parent and Herdr boundaries.
     - [x] Prove a fresh parent Pi extension and gateway reconnect to the active controller, preserve exact management origin and background-work visibility, and recover a dead controller after lease expiry without duplicating owned resources or consuming capacity.
-    - [ ] Prove real Herdr restart and multi-pane-loss recovery.
+    - [x] Restore multiple exact missing slots from one stable controller roster through an atomic reservation set, deterministic operation identity, exact surviving-pane expectations, and crash-idempotent per-agent relaunch.
+    - [ ] Prove real Herdr restart and multi-pane-loss recovery in the live UI.
 
 ## P7 - Management TUI
 

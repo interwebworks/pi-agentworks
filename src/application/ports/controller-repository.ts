@@ -109,6 +109,8 @@ export interface MaterializeAgentLaunchInput {
   readonly agent: AgentState;
   readonly paneId: string;
   readonly sessionId: string;
+  /** Stable Herdr grid slot. Older launch records may not have this evidence. */
+  readonly slot?: number;
 }
 
 export interface ConfirmAgentLaunchInput {
@@ -126,6 +128,7 @@ export interface AgentLaunchRecord {
   readonly agentId: string;
   readonly paneId: string;
   readonly sessionId: string;
+  readonly slot: number | null;
   readonly status: "materialized" | "confirmed";
   readonly processIds: readonly number[];
   readonly commandSha256: string | null;
@@ -154,6 +157,25 @@ export interface ReserveAgentPaneRestorationInput {
   readonly slot: number;
   readonly priorPaneId: string;
   readonly sessionId: string;
+}
+
+export interface AgentPaneRestorationRosterEntry {
+  readonly agentId: string;
+  readonly slot: number;
+  readonly paneId: string;
+  readonly sessionId: string;
+}
+
+export interface ReserveAgentPaneRestorationSetInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly operationId: string;
+  readonly expectedRevision: number;
+  readonly expectedRoster: readonly AgentPaneRestorationRosterEntry[];
+  readonly reservations: readonly Omit<
+    ReserveAgentPaneRestorationInput,
+    "write" | "runId" | "operationId"
+  >[];
 }
 
 export interface BindAgentPaneRestorationInput {
@@ -213,6 +235,9 @@ export interface ControllerRepository {
   reserveAgentPaneRestoration?(
     input: ReserveAgentPaneRestorationInput,
   ): AgentPaneRestorationRecord;
+  reserveAgentPaneRestorations?(
+    input: ReserveAgentPaneRestorationSetInput,
+  ): readonly AgentPaneRestorationRecord[];
   bindAgentPaneRestoration?(
     input: BindAgentPaneRestorationInput,
   ): AgentPaneRestorationRecord;

@@ -25,6 +25,7 @@ import type {
   JsonValue,
   RevokeWriterLeaseInput,
   ReserveAgentPaneRestorationInput,
+  ReserveAgentPaneRestorationSetInput,
   ConfirmAgentPaneRestorationInput,
   WriterLease,
 } from "../../application/ports/controller-repository.ts";
@@ -42,7 +43,7 @@ import {
   countOccupiedAgentSlots,
 } from "../../domain/scheduling.ts";
 
-const DATABASE_SCHEMA_VERSION = 5;
+const DATABASE_SCHEMA_VERSION = 7;
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_EVENT_READ_LIMIT = 1_000;
@@ -106,6 +107,7 @@ interface AgentLaunchRow {
   readonly agent_id: string;
   readonly pane_id: string;
   readonly session_id: string;
+  readonly pane_slot: number | null;
   readonly process_ids_json: string | null;
   readonly command_sha256: string | null;
   readonly confirmed_at: number | null;
@@ -436,6 +438,15 @@ function parseWriterLease(row: WriterLeaseRow): WriterLease {
 
 function parseAgentLaunch(row: AgentLaunchRow): AgentLaunchRecord {
   const updatedAt = asSafeInteger(row.updated_at, "agent launch timestamp");
+  const slot =
+    row.pane_slot === null
+      ? null
+      : asSafeInteger(row.pane_slot, "agent launch pane slot");
+  if (slot !== null && slot < 0) {
+    throw new ControllerDatabaseIntegrityError(
+      "agent launch pane slot cannot be negative",
+    );
+  }
   const confirmed = row.confirmed_at !== null;
   if (row.confirmed_at !== null) {
     asSafeInteger(row.confirmed_at, "agent launch confirmation timestamp");
@@ -485,6 +496,7 @@ function parseAgentLaunch(row: AgentLaunchRow): AgentLaunchRecord {
     agentId: row.agent_id,
     paneId: nonEmpty(row.pane_id, "agent launch pane id"),
     sessionId: nonEmpty(row.session_id, "agent launch session id"),
+    slot,
     status: confirmed ? "confirmed" : "materialized",
     processIds,
     commandSha256: row.command_sha256,
@@ -720,10 +732,17 @@ export class SqliteControllerRepository implements ControllerRepository {
     readonly agent: AgentState;
     readonly paneId: string;
     readonly sessionId: string;
+    readonly slot?: number;
   }): AgentState {
     this.#assertOpen();
     const paneId = nonEmpty(input.paneId, "agent launch pane id");
     const sessionId = nonEmpty(input.sessionId, "agent launch session id");
+    const slot = input.slot ?? null;
+    if (slot !== null && (!Number.isSafeInteger(slot) || slot < 0)) {
+      throw new ControllerRepositoryError(
+        "agent launch pane slot must be a non-negative safe integer",
+      );
+    }
     if (!SESSION_ID_PATTERN.test(sessionId)) {
       throw new ControllerRepositoryError(
         "agent launch session id must be an exact UUID",
@@ -767,6 +786,13 @@ export class SqliteControllerRepository implements ControllerRepository {
           `agent ${input.agent.id} is launching in a different pane`,
         );
       }
+      if (slot !== null) {
+        this.#assertAgentPaneSlotAvailable(
+          input.agent.runId,
+          input.agent.id,
+          slot,
+        );
+      }
       const next =
         current.status === "launching"
           ? current
@@ -778,7 +804,9 @@ export class SqliteControllerRepository implements ControllerRepository {
       const reservation = this.#agentLaunchRow(next.runId, next.id);
       if (
         reservation !== null &&
-        (reservation.pane_id !== paneId || reservation.session_id !== sessionId)
+        (reservation.pane_id !== paneId ||
+          reservation.session_id !== sessionId ||
+          (slot !== null && reservation.pane_slot !== slot))
       ) {
         throw new StaleWriterLeaseError(
           `agent ${next.id} has different pane or session launch evidence`,
@@ -804,11 +832,11 @@ export class SqliteControllerRepository implements ControllerRepository {
         this.#database
           .prepare(
             `INSERT INTO agent_launches(
-               run_id, agent_id, pane_id, session_id, process_ids_json,
+               run_id, agent_id, pane_id, session_id, pane_slot, process_ids_json,
                command_sha256, confirmed_at, updated_at
-             ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
           )
-          .run(next.runId, next.id, paneId, sessionId, input.write.now);
+          .run(next.runId, next.id, paneId, sessionId, slot, input.write.now);
       }
       return next;
     });
@@ -906,6 +934,239 @@ export class SqliteControllerRepository implements ControllerRepository {
       nonEmpty(agentId, "agent launch agent id"),
     );
     return row === null ? null : parseAgentLaunch(row);
+  }
+
+  reserveAgentPaneRestorations(
+    input: ReserveAgentPaneRestorationSetInput,
+  ): readonly AgentPaneRestorationRecord[] {
+    this.#assertOpen();
+    const runId = nonEmpty(input.runId, "agent pane restoration run id");
+    const operationId = nonEmpty(
+      input.operationId,
+      "agent pane restoration operation id",
+    );
+    if (
+      !Number.isSafeInteger(input.expectedRevision) ||
+      input.expectedRevision < 0
+    ) {
+      throw new ControllerRepositoryError(
+        "agent pane restoration revision must be a non-negative safe integer",
+      );
+    }
+    if (input.expectedRoster.length === 0) {
+      throw new ControllerRepositoryError(
+        "agent pane restoration roster cannot be empty",
+      );
+    }
+    if (input.reservations.length === 0) {
+      throw new ControllerRepositoryError(
+        "agent pane restoration set cannot be empty",
+      );
+    }
+    const rosterAgentIds = new Set<string>();
+    const rosterSlots = new Set<number>();
+    for (const entry of input.expectedRoster) {
+      nonEmpty(entry.agentId, "agent pane restoration roster agent id");
+      nonEmpty(entry.paneId, "agent pane restoration roster pane id");
+      nonEmpty(entry.sessionId, "agent pane restoration roster session id");
+      if (!Number.isSafeInteger(entry.slot) || entry.slot < 0) {
+        throw new ControllerRepositoryError(
+          "agent pane restoration roster slot must be a non-negative safe integer",
+        );
+      }
+      if (rosterAgentIds.has(entry.agentId) || rosterSlots.has(entry.slot)) {
+        throw new ControllerRepositoryError(
+          "agent pane restoration roster contains duplicate agents or slots",
+        );
+      }
+      rosterAgentIds.add(entry.agentId);
+      rosterSlots.add(entry.slot);
+    }
+    if (input.expectedRoster.some((_, slot) => !rosterSlots.has(slot))) {
+      throw new ControllerRepositoryError(
+        "agent pane restoration roster slots must be complete and contiguous",
+      );
+    }
+    const reservationAgentIds = new Set<string>();
+    const reservationSlots = new Set<number>();
+    const restorationIds = new Set<string>();
+    for (const reservation of input.reservations) {
+      nonEmpty(reservation.agentId, "agent pane restoration agent id");
+      nonEmpty(reservation.restorationId, "agent pane restoration id");
+      nonEmpty(reservation.priorPaneId, "prior agent pane id");
+      nonEmpty(reservation.sessionId, "agent pane session id");
+      if (!Number.isSafeInteger(reservation.slot) || reservation.slot < 0) {
+        throw new ControllerRepositoryError(
+          "agent pane restoration slot must be a non-negative safe integer",
+        );
+      }
+      if (
+        !rosterAgentIds.has(reservation.agentId) ||
+        !rosterSlots.has(reservation.slot) ||
+        reservationAgentIds.has(reservation.agentId) ||
+        reservationSlots.has(reservation.slot) ||
+        restorationIds.has(reservation.restorationId)
+      ) {
+        throw new ControllerRepositoryError(
+          "agent pane restoration set conflicts with the expected roster",
+        );
+      }
+      reservationAgentIds.add(reservation.agentId);
+      reservationSlots.add(reservation.slot);
+      restorationIds.add(reservation.restorationId);
+    }
+
+    const records = this.#transaction(() => {
+      this.#assertFence(input.write);
+      const snapshot = this.loadSnapshot(runId);
+      if (snapshot?.revision !== input.expectedRevision) {
+        throw new StaleRunRevisionError(
+          input.expectedRevision,
+          snapshot?.revision ?? -1,
+        );
+      }
+      const activeAgents = snapshot.agents.filter((agent) =>
+        [
+          "launching",
+          "idle",
+          "working",
+          "waiting",
+          "blocked",
+          "reviewing",
+          "disconnected",
+        ].includes(agent.status),
+      );
+      if (
+        activeAgents.length !== input.expectedRoster.length ||
+        activeAgents.some((agent) => !rosterAgentIds.has(agent.id))
+      ) {
+        throw new StaleWriterLeaseError(
+          "agent pane restoration roster or capacity changed",
+        );
+      }
+      for (const expected of input.expectedRoster) {
+        const launchRow = this.#agentLaunchRow(runId, expected.agentId);
+        if (launchRow === null) {
+          throw new StaleWriterLeaseError(
+            `agent ${expected.agentId} has no launch authority to restore`,
+          );
+        }
+        const launch = parseAgentLaunch(launchRow);
+        if (
+          launch.slot !== expected.slot ||
+          launch.paneId !== expected.paneId ||
+          launch.sessionId !== expected.sessionId
+        ) {
+          throw new StaleWriterLeaseError(
+            `agent ${expected.agentId} stable roster authority changed`,
+          );
+        }
+      }
+      const pendingRows = this.#database
+        .prepare(
+          `SELECT run_id, agent_id, restoration_id, operation_id, slot,
+                  prior_pane_id, replacement_pane_id, session_id, status, updated_at
+           FROM agent_pane_restorations
+           WHERE run_id = ? AND status != 'confirmed'`,
+        )
+        .all(runId) as unknown as readonly AgentPaneRestorationRow[];
+      if (
+        pendingRows.some(
+          (row) =>
+            row.operation_id !== operationId ||
+            !reservationAgentIds.has(row.agent_id),
+        ) ||
+        (pendingRows.length !== 0 &&
+          pendingRows.length !== input.reservations.length)
+      ) {
+        throw new StaleWriterLeaseError(
+          "agent pane restoration set conflicts with pending reservations",
+        );
+      }
+
+      const reserved: AgentPaneRestorationRecord[] = [];
+      for (const reservation of input.reservations) {
+        const existing = this.#agentPaneRestorationRow(
+          runId,
+          reservation.agentId,
+        );
+        if (existing !== null) {
+          const current = parseAgentPaneRestoration(existing);
+          if (
+            current.restorationId !== reservation.restorationId ||
+            current.operationId !== operationId ||
+            current.slot !== reservation.slot ||
+            current.priorPaneId !== reservation.priorPaneId ||
+            current.sessionId !== reservation.sessionId
+          ) {
+            throw new StaleWriterLeaseError(
+              `agent ${reservation.agentId} has conflicting pane restoration authority`,
+            );
+          }
+          reserved.push(current);
+          continue;
+        }
+        const agent = activeAgents.find(
+          (candidate) => candidate.id === reservation.agentId,
+        );
+        const expected = input.expectedRoster.find(
+          (candidate) => candidate.agentId === reservation.agentId,
+        );
+        const launchRow = this.#agentLaunchRow(runId, reservation.agentId);
+        if (
+          agent === undefined ||
+          expected === undefined ||
+          launchRow === null
+        ) {
+          throw new StaleWriterLeaseError(
+            `agent ${reservation.agentId} is absent from the restoration roster`,
+          );
+        }
+        const launch = parseAgentLaunch(launchRow);
+        if (
+          expected.slot !== reservation.slot ||
+          expected.paneId !== reservation.priorPaneId ||
+          expected.sessionId !== reservation.sessionId ||
+          launch.status !== "confirmed" ||
+          launch.slot !== reservation.slot ||
+          launch.paneId !== reservation.priorPaneId ||
+          launch.sessionId !== reservation.sessionId ||
+          (agent.paneId !== reservation.priorPaneId &&
+            !(agent.status === "disconnected" && agent.paneId === null))
+        ) {
+          throw new StaleWriterLeaseError(
+            `agent ${reservation.agentId} lacks exact stable pane and session evidence`,
+          );
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO agent_pane_restorations(
+               run_id, agent_id, restoration_id, operation_id, slot,
+               prior_pane_id, replacement_pane_id, session_id, status, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'reserved', ?)`,
+          )
+          .run(
+            runId,
+            reservation.agentId,
+            reservation.restorationId,
+            operationId,
+            reservation.slot,
+            reservation.priorPaneId,
+            reservation.sessionId,
+            input.write.now,
+          );
+        const row = this.#agentPaneRestorationRow(runId, reservation.agentId);
+        if (row === null) {
+          throw new ControllerDatabaseIntegrityError(
+            "agent pane restoration reservation disappeared",
+          );
+        }
+        reserved.push(parseAgentPaneRestoration(row));
+      }
+      return Object.freeze(reserved);
+    });
+    this.#protectDatabaseFiles();
+    return records;
   }
 
   reserveAgentPaneRestoration(
@@ -1845,12 +2106,31 @@ export class SqliteControllerRepository implements ControllerRepository {
     for (const row of leaseRows) parseWriterLease(row);
     const launchRows = this.#database
       .prepare(
-        `SELECT run_id, agent_id, pane_id, session_id, process_ids_json,
-                command_sha256, confirmed_at, updated_at
+        `SELECT run_id, agent_id, pane_id, session_id, pane_slot,
+                process_ids_json, command_sha256, confirmed_at, updated_at
          FROM agent_launches`,
       )
       .all() as unknown as readonly AgentLaunchRow[];
     for (const row of launchRows) parseAgentLaunch(row);
+    const activeSlotCollision = this.#database
+      .prepare(
+        `SELECT 1 AS count
+         FROM agent_launches
+         INNER JOIN agents
+           ON agents.run_id = agent_launches.run_id
+          AND agents.agent_id = agent_launches.agent_id
+         WHERE agent_launches.pane_slot IS NOT NULL
+           AND agents.status <> 'closed'
+         GROUP BY agent_launches.run_id, agent_launches.pane_slot
+         HAVING COUNT(*) > 1
+         LIMIT 1`,
+      )
+      .get() as unknown as CountRow | undefined;
+    if (activeSlotCollision !== undefined) {
+      throw new ControllerDatabaseIntegrityError(
+        "unclosed agents share one stable pane slot",
+      );
+    }
     const compositionRows = this.#database
       .prepare(
         `SELECT run_id, composition_json, authentication_tag, bound_at
@@ -1883,6 +2163,7 @@ export class SqliteControllerRepository implements ControllerRepository {
       if (
         launch.paneId !== expectedPaneId ||
         launch.sessionId !== restoration.sessionId ||
+        (launch.slot !== null && launch.slot !== restoration.slot) ||
         (restoration.status === "reserved" && launch.status !== "confirmed") ||
         (restoration.status === "confirmed" && launch.status !== "confirmed")
       ) {
@@ -2124,6 +2405,33 @@ export class SqliteControllerRepository implements ControllerRepository {
           PRAGMA user_version = 5;
         `);
       }
+      if (version < 6) {
+        this.#database.exec(`
+          ALTER TABLE agent_launches
+            ADD COLUMN pane_slot INTEGER CHECK (pane_slot IS NULL OR pane_slot >= 0);
+          UPDATE agent_launches
+          SET pane_slot = (
+            SELECT slot
+            FROM agent_pane_restorations
+            WHERE agent_pane_restorations.run_id = agent_launches.run_id
+              AND agent_pane_restorations.agent_id = agent_launches.agent_id
+          )
+          WHERE EXISTS (
+            SELECT 1
+            FROM agent_pane_restorations
+            WHERE agent_pane_restorations.run_id = agent_launches.run_id
+              AND agent_pane_restorations.agent_id = agent_launches.agent_id
+          );
+          PRAGMA user_version = 6;
+        `);
+      }
+      if (version < 7) {
+        this.#database.exec(`
+          DROP INDEX IF EXISTS agent_launches_by_slot;
+
+          PRAGMA user_version = 7;
+        `);
+      }
     });
   }
 
@@ -2174,8 +2482,8 @@ export class SqliteControllerRepository implements ControllerRepository {
   #agentLaunchRow(runId: string, agentId: string): AgentLaunchRow | null {
     const row = this.#database
       .prepare(
-        `SELECT run_id, agent_id, pane_id, session_id, process_ids_json,
-                command_sha256, confirmed_at, updated_at
+        `SELECT run_id, agent_id, pane_id, session_id, pane_slot,
+                process_ids_json, command_sha256, confirmed_at, updated_at
          FROM agent_launches
          WHERE run_id = ? AND agent_id = ?`,
       )
@@ -2565,6 +2873,33 @@ export class SqliteControllerRepository implements ControllerRepository {
         state.schemaVersion,
         state.status,
         stringifyJson(state),
+      );
+    }
+  }
+
+  #assertAgentPaneSlotAvailable(
+    runId: string,
+    agentId: string,
+    slot: number,
+  ): void {
+    const conflict = this.#database
+      .prepare(
+        `SELECT agent_launches.agent_id
+         FROM agent_launches
+         INNER JOIN agents
+           ON agents.run_id = agent_launches.run_id
+          AND agents.agent_id = agent_launches.agent_id
+         WHERE agent_launches.run_id = ?
+           AND agent_launches.pane_slot = ?
+           AND agent_launches.agent_id <> ?
+           AND agents.status <> 'closed'
+         LIMIT 1`,
+      )
+      .get(runId, slot, agentId) as unknown as
+      { readonly agent_id: string } | undefined;
+    if (conflict !== undefined) {
+      throw new StaleWriterLeaseError(
+        `agent pane slot ${String(slot)} is reserved by unclosed agent ${conflict.agent_id}`,
       );
     }
   }

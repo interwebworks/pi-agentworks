@@ -88,7 +88,12 @@ function fixture() {
   const pane = {
     paneId: "pane-1",
     cwd: story.worktreePath,
-    tokens: { aw_kind: "agent", aw_run: run.id, aw_agent: agent.id },
+    tokens: {
+      aw_kind: "agent",
+      aw_run: run.id,
+      aw_agent: agent.id,
+      aw_slot: "1",
+    },
   };
   const session = {
     sessionPath: "/session",
@@ -163,6 +168,7 @@ test("resource provisioner composes Git, pane, session, and launch evidence", as
   );
   assert.equal(result.agent.id, agent.id);
   assert.equal(result.paneId, pane.paneId);
+  assert.equal(result.paneSlot, 1);
   assert.equal(result.sessionId, configuration.sessionId);
   assert.deepEqual(expectedLabels, ["Canonical API Builder"]);
   assert.equal(rolledBack, false);
