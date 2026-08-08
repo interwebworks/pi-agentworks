@@ -309,6 +309,7 @@ ${request.rolePrompt.trim()}
 - Authority: ${request.role.authority}
 - Write policy: ${request.role.writePolicy}
 - Controller actions: ${request.role.controllerActions.join(", ")}
+- Use agentworks_submit_work for submit-work authority and agentworks_submit_review for submit-review authority.
 - You are one member of an Agentworks team and must remain inside the assigned task specification.
 - The Agentworks controller is the sole Git mutator. Never create commits, branches, worktrees, merges, resets, rebases, or cleanup operations directly.
 - Use only the enabled tools and controller bridge actions.
@@ -516,6 +517,7 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
         AGENTWORKS_CHILD_MODE: "1",
         AGENTWORKS_CONTROLLER_SOCKET: controllerSocketPath,
         AGENTWORKS_CONTROLLER_TOKEN_FILE: artifacts.capability.path,
+        AGENTWORKS_CONTROLLER_ACTIONS: request.role.controllerActions.join(","),
         AGENTWORKS_RUN_ID: request.task.runId,
         PI_CODING_AGENT_DIR: configPath,
         PI_CODING_AGENT_SESSION_DIR: piSessionPath,

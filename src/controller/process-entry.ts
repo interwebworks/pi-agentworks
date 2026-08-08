@@ -10,6 +10,7 @@ import type {
   FencedWrite,
   JsonValue,
 } from "../application/ports/controller-repository.ts";
+import type { AgentMessage } from "../domain/agent-communication.ts";
 import type {
   AgentState,
   RunState,
@@ -37,6 +38,11 @@ import {
 
 export interface ControllerOrchestrationExecutor {
   execute(write: FencedWrite): Promise<JsonValue>;
+  handleAgentMessage?(
+    message: AgentMessage,
+    write: FencedWrite,
+    requestId: string,
+  ): Promise<JsonValue>;
   restorePanes?(write: FencedWrite): Promise<JsonValue>;
 }
 
@@ -350,6 +356,122 @@ const orchestrationExecutions = new WeakMap<
   ControllerOrchestrationExecutor,
   Promise<JsonValue>
 >();
+const agentMessageExecutions = new WeakMap<
+  ControllerOrchestrationExecutor,
+  Map<string, Promise<JsonValue>>
+>();
+
+function enqueueExecutorOperation(
+  executor: ControllerOrchestrationExecutor,
+  operation: () => Promise<JsonValue>,
+): Promise<JsonValue> {
+  const previous = orchestrationExecutions.get(executor);
+  const execution = (previous ?? Promise.resolve({}))
+    .catch(() => ({}))
+    .then(operation);
+  orchestrationExecutions.set(executor, execution);
+  const clear = (): void => {
+    if (orchestrationExecutions.get(executor) === execution) {
+      orchestrationExecutions.delete(executor);
+    }
+  };
+  void execution.then(clear, clear);
+  return execution;
+}
+
+function requiresLifecycleHandler(message: AgentMessage): boolean {
+  return ["candidate-ready", "review-submitted"].includes(message.type);
+}
+
+function triggersOrchestrationTick(message: AgentMessage): boolean {
+  return [
+    "candidate-ready",
+    "review-submitted",
+    "operation-completed",
+    "session-shutdown",
+  ].includes(message.type);
+}
+
+function agentMessageResponse(
+  message: AgentMessage,
+  result: ReturnType<AgentMessageController["apply"]>,
+): JsonValue {
+  return toJsonValue({
+    accepted: true,
+    changed: result.changed,
+    replayed: result.replayed,
+    reaction: result.reaction,
+    revision: result.revision,
+    type: message.type,
+  });
+}
+
+/**
+ * Commit one authenticated child message, then perform any privileged
+ * lifecycle action and bounded orchestration drain behind the same
+ * executor-wide serialization boundary. Duplicate in-flight request ids share
+ * one promise, and all effects necessarily begin after the message commit.
+ */
+export function executeCommittedAgentMessage(
+  message: AgentMessage,
+  requestId: string,
+  runtime: ControllerRuntime,
+  executor: ControllerOrchestrationExecutor | undefined,
+): Promise<JsonValue> {
+  const apply = (): ReturnType<AgentMessageController["apply"]> =>
+    new AgentMessageController(runtime.repository, Date.now).apply(
+      message,
+      runtime.currentWrite(),
+      requestId,
+    );
+  if (executor === undefined) {
+    const result = apply();
+    if (requiresLifecycleHandler(message)) {
+      return Promise.reject(
+        new ControllerRequestError(
+          "not-configured",
+          "Controller lifecycle effects are not configured",
+        ),
+      );
+    }
+    return Promise.resolve(agentMessageResponse(message, result));
+  }
+
+  let requests = agentMessageExecutions.get(executor);
+  if (requests === undefined) {
+    requests = new Map();
+    agentMessageExecutions.set(executor, requests);
+  }
+  const existing = requests.get(requestId);
+  if (existing !== undefined) return existing;
+  const execution = enqueueExecutorOperation(executor, async () => {
+    const result = apply();
+    if (executor.handleAgentMessage !== undefined) {
+      await executor.handleAgentMessage(
+        message,
+        currentControllerWrite(runtime, "processing child lifecycle"),
+        requestId,
+      );
+    } else if (requiresLifecycleHandler(message)) {
+      throw new ControllerRequestError(
+        "not-configured",
+        "Controller lifecycle effects are not configured",
+      );
+    }
+    if (triggersOrchestrationTick(message)) {
+      await executor.execute(
+        currentControllerWrite(runtime, "advancing child lifecycle"),
+      );
+    }
+    return agentMessageResponse(message, result);
+  });
+  requests.set(requestId, execution);
+  const clear = (): void => {
+    if (requests.get(requestId) === execution) requests.delete(requestId);
+  };
+  void execution.then(clear, clear);
+  return execution;
+}
 
 export async function executeInjectedOrchestration(
   clientKind: "parent" | "management" | "child",
@@ -375,18 +497,7 @@ export async function executeInjectedOrchestration(
       "Live orchestration effects are not configured",
     );
   }
-  const previous = orchestrationExecutions.get(executor);
-  const execution = (previous ?? Promise.resolve({}))
-    .catch(() => ({}))
-    .then(() => executor.execute(write));
-  orchestrationExecutions.set(executor, execution);
-  try {
-    return await execution;
-  } finally {
-    if (orchestrationExecutions.get(executor) === execution) {
-      orchestrationExecutions.delete(executor);
-    }
-  }
+  return enqueueExecutorOperation(executor, () => executor.execute(write));
 }
 
 export async function executeInjectedPaneRestoration(
@@ -413,18 +524,10 @@ export async function executeInjectedPaneRestoration(
       "Agent pane restoration is not configured",
     );
   }
-  const previous = orchestrationExecutions.get(executor);
-  const execution = (previous ?? Promise.resolve({}))
-    .catch(() => ({}))
-    .then(() => executor.restorePanes?.(write) ?? Promise.resolve({}));
-  orchestrationExecutions.set(executor, execution);
-  try {
-    return await execution;
-  } finally {
-    if (orchestrationExecutions.get(executor) === execution) {
-      orchestrationExecutions.delete(executor);
-    }
-  }
+  return enqueueExecutorOperation(
+    executor,
+    () => executor.restorePanes?.(write) ?? Promise.resolve({}),
+  );
 }
 
 export type DeferredInitialResumeReason =
@@ -481,13 +584,16 @@ const deferredInitialResumes = new WeakMap<
   Promise<JsonValue>
 >();
 
-function currentResumeWrite(runtime: ControllerRuntime): FencedWrite {
+function currentControllerWrite(
+  runtime: ControllerRuntime,
+  purpose: string,
+): FencedWrite {
   try {
     runtime.assertReadyForWork();
   } catch {
     throw new ControllerRequestError(
       "recovery-required",
-      "Controller recovery reconciliation is required before resuming orchestration",
+      `Controller recovery reconciliation is required before ${purpose}`,
     );
   }
   const write = runtime.currentWrite();
@@ -499,10 +605,14 @@ function currentResumeWrite(runtime: ControllerRuntime): FencedWrite {
   ) {
     throw new ControllerRequestError(
       "stale-fence",
-      "Deferred orchestration resume requires a current controller fence",
+      `${purpose} requires a current controller fence`,
     );
   }
   return write;
+}
+
+function currentResumeWrite(runtime: ControllerRuntime): FencedWrite {
+  return currentControllerWrite(runtime, "resuming deferred orchestration");
 }
 
 /**
@@ -750,32 +860,19 @@ export async function runControllerProcess(
           });
         }
         if (request.action === "agent.message") {
+          let message: AgentMessage;
           try {
-            const message = decodeAuthenticatedAgentMessage(
+            message = decodeAuthenticatedAgentMessage(
               request.payload,
               configuration.runId,
               agent.id,
             );
-            const result = new AgentMessageController(
-              runtime.repository,
-              Date.now,
-            ).apply(message, runtime.currentWrite(), request.requestId);
-            return toJsonValue({
-              accepted: true,
-              changed: result.changed,
-              replayed: result.replayed,
-              reaction: result.reaction,
-              revision: result.revision,
-              type: message.type,
-            });
           } catch (error) {
             const code =
               error instanceof InvalidAgentMessageRouteError &&
               error.message.includes("identity does not match")
                 ? "identity-mismatch"
-                : error instanceof AgentMessageControllerError
-                  ? "invalid-state"
-                  : "invalid-message";
+                : "invalid-message";
             throw new ControllerRequestError(
               code,
               error instanceof Error
@@ -783,6 +880,22 @@ export async function runControllerProcess(
                 : "Child agent message is invalid",
             );
           }
+          return executeCommittedAgentMessage(
+            message,
+            request.requestId,
+            runtime,
+            orchestrationExecutor,
+          ).catch((error: unknown) => {
+            if (error instanceof ControllerRequestError) throw error;
+            throw new ControllerRequestError(
+              error instanceof AgentMessageControllerError
+                ? "invalid-state"
+                : "lifecycle-failed",
+              error instanceof Error
+                ? error.message.slice(0, 512)
+                : "Child lifecycle handling failed",
+            );
+          });
         }
         throw new ControllerRequestError(
           "forbidden",
@@ -894,6 +1007,14 @@ export async function runControllerProcess(
               status: story.status,
               dependencies: [],
               reviewerAssigned: story.reviewerAgentId !== null,
+              reviewerClosed:
+                story.reviewerAgentId !== null &&
+                snapshot.agents.some(
+                  (agent) =>
+                    agent.id === story.reviewerAgentId &&
+                    agent.status === "closed",
+                ),
+              workspaceCleaned: story.workspaceCleaned === true,
             })),
             snapshot.run.complexity,
             countOccupiedAgentSlots(snapshot.agents),

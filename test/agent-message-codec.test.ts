@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   agentBlocked,
+  candidateReady,
   heartbeat,
+  reviewSubmitted,
   sessionShutdown,
   sessionStarted,
   type AgentMessage,
@@ -95,6 +97,14 @@ test("round-trips the remaining operation and supervisor variants", () => {
     operationCompleted,
     supervisorCompletion,
     supervisorError,
+    candidateReady("run-1", "agent-1"),
+    reviewSubmitted(
+      "run-1",
+      "agent-1",
+      "approved",
+      "a".repeat(40),
+      "b".repeat(40),
+    ),
     sessionShutdown("run-1", "agent-1", "session-1"),
   ]) {
     assert.deepEqual(decodeAgentMessage(encodeAgentMessage(message)), message);

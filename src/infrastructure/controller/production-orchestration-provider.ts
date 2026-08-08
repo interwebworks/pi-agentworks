@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ControllerOrchestrationExecutor } from "../../controller/process-entry.ts";
 import { createProductionOrchestrationLoop } from "../../application/orchestration/production-composition.ts";
+import { drainOrchestrationLoop } from "../../application/orchestration/orchestration-loop.ts";
+import { ControllerAgentLifecycle } from "../../application/orchestration/controller-agent-lifecycle.ts";
 import { ControllerAgentFactory } from "../../application/launch/controller-agent-factory.ts";
 import { EnvironmentLaunchConfigurationResolver } from "../../application/launch/environment-launch-configuration.ts";
 import { HerdrAgentPaneAllocator } from "../../application/launch/herdr-agent-pane-allocator.ts";
@@ -24,7 +26,11 @@ import { ProductionSandboxLaunchGate } from "../../application/sandbox/productio
 import { RealOrchestrationContext } from "../../application/orchestration/real-orchestration-context.ts";
 import { ControllerRuntimeLaunchEndpointResolver } from "./runtime-orchestration-endpoint.ts";
 import type { ControllerRuntime } from "./controller-runtime.ts";
-import type { FencedWrite } from "../../application/ports/controller-repository.ts";
+import type {
+  FencedWrite,
+  JsonValue,
+} from "../../application/ports/controller-repository.ts";
+import type { AgentMessage } from "../../domain/agent-communication.ts";
 import type { RunState, StoryState } from "../../domain/controller-state.ts";
 import type { AssignmentRoleSelector } from "../../application/launch/role-resource-resolver.ts";
 import type { LoadedRole } from "../role-packs/file-role-pack-repository.ts";
@@ -50,6 +56,7 @@ export class ProductionOrchestrationProviderError extends Error {
 }
 
 type ProductionEnvironment = ControllerLaunchCompositionEnvironment;
+const PRODUCTION_WRITER_LEASE_TTL_MS = 15 * 60_000;
 
 function trustedPrivateSource(path: string, label: string): void {
   const status = lstatSync(path);
@@ -239,6 +246,19 @@ export function createLazyProductionOrchestrationExecutor(
   return Object.freeze({
     async execute(write: FencedWrite) {
       return (await compose(write)).execute(write);
+    },
+    async handleAgentMessage(
+      message: AgentMessage,
+      write: FencedWrite,
+      requestId: string,
+    ) {
+      const operation = await compose(write);
+      if (operation.handleAgentMessage === undefined) {
+        throw new ProductionOrchestrationProviderError(
+          "agent lifecycle handling is absent from the live composition",
+        );
+      }
+      return operation.handleAgentMessage(message, write, requestId);
     },
     async restorePanes(write: FencedWrite) {
       const operation = await compose(write);
@@ -641,7 +661,7 @@ export function createProductionOrchestrationProviderFromComposition(
                 runId: current.run.id,
                 storyId: sourceStory.id,
                 ownerAgentId: currentAgent.id,
-                ttlMs: 15_000,
+                ttlMs: PRODUCTION_WRITER_LEASE_TTL_MS,
               });
             }
             const writerLeaseActive =
@@ -749,18 +769,26 @@ export function createProductionOrchestrationProviderFromComposition(
             return Promise.resolve();
           },
         },
-        writerLeaseTtlMs: 15_000,
+        writerLeaseTtlMs: PRODUCTION_WRITER_LEASE_TTL_MS,
         initialTeam: {
           projectManagerRoleRuntimeId: projectManager.runtimeId,
           advisorRoleRuntimeId: advisor?.runtimeId ?? null,
         },
       });
+      const agentLifecycle = new ControllerAgentLifecycle({
+        repository: runtime.repository,
+        git,
+        roleCatalog,
+        clock: Date.now,
+        writerLeaseTtlMs: PRODUCTION_WRITER_LEASE_TTL_MS,
+      });
       return {
         async execute() {
-          const result = await loop.tick(write);
+          const result = await drainOrchestrationLoop(loop, write);
           return {
             accepted: true,
             committed: result.committed,
+            ticks: result.ticks,
             actions: result.actions.map((action) => {
               if ("storyId" in action) {
                 return `${action.type}:${action.storyId}`;
@@ -768,6 +796,14 @@ export function createProductionOrchestrationProviderFromComposition(
               return action.type;
             }),
           };
+        },
+        async handleAgentMessage(message, currentWrite, requestId) {
+          const result = await agentLifecycle.handle(
+            message,
+            currentWrite,
+            requestId,
+          );
+          return JSON.parse(JSON.stringify(result)) as JsonValue;
         },
         async restorePanes() {
           const result = await paneRestoration.restoreMissingPane({

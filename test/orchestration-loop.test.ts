@@ -494,7 +494,9 @@ test("a ready story advances through assignment, review, and merge to run comple
       request: { command: "approve-review" },
       run: afterReviewerAssigned.run,
       stories: [approved],
-      agents: afterReviewerAssigned.agents,
+      agents: afterReviewerAssigned.agents.map((agent) =>
+        agent.id === "agent-2" ? { ...agent, status: "closed" } : agent,
+      ),
       events: [event("review-approved", "story", "story-1", approvedAt)],
     });
 

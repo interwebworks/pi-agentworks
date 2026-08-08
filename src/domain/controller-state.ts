@@ -101,6 +101,8 @@ export interface StoryState {
   readonly reviewedIntegrationHead: string | null;
   readonly reviewerAgentId: string | null;
   readonly mergeHead: string | null;
+  /** Present only after controller-owned Git cleanup has completed. */
+  readonly workspaceCleaned?: true;
   readonly blockedReason: string | null;
   readonly blockedFrom: Exclude<
     StoryStatus,
@@ -268,6 +270,7 @@ export const StoryStateSchema = Type.Object(
     reviewedIntegrationHead: NullableStateString,
     reviewerAgentId: NullableStateString,
     mergeHead: NullableStateString,
+    workspaceCleaned: Type.Optional(Type.Literal(true)),
     blockedReason: NullableStateString,
     blockedFrom: Type.Union([Type.Null(), ResumableStoryStatusSchema]),
     createdAt: StateTimestamp,
@@ -820,7 +823,7 @@ export function transitionStory(
         updatedAt: transition.at,
       });
     case "review-invalidated":
-      assertStoryStatus(current, transition, ["approved"]);
+      assertStoryStatus(current, transition, ["awaiting-review", "approved"]);
       return Object.freeze({
         ...current,
         status: "awaiting-review",

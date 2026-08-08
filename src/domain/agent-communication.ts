@@ -70,6 +70,25 @@ export interface AgentBlockedMessage {
   readonly detail: string;
 }
 
+/** A writer asks the controller to inspect and commit its worktree. */
+export interface CandidateReadyMessage {
+  readonly protocolVersion: 1;
+  readonly type: "candidate-ready";
+  readonly runId: string;
+  readonly agentId: string;
+}
+
+/** A reviewer reports the exact controller-supplied heads it inspected. */
+export interface ReviewSubmittedMessage {
+  readonly protocolVersion: 1;
+  readonly type: "review-submitted";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly outcome: "approved" | "changes-requested";
+  readonly candidateStoryHead: string;
+  readonly integrationHead: string;
+}
+
 export interface SupervisorNudgeMessage {
   readonly protocolVersion: 1;
   readonly type: "supervisor-nudge";
@@ -111,6 +130,8 @@ export type AgentMessage =
   | OperationMessage
   | HeartbeatMessage
   | AgentBlockedMessage
+  | CandidateReadyMessage
+  | ReviewSubmittedMessage
   | SupervisorMessage;
 
 export function sessionStarted(
@@ -220,5 +241,35 @@ export function agentBlocked(
     agentId,
     reason,
     detail,
+  });
+}
+
+export function candidateReady(
+  runId: string,
+  agentId: string,
+): CandidateReadyMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "candidate-ready",
+    runId,
+    agentId,
+  });
+}
+
+export function reviewSubmitted(
+  runId: string,
+  agentId: string,
+  outcome: ReviewSubmittedMessage["outcome"],
+  candidateStoryHead: string,
+  integrationHead: string,
+): ReviewSubmittedMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "review-submitted",
+    runId,
+    agentId,
+    outcome,
+    candidateStoryHead,
+    integrationHead,
   });
 }

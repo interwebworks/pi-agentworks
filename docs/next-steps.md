@@ -106,6 +106,15 @@ Acceptance evidence:
 
 ## 5. Finish the full orchestration lifecycle
 
+Status: A deterministic production-Git lifecycle slice is complete.
+Authenticated child messages now commit before any resulting effect and enter the same executor-wide serialization boundary as parent execution and pane restoration.
+Controller handling renews active writer leases from progress, resolves each candidate/review sender's exact server-side RoleCatalog entry and required controller action, rejects inactive or terminal lifecycle capabilities before lease/Git/story effects, creates candidates only from registered live worktree evidence after lease release, validates identity-bound review claims against controller-supplied durable and live Git heads, closes settled writers and reviewers on durable session shutdown, and triggers a bounded repeated tick drain.
+A one-time durable workspace-cleanup marker prevents repeated cleanup effects while dependent stories are admitted.
+The deterministic proof uses SQLite, real disposable Git worktrees, two stories with a dependency, exact controller-authored candidate and merge commits, stale and self-review rejection, raw unauthorized and terminal lifecycle-signal rejection before privileged effects, cleanup, terminal completion, global-cap accounting, and an unchanged original checkout.
+It does not run a real model or Herdr process and is not a live E2E claim.
+A failed review is durably recorded as `changes-requested`, but returning it to a fresh writer and renewed reviewer remains open because current deterministic agent identity cannot safely relaunch a closed prior attempt.
+Crash recovery between writer-lease release, candidate creation, and lifecycle-state commit also remains open and fails closed rather than adopting incomplete evidence.
+
 Add repeated or event-driven orchestration ticks rather than relying on one initial tick.
 Support multiple durable stories with dependency-aware scheduling.
 Launch reviewers after candidate creation, require exact candidate and integration evidence, and invalidate reviews after relevant changes.
@@ -208,6 +217,8 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
    - [ ] Run real Herdr restart and multi-pane-loss E2E proof.
 5. [x] Enforce the global active-agent budget.
 6. [ ] Complete repeated multi-story reviewer, merge, cleanup, and completion flow.
+   - [x] Prove the deterministic controller-serialized production-Git lifecycle with two dependent stories.
+   - [ ] Prove the same flow in an installed real child/Herdr run and add failed-review reassignment plus interrupted-candidate recovery.
 7. [ ] Run the large-grid and restart E2E matrix.
 8. [ ] Add advanced management controls and LOW/NORMAL confirmations.
 9. [x] Integrate safe `pi-subagents` public components.

@@ -25,6 +25,7 @@ function fakeExtensionApi() {
   const handlers = new Map<string, FakeHandler[]>();
   const commands = new Map<string, unknown>();
   const tools = new Map<string, unknown>();
+  let activeTools: string[] = [];
   const api = {
     on(name: string, handler: FakeHandler) {
       const registered = handlers.get(name) ?? [];
@@ -36,9 +37,22 @@ function fakeExtensionApi() {
     },
     registerTool(tool: { name: string }) {
       tools.set(tool.name, tool);
+      activeTools.push(tool.name);
+    },
+    getActiveTools() {
+      return [...activeTools];
+    },
+    setActiveTools(names: string[]) {
+      activeTools = [...names];
     },
   } as unknown as ExtensionAPI;
-  return { api, handlers, commands, tools };
+  return {
+    api,
+    handlers,
+    commands,
+    tools,
+    getActiveTools: () => [...activeTools],
+  };
 }
 
 async function invoke(
@@ -169,6 +183,7 @@ test("exact child mode requires a private capability and real controller socket"
       agentId: "agent-1",
       controllerSocketPath: fixture.socketPath,
       controllerAuthToken: fixture.token,
+      controllerActions: [],
     });
 
     chmodSync(fixture.tokenPath, 0o640);
@@ -195,6 +210,7 @@ test("child bridge authenticates before any model turn and closes on shutdown", 
     agentId: "agent-1",
     controllerSocketPath: "/runtime/controller.sock",
     controllerAuthToken: "A".repeat(43),
+    controllerActions: [],
   };
   const actions: string[] = [];
   let closes = 0;
@@ -275,6 +291,7 @@ test("child bridge re-authenticates after the controller closes an idle connecti
       agentId: "agent-1",
       controllerSocketPath: "/runtime/controller.sock",
       controllerAuthToken: "A".repeat(43),
+      controllerActions: [],
     },
     () => {
       clientNumber += 1;
@@ -321,6 +338,126 @@ test("child bridge re-authenticates after the controller closes an idle connecti
   ]);
 });
 
+test("child review tool exposes only granted authority and submits exact heads", async () => {
+  const fake = fakeExtensionApi();
+  const messages: ReturnType<typeof decodeAgentMessage>[] = [];
+  installChildBridge(
+    fake.api,
+    {
+      runId: "run-1",
+      agentId: "reviewer-1",
+      controllerSocketPath: "/runtime/controller.sock",
+      controllerAuthToken: "A".repeat(43),
+      controllerActions: ["submit-review"],
+    },
+    () => ({
+      connect: () => Promise.resolve(),
+      request(input) {
+        if (input.action === "agent.message") {
+          messages.push(decodeAgentMessage(JSON.stringify(input.payload)));
+        }
+        return Promise.resolve({
+          runId: "run-1",
+          agentId: "reviewer-1",
+          revision: 7,
+          status: "reviewing",
+        });
+      },
+      close: () => undefined,
+    }),
+  );
+  await invoke(fake.handlers, "session_start");
+  assert.equal(fake.getActiveTools().includes("agentworks_submit_work"), false);
+  assert.equal(
+    fake.getActiveTools().includes("agentworks_submit_review"),
+    true,
+  );
+  const tool = fake.tools.get("agentworks_submit_review") as {
+    execute(
+      toolCallId: string,
+      parameters: {
+        outcome: "approved" | "changes-requested";
+        candidateStoryHead: string;
+        integrationHead: string;
+      },
+      signal: undefined,
+      onUpdate: undefined,
+      context: { shutdown(): void },
+    ): Promise<unknown>;
+  };
+  let shutdowns = 0;
+  await tool.execute(
+    "review-call",
+    {
+      outcome: "approved",
+      candidateStoryHead: "a".repeat(40),
+      integrationHead: "b".repeat(40),
+    },
+    undefined,
+    undefined,
+    { shutdown: () => (shutdowns += 1) },
+  );
+  assert.equal(shutdowns, 1);
+  assert.deepEqual(messages.at(-1), {
+    protocolVersion: 1,
+    type: "review-submitted",
+    runId: "run-1",
+    agentId: "reviewer-1",
+    outcome: "approved",
+    candidateStoryHead: "a".repeat(40),
+    integrationHead: "b".repeat(40),
+  });
+});
+
+test("child work tool submits no child-authored Git evidence", async () => {
+  const fake = fakeExtensionApi();
+  const messages: ReturnType<typeof decodeAgentMessage>[] = [];
+  installChildBridge(
+    fake.api,
+    {
+      runId: "run-1",
+      agentId: "writer-1",
+      controllerSocketPath: "/runtime/controller.sock",
+      controllerAuthToken: "A".repeat(43),
+      controllerActions: ["submit-work"],
+    },
+    () => ({
+      connect: () => Promise.resolve(),
+      request(input) {
+        if (input.action === "agent.message") {
+          messages.push(decodeAgentMessage(JSON.stringify(input.payload)));
+        }
+        return Promise.resolve({
+          runId: "run-1",
+          agentId: "writer-1",
+          revision: 7,
+          status: "working",
+        });
+      },
+      close: () => undefined,
+    }),
+  );
+  await invoke(fake.handlers, "session_start");
+  const tool = fake.tools.get("agentworks_submit_work") as {
+    execute(
+      toolCallId: string,
+      parameters: Record<string, never>,
+      signal: undefined,
+      onUpdate: undefined,
+      context: { shutdown(): void },
+    ): Promise<unknown>;
+  };
+  await tool.execute("work-call", {}, undefined, undefined, {
+    shutdown: () => undefined,
+  });
+  assert.deepEqual(messages.at(-1), {
+    protocolVersion: 1,
+    type: "candidate-ready",
+    runId: "run-1",
+    agentId: "writer-1",
+  });
+});
+
 test("child operation errors emit blocker and failed-result messages", async () => {
   const fake = fakeExtensionApi();
   const messages: ReturnType<typeof decodeAgentMessage>[] = [];
@@ -331,6 +468,7 @@ test("child operation errors emit blocker and failed-result messages", async () 
       agentId: "agent-1",
       controllerSocketPath: "/runtime/controller.sock",
       controllerAuthToken: "A".repeat(43),
+      controllerActions: [],
     },
     () => ({
       connect: () => Promise.resolve(),
@@ -404,6 +542,7 @@ test("default bridge performs a real per-agent authenticated socket hello", asyn
       agentId: "agent-1",
       controllerSocketPath: socketPath,
       controllerAuthToken: childToken,
+      controllerActions: [],
     });
     await invoke(fake.handlers, "session_start");
     await invoke(fake.handlers, "before_agent_start");
@@ -422,6 +561,7 @@ test("invalid controller identity evidence keeps child turns blocked", async () 
     agentId: "agent-1",
     controllerSocketPath: "/runtime/controller.sock",
     controllerAuthToken: "A".repeat(43),
+    controllerActions: [],
   };
   let closed = false;
   installChildBridge(fake.api, configuration, () => ({

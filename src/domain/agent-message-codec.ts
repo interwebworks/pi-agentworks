@@ -22,6 +22,11 @@ const CompletionOutcomeSchema = Type.Union([
   Type.Literal("early"),
   Type.Literal("over"),
 ]);
+const GitObjectId = Type.String({
+  minLength: 40,
+  maxLength: 64,
+  pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+});
 
 const SessionStartedSchema = Type.Object(
   {
@@ -118,6 +123,32 @@ const AgentBlockedSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const CandidateReadySchema = Type.Object(
+  {
+    protocolVersion: ProtocolVersion,
+    type: Type.Literal("candidate-ready"),
+    runId: RunId,
+    agentId: AgentId,
+  },
+  { additionalProperties: false },
+);
+
+const ReviewSubmittedSchema = Type.Object(
+  {
+    protocolVersion: ProtocolVersion,
+    type: Type.Literal("review-submitted"),
+    runId: RunId,
+    agentId: AgentId,
+    outcome: Type.Union([
+      Type.Literal("approved"),
+      Type.Literal("changes-requested"),
+    ]),
+    candidateStoryHead: GitObjectId,
+    integrationHead: GitObjectId,
+  },
+  { additionalProperties: false },
+);
+
 const SupervisorNudgeSchema = Type.Object(
   {
     protocolVersion: ProtocolVersion,
@@ -161,6 +192,8 @@ const AgentMessageSchema = Type.Union([
   OperationCompletedSchema,
   HeartbeatSchema,
   AgentBlockedSchema,
+  CandidateReadySchema,
+  ReviewSubmittedSchema,
   SupervisorNudgeSchema,
   SupervisorCompletionSchema,
   SupervisorErrorSchema,

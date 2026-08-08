@@ -17,6 +17,8 @@ export interface OrchestrationStory {
   readonly status: StoryStatus;
   readonly dependencies: readonly string[];
   readonly reviewerAssigned: boolean;
+  readonly reviewerClosed: boolean;
+  readonly workspaceCleaned: boolean;
 }
 
 export type OrchestrationAction =
@@ -111,12 +113,12 @@ export function planOrchestration(
   const actions: OrchestrationAction[] = [];
 
   for (const story of stories) {
-    if (story.status === "merged") {
+    if (story.status === "merged" && !story.workspaceCleaned) {
       actions.push({ type: "request-cleanup", storyId: story.id });
     }
   }
   for (const story of stories) {
-    if (story.status === "approved") {
+    if (story.status === "approved" && story.reviewerClosed) {
       actions.push({ type: "request-merge", storyId: story.id });
     }
   }

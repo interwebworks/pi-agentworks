@@ -93,6 +93,8 @@ export function applyAgentMessage(
         changed: true,
       });
     case "session-shutdown":
+    case "candidate-ready":
+    case "review-submitted":
       return unchanged(current);
     case "supervisor-nudge":
     case "supervisor-completion":

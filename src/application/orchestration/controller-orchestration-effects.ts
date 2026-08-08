@@ -302,10 +302,16 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
       controllerLeaseCurrent: facts.controllerLeaseCurrent,
       expectedRevisionMatches: facts.expectedRevisionMatches,
     });
-    // Cleanup is worktree teardown; the story remains merged.
+    // Cleanup is worktree teardown; the story remains merged and records the
+    // one durable bit that prevents repeated cleanup effects on later ticks.
+    const cleaned = Object.freeze({
+      ...story,
+      workspaceCleaned: true as const,
+      updatedAt: this.#clock(),
+    });
     return Object.freeze({
       run,
-      stories: snapshot.stories,
+      stories: this.#replaceStory(snapshot, cleaned),
       agents: snapshot.agents,
       events: [
         this.#event(
@@ -313,7 +319,7 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
           "story",
           story.id,
           { mergeCommit: story.mergeHead },
-          this.#clock(),
+          cleaned.updatedAt,
         ),
       ],
     });

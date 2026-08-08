@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   createConfiguredControllerProcessDependencies,
   assessDeferredInitialResume,
+  executeCommittedAgentMessage,
   executeInjectedOrchestration,
   executeInjectedPaneRestoration,
   resolveConfiguredOrchestrationProvider,
@@ -22,6 +26,8 @@ import {
   transitionStory,
 } from "../src/domain/controller-state.ts";
 import type { ControllerRuntime } from "../src/infrastructure/controller/controller-runtime.ts";
+import { SqliteControllerRepository } from "../src/infrastructure/controller/sqlite-controller-repository.ts";
+import { candidateReady } from "../src/domain/agent-communication.ts";
 import { ControllerRequestError } from "../src/infrastructure/controller/unix-controller-transport.ts";
 
 const write: FencedWrite = {
@@ -184,6 +190,108 @@ test("orchestration execution is serialized per controller executor", async () =
     { sequence: 2 },
   ]);
   assert.equal(maximumActive, 1);
+});
+
+test("child lifecycle effects run only after the durable message commit and deduplicate retries", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agentworks-child-trigger-"));
+  const repository = new SqliteControllerRepository(
+    join(directory, "controller.sqlite"),
+  );
+  try {
+    const lease = repository.acquireLease("controller", 100, 10_000);
+    const currentWrite: FencedWrite = {
+      ownerId: lease.ownerId,
+      fencingToken: lease.fencingToken,
+      now: 101,
+    };
+    const base = deferredSnapshot();
+    const writer = {
+      ...createAgentState({
+        id: "writer-1",
+        runId: base.run.id,
+        roleRuntimeId: "software-development/backend-developer",
+        taskId: "story-1",
+        worktreePath: base.stories[0]?.worktreePath ?? "/worktree",
+        createdAt: 1,
+      }),
+      status: "idle" as const,
+      updatedAt: 2,
+    };
+    repository.initializeRun({
+      write: currentWrite,
+      idempotencyKey: "initialize-child-trigger",
+      request: { command: "initialize" },
+      run: base.run,
+      stories: base.stories,
+      agents: [writer],
+      events: [
+        {
+          eventId: "run-initialized",
+          type: "run-initialized",
+          entityType: "run",
+          entityId: base.run.id,
+          payload: {},
+          occurredAt: 101,
+        },
+      ],
+    });
+    const order: string[] = [];
+    const executor: ControllerOrchestrationExecutor = {
+      execute() {
+        order.push(
+          `tick:r${String(repository.loadSnapshot("run-1")?.revision)}`,
+        );
+        return Promise.resolve({ accepted: true });
+      },
+      handleAgentMessage(_message, _write, requestId) {
+        order.push(
+          `lifecycle:${requestId}:r${String(
+            repository.loadSnapshot("run-1")?.revision,
+          )}`,
+        );
+        return Promise.resolve({ accepted: true });
+      },
+    };
+    const runtime = {
+      assertReadyForWork: () => undefined,
+      currentWrite: () => currentWrite,
+      descriptor: {
+        ownerId: currentWrite.ownerId,
+        fencingToken: currentWrite.fencingToken,
+        leaseExpiresAt: 10_100,
+      },
+      repository,
+    } as unknown as ControllerRuntime;
+    const message = candidateReady("run-1", "writer-1");
+
+    const [first, retry] = await Promise.all([
+      executeCommittedAgentMessage(
+        message,
+        "candidate-request",
+        runtime,
+        executor,
+      ),
+      executeCommittedAgentMessage(
+        message,
+        "candidate-request",
+        runtime,
+        executor,
+      ),
+    ]);
+
+    assert.deepEqual(first, retry);
+    assert.deepEqual(order, ["lifecycle:candidate-request:r2", "tick:r2"]);
+    assert.equal(repository.loadSnapshot("run-1")?.revision, 2);
+    assert.deepEqual(
+      repository
+        .readEvents("run-1", { revision: 0, eventIndex: -1 }, 10)
+        .map((event) => event.type),
+      ["run-initialized", "agent-candidate-ready"],
+    );
+  } finally {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("deferred initial resume coalesces concurrent retries and launches exactly once", async () => {

@@ -14,6 +14,8 @@ function story(
     status: "ready",
     dependencies: [],
     reviewerAssigned: false,
+    reviewerClosed: false,
+    workspaceCleaned: false,
     ...overrides,
   };
 }
@@ -37,7 +39,7 @@ test("assigns ready stories whose dependencies are merged", () => {
 test("requests a merge for approved stories and cleanup for merged ones", () => {
   const actions = planOrchestration(
     [
-      story({ id: "a", status: "approved" }),
+      story({ id: "a", status: "approved", reviewerClosed: true }),
       story({ id: "b", status: "merged" }),
     ],
     "NORMAL",

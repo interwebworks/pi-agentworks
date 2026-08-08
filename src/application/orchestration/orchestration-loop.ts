@@ -25,6 +25,14 @@ export interface OrchestrationTickResult {
   readonly committed: boolean;
 }
 
+export interface OrchestrationDrainResult {
+  readonly ticks: number;
+  readonly actions: readonly OrchestrationAction[];
+  readonly committed: boolean;
+}
+
+export const MAX_ORCHESTRATION_DRAIN_TICKS = 32;
+
 export class OrchestrationLoopError extends Error {
   constructor(message: string) {
     super(message);
@@ -58,13 +66,21 @@ function mergeAfterConcurrentChildMessage(
 
 function projectStory(
   story: StoryState,
+  snapshot: ControllerSnapshot,
   dependenciesByStory: ReadonlyMap<string, readonly string[]>,
 ): OrchestrationStory {
+  const reviewer =
+    story.reviewerAgentId === null
+      ? null
+      : (snapshot.agents.find((agent) => agent.id === story.reviewerAgentId) ??
+        null);
   return {
     id: story.id,
     status: story.status,
     dependencies: dependenciesByStory.get(story.id) ?? [],
     reviewerAssigned: story.reviewerAgentId !== null,
+    reviewerClosed: reviewer?.status === "closed",
+    workspaceCleaned: story.workspaceCleaned === true,
   };
 }
 
@@ -80,6 +96,38 @@ export interface OrchestrationLoopDependencies {
   readonly dependenciesByStory: ReadonlyMap<string, readonly string[]>;
   readonly clock: () => number;
   readonly initialTeam?: InitialOrchestrationTeam;
+}
+
+/**
+ * Repeatedly reload and advance one loop until it reaches a durable no-op.
+ * The hard limit prevents recursive action storms and turns non-convergence
+ * into a fail-closed error rather than an unbounded controller loop.
+ */
+export async function drainOrchestrationLoop(
+  loop: OrchestrationLoop,
+  write: FencedWrite,
+  maximumTicks = MAX_ORCHESTRATION_DRAIN_TICKS,
+): Promise<OrchestrationDrainResult> {
+  if (!Number.isSafeInteger(maximumTicks) || maximumTicks < 1) {
+    throw new OrchestrationLoopError("orchestration drain limit is invalid");
+  }
+  const actions: OrchestrationAction[] = [];
+  let committed = false;
+  for (let tick = 1; tick <= maximumTicks; tick += 1) {
+    const result = await loop.tick(write);
+    actions.push(...result.actions);
+    committed ||= result.committed;
+    if (result.actions.length === 0) {
+      return Object.freeze({
+        ticks: tick,
+        actions: Object.freeze(actions),
+        committed,
+      });
+    }
+  }
+  throw new OrchestrationLoopError(
+    `orchestration did not quiesce within ${String(maximumTicks)} ticks`,
+  );
 }
 
 /**
@@ -126,7 +174,7 @@ export class OrchestrationLoop {
     }
 
     const projected = snapshot.stories.map((story) =>
-      projectStory(story, this.#dependenciesByStory),
+      projectStory(story, snapshot, this.#dependenciesByStory),
     );
     const actions: OrchestrationAction[] = [];
     const primaryStory = snapshot.stories[0];
