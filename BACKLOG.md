@@ -55,7 +55,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 
 ## P5 - Herdr integration
 
-- [x] Implement protocol-17-pinned, bounded typed Herdr command/response adapters for tab, pane, layout, process, lifecycle, metadata, focus, close, text, and safely quoted terminal-run operations.
+- [x] Implement protocol-19-pinned, bounded typed Herdr command/response adapters for tab, pane, layout, process, lifecycle, metadata, focus, close, text, and safely quoted terminal-run operations.
 - [x] Implement the parent-tab right management-pane lifecycle with atomic shell-environment ownership tags, exact right-sibling layout validation, metadata reconciliation, duplicate/spoof refusal, and interrupted-split recovery.
 - [x] Implement the crash-recoverable `Pi Agents` tab and deterministic balanced binary-split grids from 1 through 16 panes, with exact slot ownership, no-focus creation, idempotent partial completion, and geometry validation.
 - [x] Implement exact pane focus through verified directional-neighbor selection plus tab focus, along with ownership-bound labels, metadata, stable shell-process detection, partial lifecycle recovery, and identity-drift refusal.
@@ -86,17 +86,24 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [ ] Add operation progress/result/blocker/supervisor directives and round-trip tests.
 - [ ] Implement disconnected-pane detection and resumable session restoration.
   - [x] Add deterministic pane-loss assessment and restoration planning.
-  - [ ] Wire restoration planning into Herdr/Pi relaunch and session resume.
+  - [x] Restore one missing controller-roster pane in its exact slot through durable reservations and exact on-disk Pi session reuse.
+  - [x] Restart a dead controller from status only after authenticated immutable composition, database, lease, socket, process-identity, and startup-recovery gates pass.
+  - [ ] Extend recovery across the remaining parent and Herdr boundaries.
+    - [x] Prove a fresh parent Pi extension and gateway reconnect to the active controller, preserve exact management origin and background-work visibility, and recover a dead controller after lease expiry without duplicating owned resources or consuming capacity.
+    - [x] Restore multiple exact missing slots from one stable controller roster through an atomic reservation set, deterministic operation identity, exact surviving-pane expectations, and crash-idempotent per-agent relaunch.
+    - [ ] Prove real Herdr restart and multi-pane-loss recovery in the live UI.
 
 ## P7 - Management TUI
 
 - [x] Wire live run launch to create an authenticated, fail-closed right-side management pane beside the originating parent Pi pane.
 - [x] Implement the live polling terminal management dashboard with bounded run, story, agent, action, and attention rendering.
-- [ ] Restore the management pane and dashboard after parent Pi or Herdr restart.
+- [ ] Restore the management pane and dashboard across parent Pi and Herdr restarts.
+  - [x] Reconnect a fresh parent Pi surface to the exact existing management origin and idempotently ensure its one dashboard without redefining or duplicating ownership.
+  - [ ] Restore the management surface after a real Herdr restart.
 - [ ] Implement independent scrolling and sorting for stories, todos, and agents.
 - [ ] Implement color-coded run and attention states.
 - [ ] Implement mouse selection and keyboard navigation that focuses agent panes.
-- [ ] Implement approval, steering, pause, resume, restoration, and close-all actions.
+- [x] Implement approval, steering, pause, resume, focus, and close actions with exact controller/Herdr ownership checks.
 
 ## P8 - Parent Pi extension
 
@@ -106,7 +113,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Add a bounded parent run-status widget and footer indicator after successful status/launch reads.
 - [ ] Implement the persistent right-side overlay todo and run-status view.
 - [ ] Implement narrow-terminal fallback, hide/show, focus, and management shortcuts.
-- [ ] Restore active runs when Pi restarts.
+- [x] Restore active runs through authenticated status when Pi restarts, including session-bound background-work visibility for unclosed agents.
 
 ## P9 - Orchestration
 
@@ -136,12 +143,17 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [x] Inject the production factory into the live controller process and execute planned orchestration actions with current per-tick fence writes.
 - [ ] Complete live child completion/recovery proof after the first production orchestration tick.
   - [x] Launch the initial composed Project Manager, advisor, and story writer into one incrementally reconciled `Pi Agents` tab with controller-roster ownership.
+  - [x] Reconcile materialized-but-unconfirmed secure Pi launches from exact controller-owned pane, session, process, and command evidence without duplicating panes, sessions, leases, or processes.
   - [x] Propagate the active parent Pi model/provider into detached composition, provision its selected private model configuration, and prove authenticated child session/operation events in a real Herdr tab.
-  - [x] Temporarily retain host networking for active model access, accepting that child task tools share the widened network boundary until mediated model egress is implemented.
+  - [x] Keep child task tools isolated by default; only role-declared network requirements may request host networking.
   - [x] Copy only the selected provider credential into each private child configuration so authenticated providers work without exposing unrelated provider credentials.
   - [x] Reconnect and re-authenticate the child bridge after the controller's bounded idle timeout so long model reasoning does not permanently disable tools.
-- [ ] Implement bounded idle detection and Project Manager `.` nudges.
-- [ ] Implement reviewer approval and renewed-review rules after relevant changes.
+  - [x] Add controller-serialized child-message lifecycle handling and a bounded repeated production tick drain, with server-side exact role/action and active-status authorization plus deterministic two-story dependency proof through controller-authored candidates, exact review, merge, one-time cleanup, dependent admission, and terminal completion.
+  - [ ] Prove the repeated lifecycle in a real installed child/Herdr run and add crash recovery for interruption between writer-lease release, candidate creation, and lifecycle-state commit.
+- [x] Implement bounded idle detection and Project Manager `.` nudges.
+- [x] Implement reviewer approval and renewed-review rules after relevant changes.
+  - [x] Add identity-bound `submit-review` handling that resolves exact server-side role authority, rejects terminal capabilities, checks controller-supplied candidate and integration heads against durable and live Git evidence, and rejects stale or self review.
+  - [x] Return a failed review to a fresh bounded writer attempt, recreate its candidate, and launch a renewed independent reviewer without reusing a closed deterministic agent identity.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
 - [x] Implement terminal run completion and safe worktree cleanup.
 

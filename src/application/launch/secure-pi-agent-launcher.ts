@@ -3,12 +3,15 @@ import {
   closeSync,
   constants,
   existsSync,
+  fstatSync,
   fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
+  readSync,
   realpathSync,
   statSync,
   unlinkSync,
@@ -194,6 +197,82 @@ function writeDurableArtifact(
   }
 }
 
+function assertExistingPiSession(
+  sessionDirectory: string,
+  sessionId: string,
+): string {
+  const matching = readdirSync(sessionDirectory).filter((name) =>
+    name.endsWith(`_${sessionId}.jsonl`),
+  );
+  if (matching.length !== 1) {
+    throw new SecurePiAgentLaunchError(
+      "Exact existing Pi session evidence is missing or ambiguous",
+    );
+  }
+  const sessionFile = join(sessionDirectory, matching[0] ?? "");
+  const status = lstatSync(sessionFile);
+  if (
+    status.isSymbolicLink() ||
+    !status.isFile() ||
+    status.uid !== process.getuid?.() ||
+    status.nlink !== 1 ||
+    (status.mode & 0o077) !== 0 ||
+    status.size < 1
+  ) {
+    throw new SecurePiAgentLaunchError(
+      "Existing Pi session evidence is not one private controller-owned file",
+    );
+  }
+  const descriptor = openSync(
+    sessionFile,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  try {
+    const opened = fstatSync(descriptor);
+    if (
+      !opened.isFile() ||
+      opened.uid !== status.uid ||
+      opened.mode !== status.mode ||
+      opened.nlink !== status.nlink ||
+      opened.size !== status.size ||
+      opened.dev !== status.dev ||
+      opened.ino !== status.ino
+    ) {
+      throw new SecurePiAgentLaunchError(
+        "Existing Pi session changed while its evidence was opened",
+      );
+    }
+    const bytes = Buffer.alloc(Math.min(opened.size, 4_096));
+    const length = readSync(descriptor, bytes, 0, bytes.length, 0);
+    const firstLine = bytes
+      .subarray(0, length)
+      .toString("utf8")
+      .split("\n", 1)[0];
+    let header: unknown;
+    try {
+      header = JSON.parse(firstLine ?? "");
+    } catch {
+      throw new SecurePiAgentLaunchError(
+        "Existing Pi session header is invalid",
+      );
+    }
+    if (
+      header === null ||
+      typeof header !== "object" ||
+      Array.isArray(header) ||
+      (header as Readonly<Record<string, unknown>>).type !== "session" ||
+      (header as Readonly<Record<string, unknown>>).id !== sessionId
+    ) {
+      throw new SecurePiAgentLaunchError(
+        "Existing Pi session header conflicts with the recorded session id",
+      );
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return sessionFile;
+}
+
 function shellQuote(value: string): string {
   if (value.includes("\0")) {
     throw new SecurePiAgentLaunchError("Launch command contains a null byte");
@@ -230,6 +309,7 @@ ${request.rolePrompt.trim()}
 - Authority: ${request.role.authority}
 - Write policy: ${request.role.writePolicy}
 - Controller actions: ${request.role.controllerActions.join(", ")}
+- Use agentworks_submit_work for submit-work authority and agentworks_submit_review for submit-review authority.
 - You are one member of an Agentworks team and must remain inside the assigned task specification.
 - The Agentworks controller is the sole Git mutator. Never create commits, branches, worktrees, merges, resets, rebases, or cleanup operations directly.
 - Use only the enabled tools and controller bridge actions.
@@ -312,6 +392,23 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     const piSessionPath = join(sessionPath, "pi-sessions");
     mkdirSync(piSessionPath, { recursive: true, mode: 0o700 });
     assertPrivateDirectory(piSessionPath, "Pi session storage path");
+    if (request.requireExistingSession === true) {
+      const existingSessionFile = assertExistingPiSession(
+        piSessionPath,
+        request.sessionId,
+      );
+      if (
+        request.expectedSessionFile !== undefined &&
+        canonicalExisting(
+          request.expectedSessionFile,
+          "recorded Pi session file",
+        ) !== existingSessionFile
+      ) {
+        throw new SecurePiAgentLaunchError(
+          "Existing Pi session file conflicts with the controller-recorded path",
+        );
+      }
+    }
 
     const artifacts = Object.freeze({
       role: writeDurableArtifact(
@@ -420,6 +517,7 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
         AGENTWORKS_CHILD_MODE: "1",
         AGENTWORKS_CONTROLLER_SOCKET: controllerSocketPath,
         AGENTWORKS_CONTROLLER_TOKEN_FILE: artifacts.capability.path,
+        AGENTWORKS_CONTROLLER_ACTIONS: request.role.controllerActions.join(","),
         AGENTWORKS_RUN_ID: request.task.runId,
         PI_CODING_AGENT_DIR: configPath,
         PI_CODING_AGENT_SESSION_DIR: piSessionPath,
@@ -437,25 +535,28 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     });
 
     const command = [plan.executablePath, ...plan.arguments];
-    const scriptPath = launchScript(
-      runtimePath,
-      request.task.assignedAgentId,
-      request.sessionId,
-      command,
-    );
-    await this.#herdr.runCommand(request.paneId, ["/bin/sh", scriptPath]);
-    const processInfo = await this.#awaitProcessEvidence(
+    const expectedProcessArgv = Object.freeze([nodePath, ...cliArguments]);
+    let processIds = await this.#inspectProcessEvidence(
       request.paneId,
-      piCliPath,
-      request.sessionId,
-      artifacts.task.path,
+      expectedProcessArgv,
     );
+    if (processIds === null) {
+      const scriptPath = launchScript(
+        runtimePath,
+        request.task.assignedAgentId,
+        request.sessionId,
+        command,
+      );
+      await this.#herdr.runCommand(request.paneId, ["/bin/sh", scriptPath]);
+      processIds = await this.#awaitProcessEvidence(
+        request.paneId,
+        expectedProcessArgv,
+      );
+    }
     return Object.freeze({
       paneId: request.paneId,
       sessionId: request.sessionId,
-      processIds: Object.freeze(
-        processInfo.foregroundProcesses.map((process) => process.pid),
-      ),
+      processIds,
       sandbox: plan.evidence,
       rolePromptPath: artifacts.role.path,
       taskPromptPath: artifacts.task.path,
@@ -520,28 +621,53 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     }
   }
 
+  async #inspectProcessEvidence(
+    paneId: string,
+    expectedArgv: readonly string[],
+  ): Promise<readonly number[] | null> {
+    const info: HerdrPaneProcessInfo =
+      await this.#herdr.getPaneProcessInfo(paneId);
+    if (info.paneId !== paneId) {
+      throw new SecurePiAgentLaunchError(
+        "Herdr process evidence belongs to a different pane",
+      );
+    }
+    const [nodePath, piCliPath] = expectedArgv;
+    const exact = info.foregroundProcesses.filter((process) => {
+      const argv = process.argv ?? [];
+      return (
+        argv.length === expectedArgv.length &&
+        argv.every((argument, index) => argument === expectedArgv[index])
+      );
+    });
+    const conflictingPi = info.foregroundProcesses.some((process) => {
+      const argv = process.argv ?? [];
+      return (
+        argv[0] === nodePath &&
+        argv[1] === piCliPath &&
+        !exact.includes(process)
+      );
+    });
+    if (conflictingPi || exact.length > 1) {
+      throw new SecurePiAgentLaunchError(
+        "Herdr pane contains conflicting or duplicate interactive Pi process evidence",
+      );
+    }
+    return exact.length === 1
+      ? Object.freeze(exact.map((process) => process.pid))
+      : null;
+  }
+
   async #awaitProcessEvidence(
     paneId: string,
-    piCliPath: string,
-    sessionId: string,
-    taskPath: string,
-  ): Promise<HerdrPaneProcessInfo> {
+    expectedArgv: readonly string[],
+  ): Promise<readonly number[]> {
     for (let attempt = 0; attempt < this.#processPollAttempts; attempt += 1) {
-      const info = await this.#herdr.getPaneProcessInfo(paneId);
-      if (
-        info.paneId === paneId &&
-        info.foregroundProcesses.some((process) => {
-          const argv = process.argv ?? [];
-          return (
-            argv.includes(piCliPath) &&
-            argv.includes("--session-id") &&
-            argv.includes(sessionId) &&
-            argv.includes(`@${taskPath}`)
-          );
-        })
-      ) {
-        return info;
-      }
+      const processIds = await this.#inspectProcessEvidence(
+        paneId,
+        expectedArgv,
+      );
+      if (processIds !== null) return processIds;
       if (attempt + 1 < this.#processPollAttempts) {
         await this.#sleep(this.#processPollIntervalMs);
       }

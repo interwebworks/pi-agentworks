@@ -27,6 +27,7 @@ export interface ParentManagementRequest {
   readonly mode?: "LOW" | "NORMAL" | "HIGH";
   readonly task?: string;
   readonly runId?: string;
+  readonly agentId?: string;
   readonly message?: string;
   readonly runtime?: ParentLaunchRuntime;
 }
@@ -34,6 +35,8 @@ export interface ParentManagementRequest {
 export interface ParentManagementResult {
   readonly text: string;
   readonly notificationType?: "info" | "warning" | "error";
+  /** A newly initialized run that belongs to the calling parent Pi session. */
+  readonly launchedRunId?: string;
 }
 
 export interface ParentManagementGateway {

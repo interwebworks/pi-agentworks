@@ -6,6 +6,7 @@ import {
   createAgentState,
   createRunState,
   createStoryState,
+  isRunState,
   isStoryState,
   InvalidStateTransitionError,
   transitionAgent,
@@ -67,6 +68,39 @@ test("LOW and NORMAL plans wait for approval while HIGH becomes ready", () => {
   assert.equal(
     transitionRun(run("HIGH"), { type: "plan-prepared", at: 1_001 }).status,
     "ready",
+  );
+});
+
+test("a run durably validates its immutable management-pane origin", () => {
+  const owned = createRunState({
+    id: "run-owned",
+    title: "Recover management",
+    complexity: "HIGH",
+    repositoryRoot: "/repo",
+    originalCheckout: "/repo",
+    baseBranch: "main",
+    integrationBranch: "agentworks/run-owned/integration",
+    integrationWorktree: "/worktrees/run-owned/integration",
+    managementPaneOrigin: {
+      workspaceId: "w1P",
+      tabId: "w1P:t2",
+      paneId: "w1P:p1",
+    },
+    createdAt: 1_000,
+  });
+
+  assert.equal(isRunState(owned), true);
+  assert.deepEqual(owned.managementPaneOrigin, {
+    workspaceId: "w1P",
+    tabId: "w1P:t2",
+    paneId: "w1P:p1",
+  });
+  assert.equal(
+    isRunState({
+      ...owned,
+      managementPaneOrigin: { ...owned.managementPaneOrigin, tabId: "" },
+    }),
+    false,
   );
 });
 

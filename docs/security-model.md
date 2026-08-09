@@ -102,6 +102,7 @@ Duplicate launch, commit, review, merge, cleanup, and notification requests retu
 Startup validates both SQLite integrity and the semantic shape of persisted state before binding the socket.
 Physical corruption or invalid persisted state writes a durable quarantine marker before moving the database and sidecars, preventing accidental empty-state recreation on retry.
 Interrupted agent operations, candidate creation, and merge phases publish a reconciliation-required descriptor and synchronously reject new work.
+A secure Pi launch is represented by a fenced deterministic pane/session reservation followed by separately confirmed exact process IDs and command digest. Materialization without confirmation is retryable; confirmation without the surrounding orchestration commit is recoverable from the same evidence. Concurrent controller retries coalesce, and restart recovery checks the exact Pi CLI, session, task artifact, pane ownership, and cwd before it may reuse a process or send a new launch command.
 After the Git and Herdr gateways are available, recovery clears that gate only by reconciling recorded phases against external Herdr and Git reality.
 Corrupt or unreconciled state is never treated as permission to clean worktrees or rerun merges.
 

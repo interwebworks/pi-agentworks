@@ -12,6 +12,9 @@ const ACTIVE_AGENT_STATES = new Set([
   "working",
   "reviewing",
   "idle",
+  "waiting",
+  "blocked",
+  "disconnected",
 ]);
 
 export interface ExpectedAgentPane {

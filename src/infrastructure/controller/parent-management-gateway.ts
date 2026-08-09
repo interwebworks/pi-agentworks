@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, lstatSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
   ControllerEventInput,
@@ -16,7 +17,9 @@ import {
   createStoryState,
   transitionRun,
   transitionStory,
+  type ManagementPaneOrigin,
 } from "../../domain/controller-state.ts";
+import type { AgentState } from "../../domain/controller-state.ts";
 import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
 import { GitCliRepositoryInspector } from "../git/git-cli-repository-inspector.ts";
 import {
@@ -38,8 +41,21 @@ import {
 } from "./unix-controller-transport.ts";
 import {
   discoverControllerRuntime,
+  inspectControllerSocketState,
+  readControllerRuntimeAuthToken,
+  readProcessStartIdentity,
+  resolveControllerRuntimePaths,
+  type ControllerRuntimeDescriptor,
   type DiscoveredControllerRuntime,
 } from "./controller-runtime.ts";
+import { SqliteControllerRepository } from "./sqlite-controller-repository.ts";
+import { assessStartupRecovery } from "../../domain/recovery.ts";
+import {
+  assertCallerRuntimeMatchesComposition,
+  environmentFromControllerLaunchComposition,
+  verifyControllerLaunchComposition,
+  type ControllerLaunchComposition,
+} from "./controller-launch-composition.ts";
 
 export interface ParentControllerClient {
   request(input: ControllerClientRequest): Promise<JsonValue>;
@@ -132,6 +148,163 @@ function orchestrationPlan(value: JsonValue): readonly string[] {
   });
 }
 
+interface DeferredInitialResumeResult {
+  readonly resumed: boolean;
+  readonly agentCount: number;
+}
+
+interface ParentControlResult {
+  readonly action: string;
+  readonly revision: number;
+  readonly runStatus: string;
+  readonly agentId: string | null;
+  readonly paneId: string | null;
+}
+
+function parentControlResult(value: JsonValue): ParentControlResult {
+  const object = record(value, "parent control");
+  if (
+    object.accepted !== true ||
+    typeof object.action !== "string" ||
+    typeof object.revision !== "number" ||
+    !Number.isSafeInteger(object.revision) ||
+    typeof object.runStatus !== "string" ||
+    (object.agentId !== null && typeof object.agentId !== "string") ||
+    (object.paneId !== null && typeof object.paneId !== "string")
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller returned an invalid parent control result",
+    );
+  }
+  return Object.freeze({
+    action: object.action,
+    revision: object.revision,
+    runStatus: object.runStatus,
+    agentId: object.agentId,
+    paneId: object.paneId,
+  });
+}
+
+function deferredInitialResumeResult(
+  value: JsonValue,
+): DeferredInitialResumeResult {
+  const object = record(value, "deferred initial orchestration resume");
+  if (
+    object.accepted !== true ||
+    typeof object.resumed !== "boolean" ||
+    typeof object.reason !== "string" ||
+    typeof object.revision !== "number" ||
+    !Number.isSafeInteger(object.revision) ||
+    typeof object.agentCount !== "number" ||
+    !Number.isSafeInteger(object.agentCount) ||
+    object.agentCount < 0
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller returned an invalid deferred initial orchestration resume",
+    );
+  }
+  return Object.freeze({
+    resumed: object.resumed,
+    agentCount: object.agentCount,
+  });
+}
+
+interface RestoredPaneSummary {
+  readonly agentId: string;
+  readonly slot: number;
+  readonly sessionId: string;
+}
+
+function restoredPaneSummaries(
+  restoration: Readonly<Record<string, JsonValue>>,
+): readonly RestoredPaneSummary[] {
+  if (restoration.restored !== true) return Object.freeze([]);
+  const values = Array.isArray(restoration.restorations)
+    ? restoration.restorations
+    : [restoration];
+  if (values.length === 0 || values.length > 16) {
+    throw new ParentManagementGatewayError(
+      "controller returned invalid pane restoration evidence",
+    );
+  }
+  const summaries = values.map((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new ParentManagementGatewayError(
+        "controller returned invalid pane restoration evidence",
+      );
+    }
+    const current = value as Readonly<Record<string, JsonValue>>;
+    const agentId = current.agentId;
+    const slot = current.slot;
+    const sessionId = current.sessionId;
+    if (
+      typeof agentId !== "string" ||
+      agentId.length === 0 ||
+      typeof slot !== "number" ||
+      !Number.isSafeInteger(slot) ||
+      slot < 0 ||
+      typeof sessionId !== "string" ||
+      sessionId.length === 0
+    ) {
+      throw new ParentManagementGatewayError(
+        "controller returned invalid pane restoration evidence",
+      );
+    }
+    return Object.freeze({ agentId, slot, sessionId });
+  });
+  if (
+    new Set(summaries.map((summary) => summary.agentId)).size !==
+      summaries.length ||
+    new Set(summaries.map((summary) => summary.slot)).size !== summaries.length
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller returned duplicate pane restoration evidence",
+    );
+  }
+  return Object.freeze(summaries);
+}
+
+async function requestAgentPaneRestoration(
+  clientFactory: ParentControllerClientFactory,
+  runId: string,
+): Promise<Readonly<Record<string, JsonValue>> | null> {
+  const client = await clientFactory(runId);
+  try {
+    const value = await client.request({
+      action: "orchestration.restore-panes",
+      payload: {},
+    });
+    return record(value, "agent pane restoration");
+  } catch (error) {
+    if (
+      error instanceof ControllerRemoteError &&
+      error.code === "not-configured"
+    ) {
+      return null;
+    }
+    throw error;
+  } finally {
+    client.close();
+  }
+}
+
+async function requestDeferredInitialResume(
+  clientFactory: ParentControllerClientFactory,
+  runId: string,
+): Promise<DeferredInitialResumeResult> {
+  const client = await clientFactory(runId);
+  try {
+    return deferredInitialResumeResult(
+      await client.request({
+        action: "orchestration.resume-initial",
+        payload: {},
+      }),
+    );
+  } finally {
+    client.close();
+  }
+}
+
 export interface ControllerDashboardData {
   readonly view: DashboardViewModel;
   readonly plannedActions: readonly string[];
@@ -188,21 +361,65 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
     if (input.action === "launch") {
       if (this.#launchHandler === null) {
         return Object.freeze({
-          text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
+          text: `Agentworks action "${input.action}" requires a configured launch handler.`,
           notificationType: "warning",
         });
       }
       return this.#launchHandler(input);
     }
-    if (input.action !== "status") {
-      return Object.freeze({
-        text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
-        notificationType: "warning",
-      });
-    }
     const runId = requiredRunId(input);
     const client = await this.#clientFactory(runId);
     try {
+      if (input.action !== "status") {
+        const control = parentControlResult(
+          await client.request({
+            action: "parent.control",
+            idempotencyKey: `parent-${createHash("sha256")
+              .update(
+                `${input.action}\0${runId}\0${input.agentId ?? "run"}\0${input.message ?? ""}`,
+              )
+              .digest("hex")
+              .slice(0, 48)}`,
+            payload: {
+              action: input.action,
+              ...(input.agentId === undefined
+                ? {}
+                : { agentId: input.agentId }),
+              ...(input.message === undefined
+                ? {}
+                : { message: input.message }),
+            },
+          }),
+        );
+        let orchestrationWarning = "";
+        if (input.action === "approve" && control.runStatus === "ready") {
+          try {
+            await client.request({
+              action: "orchestration.execute",
+              payload: {},
+            });
+          } catch (error) {
+            if (
+              error instanceof ControllerRemoteError &&
+              error.code === "not-configured"
+            ) {
+              orchestrationWarning = " Live orchestration is not configured.";
+            } else {
+              throw error;
+            }
+          }
+        }
+        const target =
+          control.agentId === null
+            ? "run"
+            : `agent ${control.agentId}${control.paneId === null ? "" : ` (pane ${control.paneId})`}`;
+        return Object.freeze({
+          text: `Agentworks ${input.action} accepted for ${target}; run is ${control.runStatus} at revision ${String(control.revision)}.${orchestrationWarning}`,
+          ...(orchestrationWarning.length > 0
+            ? { notificationType: "warning" as const }
+            : {}),
+        });
+      }
       const { view, plannedActions } = await readControllerDashboard(client);
       const attention = view.supervisorAttention
         .map((item) => `  ! ${item.agentId}: ${item.reason}`)
@@ -267,11 +484,264 @@ function launchTask(input: ParentManagementRequest): string {
   return task;
 }
 
+interface TrustedStatusControllerEvidence {
+  readonly composition: ControllerLaunchComposition;
+  readonly lease: {
+    readonly ownerId: string | null;
+    readonly fencingToken: number;
+    readonly expiresAt: number | null;
+  };
+  readonly recovery: ReturnType<typeof assessStartupRecovery>;
+}
+
+type PrivateFileIdentity = Readonly<{
+  dev: bigint;
+  ino: bigint;
+  uid: number;
+  mode: number;
+  nlink: number;
+}>;
+
+function privateFileIdentity(path: string): PrivateFileIdentity {
+  const status = lstatSync(path, { bigint: true });
+  if (
+    status.isSymbolicLink() ||
+    !status.isFile() ||
+    status.nlink !== 1n ||
+    (status.mode & 0o077n) !== 0n ||
+    (typeof process.getuid === "function" &&
+      status.uid !== BigInt(process.getuid()))
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller database is not one private controller-owned file",
+    );
+  }
+  return Object.freeze({
+    dev: status.dev,
+    ino: status.ino,
+    uid: Number(status.uid),
+    mode: Number(status.mode),
+    nlink: Number(status.nlink),
+  });
+}
+
+function assertSamePrivateFileIdentity(
+  expected: PrivateFileIdentity,
+  path: string,
+): void {
+  const current = privateFileIdentity(path);
+  if (
+    current.dev !== expected.dev ||
+    current.ino !== expected.ino ||
+    current.uid !== expected.uid ||
+    current.mode !== expected.mode ||
+    current.nlink !== expected.nlink
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller database identity changed during trusted status recovery",
+    );
+  }
+}
+
+function processStillMatches(descriptor: ControllerRuntimeDescriptor): boolean {
+  if (descriptor.processStartIdentity !== null) {
+    return (
+      readProcessStartIdentity(descriptor.processId) ===
+      descriptor.processStartIdentity
+    );
+  }
+  try {
+    process.kill(descriptor.processId, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function readTrustedStatusControllerEvidence(
+  runtimeRoot: string,
+  runId: string,
+  callerRuntime: ParentManagementRequest["runtime"],
+): TrustedStatusControllerEvidence {
+  const paths = resolveControllerRuntimePaths(runtimeRoot, runId);
+  if (!existsSync(paths.databasePath)) {
+    throw new ParentManagementGatewayError(
+      "controller database is missing and will not be recreated by status",
+    );
+  }
+  const databaseIdentity = privateFileIdentity(paths.databasePath);
+  const authToken = readControllerRuntimeAuthToken(runtimeRoot, runId);
+  const repository = new SqliteControllerRepository(paths.databasePath);
+  let evidence: TrustedStatusControllerEvidence;
+  try {
+    assertSamePrivateFileIdentity(databaseIdentity, paths.databasePath);
+    repository.assertIntegrity();
+    const record = repository.readControllerLaunchComposition(runId);
+    if (record === null) {
+      throw new ParentManagementGatewayError(
+        "trusted immutable launch composition evidence is missing",
+      );
+    }
+    const composition = verifyControllerLaunchComposition(
+      record.compositionJson,
+      record.authenticationTag,
+      authToken,
+    );
+    if (composition.runId !== runId) {
+      throw new ParentManagementGatewayError(
+        "launch composition belongs to a different run",
+      );
+    }
+    assertCallerRuntimeMatchesComposition(callerRuntime, composition);
+    const current = repository.loadSnapshot(runId);
+    if (current === null) {
+      throw new ParentManagementGatewayError(
+        "controller run is missing from its database",
+      );
+    }
+    evidence = Object.freeze({
+      composition,
+      lease: repository.readControllerLease(),
+      recovery: assessStartupRecovery(current),
+    });
+    assertSamePrivateFileIdentity(databaseIdentity, paths.databasePath);
+  } finally {
+    repository.close();
+  }
+  assertSamePrivateFileIdentity(databaseIdentity, paths.databasePath);
+  return evidence;
+}
+
+async function ensureTrustedStatusController(
+  runtimeRoot: string,
+  runId: string,
+  callerRuntime: ParentManagementRequest["runtime"],
+): Promise<void> {
+  const evidence = readTrustedStatusControllerEvidence(
+    runtimeRoot,
+    runId,
+    callerRuntime,
+  );
+  const inspectionSupervisor = new DetachedControllerSupervisor({
+    runtimeRoot,
+    runId,
+    startupTimeoutMs: evidence.composition.leaseTtlMs + 10_000,
+    pollIntervalMs: 25,
+  });
+  const inspection = await inspectionSupervisor.inspect();
+  const now = Date.now();
+  if (inspection.status === "healthy" && inspection.descriptor !== null) {
+    if (
+      evidence.lease.ownerId !== inspection.descriptor.ownerId ||
+      evidence.lease.fencingToken !== inspection.descriptor.fencingToken ||
+      evidence.lease.expiresAt === null ||
+      evidence.lease.expiresAt <= now
+    ) {
+      throw new ParentManagementGatewayError(
+        "live controller descriptor conflicts with its current database lease",
+      );
+    }
+    return;
+  }
+  if (inspection.status === "alive-unhealthy") {
+    throw new ParentManagementGatewayError(
+      "live competing controller failed authenticated health validation",
+    );
+  }
+  if (evidence.recovery.status !== "ready") {
+    throw new ParentManagementGatewayError(
+      `startup recovery evidence is incomplete (${evidence.recovery.reasons
+        .map((reason) => `${reason.code}:${reason.entityId}`)
+        .join(", ")})`,
+    );
+  }
+  if (
+    evidence.lease.ownerId !== null &&
+    evidence.lease.expiresAt !== null &&
+    evidence.lease.expiresAt > now
+  ) {
+    throw new ParentManagementGatewayError(
+      `stale controller lease has not expired (owner ${evidence.lease.ownerId})`,
+    );
+  }
+  if (
+    inspection.descriptor !== null &&
+    processStillMatches(inspection.descriptor)
+  ) {
+    throw new ParentManagementGatewayError(
+      "live competing controller still matches the recorded process-start identity",
+    );
+  }
+  const socketState = await inspectControllerSocketState(
+    resolveControllerRuntimePaths(runtimeRoot, runId).socketPath,
+  );
+  if (socketState === "active" || socketState === "indeterminate") {
+    throw new ParentManagementGatewayError(
+      `controller socket is ${socketState} and cannot authorize takeover`,
+    );
+  }
+  if (
+    inspection.descriptor !== null &&
+    evidence.lease.ownerId !== null &&
+    evidence.lease.ownerId !== inspection.descriptor.ownerId
+  ) {
+    throw new ParentManagementGatewayError(
+      "stale controller descriptor conflicts with lease takeover evidence",
+    );
+  }
+  const composition = evidence.composition;
+  const supervisor = new DetachedControllerSupervisor({
+    runtimeRoot,
+    runId,
+    entryPath: composition.controllerEntryPath,
+    nodePath: composition.nodePath,
+    leaseTtlMs: composition.leaseTtlMs,
+    renewIntervalMs: composition.renewIntervalMs,
+    startupTimeoutMs: composition.leaseTtlMs + 10_000,
+    pollIntervalMs: 25,
+    environment: environmentFromControllerLaunchComposition(composition),
+    inheritEnvironment: false,
+    requireLaunchComposition: true,
+  });
+  const restarted = await supervisor.ensureRunning();
+  if (!restarted.started) {
+    throw new ParentManagementGatewayError(
+      "a competing controller appeared during trusted restart",
+    );
+  }
+  if (restarted.descriptor.recovery.status !== "ready") {
+    throw new ParentManagementGatewayError(
+      "restarted controller did not pass its startup recovery gate",
+    );
+  }
+}
+
 /** Compose the parent surface with detached controller startup and run creation. */
 export interface DiscoveredParentManagementGatewayOptions {
   readonly enableLiveComposition?: boolean;
   readonly herdrPath?: string;
   readonly managementPaneLauncher?: ParentManagementPaneLauncher | null;
+  readonly controllerLeaseTtlMs?: number;
+  readonly controllerRenewIntervalMs?: number;
+  readonly controllerStartupTimeoutMs?: number;
+  readonly controllerPollIntervalMs?: number;
+  readonly agentControl?: ParentAgentControl;
+}
+
+export interface ParentAgentControl {
+  focus(input: {
+    readonly runId: string;
+    readonly agent: AgentState;
+  }): Promise<void>;
+  steer(input: {
+    readonly runId: string;
+    readonly agent: AgentState;
+    readonly message: string;
+  }): Promise<void>;
+  close(input: {
+    readonly runId: string;
+    readonly agent: AgentState;
+  }): Promise<void>;
 }
 
 export function createDiscoveredParentManagementGateway(
@@ -289,18 +759,24 @@ export function createDiscoveredParentManagementGateway(
       : options.managementPaneLauncher;
   const bootstrapManagementPane = async (
     runId: string,
-    runtime: ParentManagementRequest["runtime"],
+    origin: ManagementPaneOrigin | undefined,
   ): Promise<{ readonly text: string; readonly failed: boolean }> => {
-    if (managementPaneLauncher === null || runtime?.origin === undefined) {
+    if (managementPaneLauncher === null) {
       return Object.freeze({ text: "", failed: false });
+    }
+    if (origin === undefined) {
+      return Object.freeze({
+        text: " Management pane recovery refused: the controller has no authoritative parent origin.",
+        failed: true,
+      });
     }
     try {
       const evidence = await managementPaneLauncher.ensure({
         runId,
         runtimeRoot,
-        workspaceId: runtime.workspaceId,
-        parentTabId: runtime.origin.tabId,
-        parentPaneId: runtime.origin.paneId,
+        workspaceId: origin.workspaceId,
+        parentTabId: origin.tabId,
+        parentPaneId: origin.paneId,
       });
       return Object.freeze({
         text: ` Management pane: ${evidence.paneId}.`,
@@ -353,10 +829,25 @@ export function createDiscoveredParentManagementGateway(
     const supervisor = new DetachedControllerSupervisor({
       runtimeRoot,
       runId,
+      ...(options.controllerLeaseTtlMs === undefined
+        ? {}
+        : { leaseTtlMs: options.controllerLeaseTtlMs }),
+      ...(options.controllerRenewIntervalMs === undefined
+        ? {}
+        : { renewIntervalMs: options.controllerRenewIntervalMs }),
+      ...(options.controllerStartupTimeoutMs === undefined
+        ? {}
+        : { startupTimeoutMs: options.controllerStartupTimeoutMs }),
+      ...(options.controllerPollIntervalMs === undefined
+        ? {}
+        : { pollIntervalMs: options.controllerPollIntervalMs }),
       environment: liveCompositionReady
         ? {
             AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1",
             AGENTWORKS_WORKSPACE_ID: selectedRuntime.workspaceId,
+            ...(options.herdrPath === undefined
+              ? {}
+              : { AGENTWORKS_HERDR_PATH: options.herdrPath }),
             PI_PROVIDER: selectedRuntime.provider,
             PI_MODEL: selectedRuntime.model,
             PI_REASONING_LEVEL: selectedRuntime.thinking,
@@ -378,6 +869,15 @@ export function createDiscoveredParentManagementGateway(
         baseBranch: "main",
         integrationBranch: integrationBranchForRun(runId),
         integrationWorktree: `${runtimeRoot}/worktrees/${runId}/integration-worktree`,
+        ...(selectedRuntime?.origin === undefined
+          ? {}
+          : {
+              managementPaneOrigin: Object.freeze({
+                workspaceId: selectedRuntime.workspaceId,
+                tabId: selectedRuntime.origin.tabId,
+                paneId: selectedRuntime.origin.paneId,
+              }),
+            }),
         createdAt: now,
       });
       const run = transitionRun(draftRun, {
@@ -443,14 +943,19 @@ export function createDiscoveredParentManagementGateway(
           events,
         } as unknown as JsonValue,
       });
+      await client.request({
+        action: "controller.launch-composition.bind",
+        payload: {},
+      });
       const managementPane = await bootstrapManagementPane(
         runId,
-        selectedRuntime,
+        run.managementPaneOrigin,
       );
       if (managementPane.failed) {
         return Object.freeze({
           text: `Agentworks run ${runId} was saved, but no agent was started.${managementPane.text}`,
           notificationType: "error" as const,
+          launchedRunId: runId,
         });
       }
       if (run.complexity === "HIGH") {
@@ -458,6 +963,7 @@ export function createDiscoveredParentManagementGateway(
           return Object.freeze({
             text: `Agentworks run ${runId} was saved, but no agent was started because the active Pi model or Herdr workspace was unavailable to the extension.${managementPane.text}`,
             notificationType: "error" as const,
+            launchedRunId: runId,
           });
         }
         try {
@@ -467,6 +973,7 @@ export function createDiscoveredParentManagementGateway(
           });
           return Object.freeze({
             text: `Agentworks run ${runId} created and started for "${task}".${managementPane.text}`,
+            launchedRunId: runId,
           });
         } catch (error) {
           if (!(
@@ -478,26 +985,175 @@ export function createDiscoveredParentManagementGateway(
           return Object.freeze({
             text: `Agentworks run ${runId} created in planning state for "${task}". Live execution is not configured.${managementPane.text}`,
             notificationType: "warning" as const,
+            launchedRunId: runId,
           });
         }
       }
       return Object.freeze({
         text: `Agentworks run ${runId} created in planning state for "${task}".${managementPane.text}`,
+        launchedRunId: runId,
       });
     } finally {
       client.close();
     }
   };
   const gateway = new ControllerParentManagementGateway(clientFactory, launch);
+  const readManagementPaneOrigin = async (
+    runId: string,
+  ): Promise<ManagementPaneOrigin | undefined> => {
+    const client = await clientFactory(runId);
+    try {
+      const current = snapshot(
+        await client.request({ action: "snapshot.get", payload: {} }),
+      );
+      return current.run.managementPaneOrigin;
+    } finally {
+      client.close();
+    }
+  };
   return Object.freeze({
     async execute(input: ParentManagementRequest) {
-      const result = await gateway.execute(input);
-      if (input.action !== "status" || input.runId === undefined) return result;
+      let restorationText = "";
+      if (input.action === "status" && input.runId !== undefined) {
+        try {
+          await ensureTrustedStatusController(
+            runtimeRoot,
+            input.runId,
+            input.runtime,
+          );
+          const restoration = await requestAgentPaneRestoration(
+            clientFactory,
+            input.runId,
+          );
+          if (restoration !== null) {
+            const summaries = restoredPaneSummaries(restoration);
+            if (summaries.length > 0) {
+              restorationText = ` Restored ${summaries
+                .map(
+                  (summary) =>
+                    `agent ${summary.agentId} in exact slot ${String(summary.slot)} with Pi session ${summary.sessionId}`,
+                )
+                .join("; ")}.`;
+            }
+          }
+        } catch (error) {
+          return Object.freeze({
+            text: `Controller or pane restoration refused: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            notificationType: "error" as const,
+          });
+        }
+      }
+      let result = await gateway.execute(input);
+      if (
+        options.agentControl !== undefined &&
+        input.runId !== undefined &&
+        (input.action === "focus" ||
+          input.action === "steer" ||
+          input.action === "close")
+      ) {
+        const controlClient = await clientFactory(input.runId);
+        try {
+          const current = snapshot(
+            await controlClient.request({
+              action: "snapshot.get",
+              payload: {},
+            }),
+          );
+          const targets =
+            input.action === "close" && input.agentId === undefined
+              ? current.agents.filter((agent) => agent.paneId !== null)
+              : [
+                  current.agents.find(
+                    (candidate) => candidate.id === input.agentId,
+                  ),
+                ];
+          if (targets.some((agent) => agent === undefined)) {
+            throw new ParentManagementGatewayError(
+              `agent ${input.agentId ?? "target"} is not registered`,
+            );
+          }
+          if (input.action === "focus") {
+            const agent = targets[0];
+            if (agent === undefined) {
+              throw new ParentManagementGatewayError(
+                "focus target is not registered",
+              );
+            }
+            await options.agentControl.focus({ runId: input.runId, agent });
+          } else if (input.action === "steer") {
+            const agent = targets[0];
+            if (agent === undefined) {
+              throw new ParentManagementGatewayError(
+                "steer target is not registered",
+              );
+            }
+            await options.agentControl.steer({
+              runId: input.runId,
+              agent,
+              message: input.message?.trim() ?? "",
+            });
+          } else {
+            for (const agent of targets) {
+              if (agent === undefined) continue;
+              await options.agentControl.close({ runId: input.runId, agent });
+            }
+          }
+        } finally {
+          controlClient.close();
+        }
+        result = Object.freeze({
+          text: `${result.text} Herdr action completed.`,
+        });
+      }
+      if (restorationText.length > 0) {
+        result = Object.freeze({
+          text: `${result.text}${restorationText}`,
+          ...(result.notificationType === undefined
+            ? {}
+            : { notificationType: result.notificationType }),
+        });
+      }
+      if (
+        input.action !== "status" ||
+        input.runId === undefined ||
+        managementPaneLauncher === null
+      ) {
+        return result;
+      }
       const managementPane = await bootstrapManagementPane(
         input.runId,
-        input.runtime,
+        await readManagementPaneOrigin(input.runId),
       );
       if (managementPane.text.length === 0) return result;
+      if (!managementPane.failed) {
+        try {
+          const resume = await requestDeferredInitialResume(
+            clientFactory,
+            input.runId,
+          );
+          if (resume.resumed) {
+            // The pre-bootstrap status frame was necessarily agentless. Read
+            // again after the controller-authoritative launch so the recovered
+            // dashboard/status response reflects the durable launch set.
+            result = await gateway.execute(input);
+            return Object.freeze({
+              text: `${result.text}${managementPane.text} Deferred first orchestration tick resumed with ${String(resume.agentCount)} agent(s).`,
+              ...(result.notificationType === undefined
+                ? {}
+                : { notificationType: result.notificationType }),
+            });
+          }
+        } catch (error) {
+          return Object.freeze({
+            text: `${result.text}${managementPane.text} Deferred first orchestration tick failed: ${
+              error instanceof Error ? error.message : String(error)
+            }. Retry with /agentworks status ${input.runId}.`,
+            notificationType: "error" as const,
+          });
+        }
+      }
       return Object.freeze({
         text: `${result.text}${managementPane.text}`,
         ...(managementPane.failed

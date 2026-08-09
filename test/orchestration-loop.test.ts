@@ -288,6 +288,98 @@ test("HIGH initial tick launches the composed manager, advisor, and one story wr
   }
 });
 
+test("initial-team planning retries only materialized launches without confirmed process evidence", async () => {
+  const fixture = createFixture();
+  try {
+    const lease = fixture.repository.acquireLease(
+      "controller-a",
+      2_000,
+      60_000,
+    );
+    const write = {
+      ownerId: "controller-a",
+      fencingToken: lease.fencingToken,
+      now: 2_000,
+    };
+    const manager = createAgentState({
+      id: "manager-1",
+      runId: "run-1",
+      roleRuntimeId: "general-delivery/project-manager",
+      taskId: null,
+      worktreePath: "/worktrees/run-1/integration",
+      createdAt: 1_000,
+    });
+    const advisor = createAgentState({
+      id: "advisor-1",
+      runId: "run-1",
+      roleRuntimeId: "software-development/software-architect",
+      taskId: "story-1",
+      worktreePath: "/worktrees/run-1/story-1",
+      createdAt: 1_000,
+    });
+    const assigned = transitionStory(readyStory(), {
+      type: "story-assigned",
+      at: 1_002,
+      agentId: "existing-writer",
+    });
+    fixture.repository.initializeRun({
+      write,
+      idempotencyKey: "create-launch-recovery-run",
+      request: { command: "create-run" },
+      run: activeRun(),
+      stories: [assigned],
+      agents: [manager, advisor],
+      events: [event("run-created", "run", "run-1", 2_000)],
+    });
+    const managerLaunch = fixture.repository.materializeAgentLaunch({
+      write: { ...write, now: 2_001 },
+      agent: manager,
+      paneId: "pane-manager",
+      sessionId: "00000000-0000-4000-8000-000000000001",
+    });
+    const advisorLaunch = fixture.repository.materializeAgentLaunch({
+      write: { ...write, now: 2_002 },
+      agent: advisor,
+      paneId: "pane-advisor",
+      sessionId: "00000000-0000-4000-8000-000000000002",
+    });
+    assert.equal(managerLaunch.status, "launching");
+    assert.equal(advisorLaunch.status, "launching");
+    fixture.repository.confirmAgentLaunch({
+      write: { ...write, now: 2_003 },
+      runId: "run-1",
+      agentId: advisor.id,
+      paneId: "pane-advisor",
+      sessionId: "00000000-0000-4000-8000-000000000002",
+      processIds: [202],
+      commandSha256: "a".repeat(64),
+    });
+
+    let now = 2_100;
+    const effects = new FakeEffects(() => (now += 1));
+    const loop = new OrchestrationLoop({
+      repository: fixture.repository,
+      effects,
+      runId: "run-1",
+      dependenciesByStory: new Map([["story-1", []]]),
+      clock: () => now,
+      initialTeam: {
+        projectManagerRoleRuntimeId: manager.roleRuntimeId,
+        advisorRoleRuntimeId: advisor.roleRuntimeId,
+      },
+    });
+    const result = await loop.tick({ ...write, now: 2_200 });
+
+    assert.deepEqual(result.actions, [
+      { type: "assign-project-manager", storyId: "story-1" },
+    ]);
+    assert.deepEqual(effects.applied, ["assign-project-manager"]);
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 test("a ready story advances through assignment, review, and merge to run completion", async () => {
   const fixture = createFixture();
   try {
@@ -402,7 +494,9 @@ test("a ready story advances through assignment, review, and merge to run comple
       request: { command: "approve-review" },
       run: afterReviewerAssigned.run,
       stories: [approved],
-      agents: afterReviewerAssigned.agents,
+      agents: afterReviewerAssigned.agents.map((agent) =>
+        agent.id === "agent-2" ? { ...agent, status: "closed" } : agent,
+      ),
       events: [event("review-approved", "story", "story-1", approvedAt)],
     });
 
@@ -431,6 +525,58 @@ test("a ready story advances through assignment, review, and merge to run comple
     assert.equal(
       fixture.repository.loadSnapshot("run-1")?.revision,
       afterCompletion.revision,
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent ticks serialize and reload the committed capacity reservation", async () => {
+  const fixture = createFixture();
+  try {
+    const lease = fixture.repository.acquireLease(
+      "controller-a",
+      2_000,
+      60_000,
+    );
+    const write = {
+      ownerId: "controller-a",
+      fencingToken: lease.fencingToken,
+      now: 2_000,
+    };
+    fixture.repository.initializeRun({
+      write,
+      idempotencyKey: "create-concurrent-run",
+      request: { command: "create-run" },
+      run: activeRun(),
+      stories: [readyStory()],
+      agents: plannedAgents(),
+      events: [event("run-created", "run", "run-1", 2_000)],
+    });
+    let now = 2_100;
+    const effects = new FakeEffects(() => (now += 1));
+    const loop = new OrchestrationLoop({
+      repository: fixture.repository,
+      effects,
+      runId: "run-1",
+      dependenciesByStory: new Map([["story-1", []]]),
+      clock: () => now,
+    });
+
+    const [first, second] = await Promise.all([
+      loop.tick({ ...write, now: 2_200 }),
+      loop.tick({ ...write, now: 2_201 }),
+    ]);
+
+    assert.deepEqual(first.actions, [
+      { type: "assign-story", storyId: "story-1" },
+    ]);
+    assert.deepEqual(second, { actions: [], committed: false });
+    assert.deepEqual(effects.applied, ["assign-story"]);
+    assert.equal(
+      fixture.repository.loadSnapshot("run-1")?.stories[0]?.status,
+      "assigned",
     );
   } finally {
     fixture.repository.close();

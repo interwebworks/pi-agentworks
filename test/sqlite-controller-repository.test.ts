@@ -8,6 +8,7 @@ import {
   createAgentState,
   createRunState,
   createStoryState,
+  transitionAgent,
   transitionRun,
   transitionStory,
   type AgentState,
@@ -15,9 +16,11 @@ import {
   type StoryState,
 } from "../src/domain/controller-state.ts";
 import {
+  AgentCapacityExceededError,
   ControllerDatabaseIntegrityError,
   ControllerLeaseHeldError,
   IdempotencyConflictError,
+  InvalidControllerSnapshotError,
   SqliteControllerRepository,
   StaleControllerFenceError,
   StaleRunRevisionError,
@@ -139,7 +142,7 @@ test("repository enables WAL, migrates once, and protects runtime files", () => 
     database.close();
 
     assert.equal(journal.journal_mode, "wal");
-    assert.equal(version.user_version, 2);
+    assert.equal(version.user_version, 7);
     assert.equal(
       statSync(join(fixture.directory, "runtime")).mode & 0o777,
       0o700,
@@ -150,6 +153,413 @@ test("repository enables WAL, migrates once, and protects runtime files", () => 
     reopened.assertIntegrity();
     reopened.close();
   } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("schema v7 removes the obsolete global launch-slot index from v6 databases", () => {
+  const fixture = createFixture();
+  let reopened: SqliteControllerRepository | null = null;
+  try {
+    fixture.repository.close();
+    const versionSix = new DatabaseSync(fixture.databasePath);
+    versionSix.exec(`
+      CREATE UNIQUE INDEX agent_launches_by_slot
+        ON agent_launches(run_id, pane_slot)
+        WHERE pane_slot IS NOT NULL;
+      PRAGMA user_version = 6;
+    `);
+    versionSix.close();
+
+    reopened = new SqliteControllerRepository(fixture.databasePath);
+    reopened.close();
+    reopened = null;
+
+    const migrated = new DatabaseSync(fixture.databasePath);
+    const version = migrated
+      .prepare("PRAGMA user_version")
+      .get() as unknown as { readonly user_version: number };
+    const obsoleteIndex = migrated
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'agent_launches_by_slot'",
+      )
+      .get() as unknown as { readonly name: string } | undefined;
+    migrated.close();
+    assert.equal(version.user_version, 7);
+    assert.equal(obsoleteIndex, undefined);
+  } finally {
+    reopened?.close();
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("snapshot initialization rejects active agents beyond the complexity limit", () => {
+  const fixture = createFixture();
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    const agents = Array.from({ length: 5 }, (_unused, index) =>
+      agent(`agent-${String(index + 1)}`),
+    );
+    assert.throws(
+      () =>
+        initialize(fixture.repository, controller.fencingToken, {
+          run: { ...run(), complexity: "LOW" },
+          agents,
+        }),
+      InvalidControllerSnapshotError,
+    );
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("agent launch capacity is atomic across reloads and releases only after verified close", () => {
+  const fixture = createFixture();
+  let reloaded: SqliteControllerRepository | null = null;
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    const reserved = [
+      agent("agent-1"),
+      agent("agent-2"),
+      agent("agent-3"),
+      { ...agent("agent-4"), status: "disconnected" as const },
+    ];
+    initialize(fixture.repository, controller.fencingToken, {
+      run: { ...run(), complexity: "LOW" },
+      agents: reserved,
+    });
+    reloaded = new SqliteControllerRepository(fixture.databasePath);
+
+    // Transitioning an existing planned reservation is valid at the exact
+    // boundary; it does not consume a second slot.
+    assert.equal(
+      fixture.repository.materializeAgentLaunch({
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controller.fencingToken,
+          now: 1_200,
+        },
+        agent: reserved[0] ?? agent("missing"),
+        paneId: "pane-1",
+        sessionId: "11111111-1111-4111-8111-111111111111",
+      }).status,
+      "launching",
+    );
+
+    // A separately loaded repository must observe the same transactional
+    // boundary rather than trusting a stale orchestration snapshot.
+    assert.throws(
+      () =>
+        reloaded?.materializeAgentLaunch({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_201,
+          },
+          agent: agent("agent-5"),
+          paneId: "pane-5",
+          sessionId: "55555555-5555-4555-8555-555555555555",
+        }),
+      AgentCapacityExceededError,
+    );
+
+    // Disconnected is recoverable and held capacity above. Completed also
+    // remains reserved until a verified close records cleanup completion.
+    const snapshot = fixture.repository.loadSnapshot("run-1");
+    assert.ok(snapshot);
+    fixture.repository.commitSnapshot({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_300,
+      },
+      runId: "run-1",
+      expectedRevision: snapshot.revision,
+      idempotencyKey: "complete-agent-4",
+      request: { command: "complete-agent", agentId: "agent-4" },
+      run: snapshot.run,
+      stories: snapshot.stories,
+      agents: snapshot.agents.map((current) =>
+        current.id === "agent-4"
+          ? { ...current, status: "completed" as const, updatedAt: 1_300 }
+          : current,
+      ),
+      events: [
+        {
+          eventId: "event-agent-4-completed",
+          type: "agent-completed",
+          entityType: "agent",
+          entityId: "agent-4",
+          payload: {},
+          occurredAt: 1_300,
+        },
+      ],
+    });
+    assert.throws(
+      () =>
+        reloaded?.materializeAgentLaunch({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_301,
+          },
+          agent: agent("agent-5"),
+          paneId: "pane-5",
+          sessionId: "55555555-5555-4555-8555-555555555555",
+        }),
+      AgentCapacityExceededError,
+    );
+
+    const completedSnapshot = fixture.repository.loadSnapshot("run-1");
+    assert.ok(completedSnapshot);
+    const completedAgent = completedSnapshot.agents.find(
+      (current) => current.id === "agent-4",
+    );
+    assert.ok(completedAgent);
+    const closedAgent = transitionAgent(completedAgent, {
+      type: "agent-closed",
+      at: 1_400,
+      writerLeaseReleased: true,
+    });
+    fixture.repository.commitSnapshot({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_400,
+      },
+      runId: "run-1",
+      expectedRevision: completedSnapshot.revision,
+      idempotencyKey: "close-agent-4",
+      request: { command: "close-agent", agentId: "agent-4" },
+      run: completedSnapshot.run,
+      stories: completedSnapshot.stories,
+      agents: completedSnapshot.agents.map((current) =>
+        current.id === closedAgent.id ? closedAgent : current,
+      ),
+      events: [
+        {
+          eventId: "event-agent-4-closed",
+          type: "agent-closed",
+          entityType: "agent",
+          entityId: "agent-4",
+          payload: { writerLeaseReleased: true },
+          occurredAt: 1_400,
+        },
+      ],
+    });
+    assert.equal(
+      reloaded.materializeAgentLaunch({
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controller.fencingToken,
+          now: 1_401,
+        },
+        agent: agent("agent-5"),
+        paneId: "pane-5",
+        sessionId: "55555555-5555-4555-8555-555555555555",
+      }).status,
+      "launching",
+    );
+  } finally {
+    reloaded?.close();
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("stable launch slots reject unclosed collisions and permit reuse after verified close", () => {
+  const fixture = createFixture();
+  let contender: SqliteControllerRepository | null = null;
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, controller.fencingToken, {
+      agents: [agent("agent-1")],
+    });
+    contender = new SqliteControllerRepository(fixture.databasePath);
+    fixture.repository.materializeAgentLaunch({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_200,
+      },
+      agent: agent("agent-1"),
+      paneId: "pane-1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      slot: 0,
+    });
+
+    assert.throws(
+      () =>
+        contender?.materializeAgentLaunch({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_201,
+          },
+          agent: agent("agent-2"),
+          paneId: "pane-2",
+          sessionId: "22222222-2222-4222-8222-222222222222",
+          slot: 0,
+        }),
+      StaleWriterLeaseError,
+    );
+
+    const launchingSnapshot = fixture.repository.loadSnapshot("run-1");
+    assert.ok(launchingSnapshot);
+    fixture.repository.commitSnapshot({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_300,
+      },
+      runId: "run-1",
+      expectedRevision: launchingSnapshot.revision,
+      idempotencyKey: "complete-slotted-agent",
+      request: { command: "complete-agent", agentId: "agent-1" },
+      run: launchingSnapshot.run,
+      stories: launchingSnapshot.stories,
+      agents: launchingSnapshot.agents.map((current) =>
+        current.id === "agent-1"
+          ? { ...current, status: "completed" as const, updatedAt: 1_300 }
+          : current,
+      ),
+      events: [
+        {
+          eventId: "event-slotted-agent-completed",
+          type: "agent-completed",
+          entityType: "agent",
+          entityId: "agent-1",
+          payload: {},
+          occurredAt: 1_300,
+        },
+      ],
+    });
+    const completedSnapshot = fixture.repository.loadSnapshot("run-1");
+    assert.ok(completedSnapshot);
+    const completedAgent = completedSnapshot.agents.find(
+      (current) => current.id === "agent-1",
+    );
+    assert.ok(completedAgent);
+    const closedAgent = transitionAgent(completedAgent, {
+      type: "agent-closed",
+      at: 1_400,
+      writerLeaseReleased: true,
+    });
+    fixture.repository.commitSnapshot({
+      write: {
+        ownerId: "controller-a",
+        fencingToken: controller.fencingToken,
+        now: 1_400,
+      },
+      runId: "run-1",
+      expectedRevision: completedSnapshot.revision,
+      idempotencyKey: "close-slotted-agent",
+      request: { command: "close-agent", agentId: "agent-1" },
+      run: completedSnapshot.run,
+      stories: completedSnapshot.stories,
+      agents: completedSnapshot.agents.map((current) =>
+        current.id === "agent-1" ? closedAgent : current,
+      ),
+      events: [
+        {
+          eventId: "event-slotted-agent-closed",
+          type: "agent-closed",
+          entityType: "agent",
+          entityId: "agent-1",
+          payload: { writerLeaseReleased: true },
+          occurredAt: 1_400,
+        },
+      ],
+    });
+
+    assert.equal(
+      contender.materializeAgentLaunch({
+        write: {
+          ownerId: "controller-a",
+          fencingToken: controller.fencingToken,
+          now: 1_401,
+        },
+        agent: agent("agent-2"),
+        paneId: "pane-2",
+        sessionId: "22222222-2222-4222-8222-222222222222",
+        slot: 0,
+      }).status,
+      "launching",
+    );
+    assert.equal(
+      fixture.repository.readAgentLaunch("run-1", "agent-1")?.slot,
+      0,
+    );
+    assert.equal(
+      fixture.repository.readAgentLaunch("run-1", "agent-2")?.slot,
+      0,
+    );
+    fixture.repository.assertIntegrity();
+  } finally {
+    contender?.close();
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("writer lease reservation cannot bypass the global agent boundary", () => {
+  const fixture = createFixture();
+  try {
+    const controller = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, controller.fencingToken, {
+      run: { ...run(), complexity: "LOW" },
+      agents: [
+        agent("agent-1"),
+        agent("agent-2"),
+        agent("agent-3"),
+        agent("agent-4"),
+      ],
+    });
+
+    assert.throws(
+      () =>
+        fixture.repository.acquireWriterLease({
+          write: {
+            ownerId: "controller-a",
+            fencingToken: controller.fencingToken,
+            now: 1_200,
+          },
+          runId: "run-1",
+          storyId: "story-1",
+          ownerAgentId: "agent-5",
+          ttlMs: 1_000,
+          agent: agent("agent-5", "story-1"),
+        }),
+      AgentCapacityExceededError,
+    );
+    const snapshot = fixture.repository.loadSnapshot("run-1");
+    assert.ok(snapshot);
+    assert.equal(snapshot.stories[0]?.assignedAgentId, null);
+    assert.equal(
+      snapshot.agents.some((current) => current.id === "agent-5"),
+      false,
+    );
+    assert.equal(fixture.repository.readWriterLease("run-1", "story-1"), null);
+  } finally {
+    fixture.repository.close();
     rmSync(fixture.directory, { recursive: true, force: true });
   }
 });
@@ -168,6 +578,9 @@ test("version one databases migrate writer lease tables without losing runs", ()
 
     const database = new DatabaseSync(fixture.databasePath);
     database.exec(`
+      DROP TABLE controller_launch_compositions;
+      DROP TABLE agent_pane_restorations;
+      DROP TABLE agent_launches;
       DROP TABLE writer_lease_events;
       DROP TABLE writer_leases;
       PRAGMA user_version = 1;
@@ -188,8 +601,91 @@ test("version one databases migrate writer lease tables without losing runs", ()
       )
       .get() as unknown as { readonly name: string } | undefined;
     migrated.close();
-    assert.equal(version.user_version, 2);
+    assert.equal(version.user_version, 7);
     assert.equal(leaseTable?.name, "writer_leases");
+  } finally {
+    reopened?.close();
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("materialized agent launches survive kill points and reconcile exact evidence idempotently", () => {
+  const fixture = createFixture();
+  let reopened: SqliteControllerRepository | null = null;
+  try {
+    const lease = fixture.repository.acquireLease(
+      "controller-a",
+      1_000,
+      10_000,
+    );
+    initialize(fixture.repository, lease.fencingToken);
+    const write = {
+      ownerId: "controller-a",
+      fencingToken: lease.fencingToken,
+      now: 1_200,
+    };
+    const first = fixture.repository.materializeAgentLaunch({
+      write,
+      agent: agent(),
+      paneId: "pane-1",
+      sessionId: "00000000-0000-4000-8000-000000000001",
+    });
+    assert.equal(first.status, "launching");
+    assert.equal(
+      fixture.repository.readAgentLaunch("run-1", "agent-1")?.status,
+      "materialized",
+    );
+
+    // Kill point: durable launch materialization landed, but no secure Pi
+    // process evidence was confirmed before the controller restarted.
+    fixture.repository.close();
+    reopened = new SqliteControllerRepository(fixture.databasePath);
+    const retryLease = reopened.acquireLease("controller-b", 11_000, 10_000);
+    const retryWrite = {
+      ownerId: "controller-b",
+      fencingToken: retryLease.fencingToken,
+      now: 11_100,
+    };
+    const retried = reopened.materializeAgentLaunch({
+      write: retryWrite,
+      agent: first,
+      paneId: "pane-1",
+      sessionId: "00000000-0000-4000-8000-000000000001",
+    });
+    assert.deepEqual(retried, first);
+    assert.throws(
+      () =>
+        reopened?.materializeAgentLaunch({
+          write: retryWrite,
+          agent: first,
+          paneId: "pane-other",
+          sessionId: "00000000-0000-4000-8000-000000000002",
+        }),
+      StaleWriterLeaseError,
+    );
+
+    const confirmation = {
+      write: retryWrite,
+      runId: "run-1",
+      agentId: "agent-1",
+      paneId: "pane-1",
+      sessionId: "00000000-0000-4000-8000-000000000001",
+      processIds: [42],
+      commandSha256: "a".repeat(64),
+    } as const;
+    const confirmed = reopened.confirmAgentLaunch(confirmation);
+    assert.equal(confirmed.status, "confirmed");
+    assert.deepEqual(confirmed.processIds, [42]);
+    assert.deepEqual(reopened.confirmAgentLaunch(confirmation), confirmed);
+    assert.throws(
+      () =>
+        reopened?.confirmAgentLaunch({
+          ...confirmation,
+          processIds: [43],
+        }),
+      StaleWriterLeaseError,
+    );
   } finally {
     reopened?.close();
     fixture.repository.close();

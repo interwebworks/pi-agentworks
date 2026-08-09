@@ -224,9 +224,31 @@ function fixture() {
   herdr.processArgv = [
     nodePath,
     piCli,
+    "--provider",
+    request.provider,
+    "--model",
+    request.model,
+    "--thinking",
+    request.thinking,
+    "--system-prompt",
+    join(session, "role-system-prompt.md"),
+    "--tools",
+    request.task.allowedTools.join(","),
+    "--no-extensions",
+    "--extension",
+    childBridge,
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-approve",
+    "--session-dir",
+    join(session, "pi-sessions"),
     "--session-id",
     request.sessionId,
+    "--name",
+    `${request.role.label} · ${request.task.storyId}`,
     `@${join(session, "task-assignment.md")}`,
+    "Execute this assignment and keep the controller informed.",
   ];
   return {
     root,
@@ -253,7 +275,7 @@ test("composes one fenced interactive Pi process through Bubblewrap and Herdr", 
     assert.deepEqual(evidence.processIds, [201]);
     assert.match(evidence.rolePromptSha256, /^[a-f0-9]{64}$/u);
     assert.match(evidence.commandSha256, /^[a-f0-9]{64}$/u);
-    assert.deepEqual(current.sleeps, [5]);
+    assert.deepEqual(current.sleeps, []);
     assert.equal(current.sandbox.requests.length, 1);
     const sandbox = current.sandbox.requests[0];
     assert.ok(sandbox);
@@ -348,6 +370,11 @@ test("read-only roles receive a read-only worktree without a writer lease", asyn
       },
       writerLeaseActive: false,
     };
+    current.herdr.processArgv = current.herdr.processArgv.map((argument) => {
+      if (argument === "read,edit,write,bash") return "read";
+      if (argument === "Builder · story-1") return "Reviewer · story-1";
+      return argument;
+    });
     await current.launcher.launch(current.request);
     const sandboxRequest = current.sandbox.requests[0];
     assert.ok(sandboxRequest);
@@ -404,10 +431,69 @@ test("launch refuses stale authority, pane mismatch, tool widening, and missing 
       missing.launcher.launch(missing.request),
       SecurePiAgentLaunchError,
     );
-    assert.equal(missing.herdr.processPolls, 3);
+    assert.equal(missing.herdr.processPolls, 4);
     assert.deepEqual(missing.sleeps, [5, 5]);
   } finally {
     rmSync(missing.root, { recursive: true, force: true });
+  }
+});
+
+test("restoration requires one private on-disk Pi session with the exact recorded id", async () => {
+  const current = fixture();
+  try {
+    const restorationRequest = {
+      ...current.request,
+      requireExistingSession: true,
+    };
+    await assert.rejects(
+      current.launcher.launch(restorationRequest),
+      /existing Pi session evidence is missing/u,
+    );
+    const sessionDirectory = join(current.request.sessionPath, "pi-sessions");
+    mkdirSync(sessionDirectory, { recursive: true, mode: 0o700 });
+    const sessionFile = join(
+      sessionDirectory,
+      `2026-08-07T00-00-00-000Z_${current.request.sessionId}.jsonl`,
+    );
+    writeFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: current.request.sessionId,
+        timestamp: "2026-08-07T00:00:00.000Z",
+        cwd: current.request.task.worktreePath,
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    const evidence = await current.launcher.launch({
+      ...restorationRequest,
+      expectedSessionFile: sessionFile,
+    });
+    assert.equal(evidence.sessionId, current.request.sessionId);
+    assert.equal(current.herdr.commands.length, 1);
+    await assert.rejects(
+      current.launcher.launch({
+        ...restorationRequest,
+        expectedSessionFile: current.request.controllerSocketPath,
+      }),
+      /conflicts with the controller-recorded path/u,
+    );
+    assert.equal(current.herdr.commands.length, 1);
+
+    writeFileSync(
+      sessionFile,
+      `${JSON.stringify({ type: "session", id: "wrong-session" })}\n`,
+      { mode: 0o600 },
+    );
+    await assert.rejects(
+      current.launcher.launch(restorationRequest),
+      /header conflicts with the recorded session id/u,
+    );
+    assert.equal(current.herdr.commands.length, 1);
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
   }
 });
 
@@ -418,6 +504,8 @@ test("relaunch after a kill point reuses the private artifacts idempotently", as
     // Simulates a crash after artifacts were written but before the agent was
     // confirmed: the artifacts already exist on the retry and must be reused.
     const second = await current.launcher.launch(current.request);
+    assert.equal(current.herdr.commands.length, 1);
+    assert.deepEqual(second.processIds, first.processIds);
     assert.equal(second.rolePromptPath, first.rolePromptPath);
     assert.equal(second.taskPromptPath, first.taskPromptPath);
     assert.equal(
@@ -427,6 +515,23 @@ test("relaunch after a kill point reuses the private artifacts idempotently", as
     assert.equal(second.rolePromptSha256, first.rolePromptSha256);
     assert.equal(second.taskPromptSha256, first.taskPromptSha256);
     assert.equal(second.commandSha256, first.commandSha256);
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("reconciliation refuses conflicting exact Pi launch evidence without sending another command", async () => {
+  const current = fixture();
+  try {
+    await current.launcher.launch(current.request);
+    current.herdr.processArgv = current.herdr.processArgv.map((argument) =>
+      argument === current.request.model ? "gpt-conflicting" : argument,
+    );
+    await assert.rejects(
+      current.launcher.launch(current.request),
+      /conflicting or duplicate interactive Pi process evidence/u,
+    );
+    assert.equal(current.herdr.commands.length, 1);
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }

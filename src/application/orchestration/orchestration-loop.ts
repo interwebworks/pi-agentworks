@@ -1,9 +1,15 @@
 import {
   planOrchestration,
+  reserveAgentLaunchCapacity,
   type OrchestrationAction,
   type OrchestrationStory,
 } from "../../domain/orchestration.ts";
-import type { RunState, StoryState } from "../../domain/controller-state.ts";
+import {
+  transitionRun,
+  type RunState,
+  type StoryState,
+} from "../../domain/controller-state.ts";
+import { countOccupiedAgentSlots } from "../../domain/scheduling.ts";
 import type {
   ControllerEventInput,
   ControllerRepository,
@@ -22,6 +28,14 @@ export interface OrchestrationTickResult {
   readonly actions: readonly OrchestrationAction[];
   readonly committed: boolean;
 }
+
+export interface OrchestrationDrainResult {
+  readonly ticks: number;
+  readonly actions: readonly OrchestrationAction[];
+  readonly committed: boolean;
+}
+
+export const MAX_ORCHESTRATION_DRAIN_TICKS = 32;
 
 export class OrchestrationLoopError extends Error {
   constructor(message: string) {
@@ -56,13 +70,21 @@ function mergeAfterConcurrentChildMessage(
 
 function projectStory(
   story: StoryState,
+  snapshot: ControllerSnapshot,
   dependenciesByStory: ReadonlyMap<string, readonly string[]>,
 ): OrchestrationStory {
+  const reviewer =
+    story.reviewerAgentId === null
+      ? null
+      : (snapshot.agents.find((agent) => agent.id === story.reviewerAgentId) ??
+        null);
   return {
     id: story.id,
     status: story.status,
     dependencies: dependenciesByStory.get(story.id) ?? [],
     reviewerAssigned: story.reviewerAgentId !== null,
+    reviewerClosed: reviewer?.status === "closed",
+    workspaceCleaned: story.workspaceCleaned === true,
   };
 }
 
@@ -81,6 +103,38 @@ export interface OrchestrationLoopDependencies {
 }
 
 /**
+ * Repeatedly reload and advance one loop until it reaches a durable no-op.
+ * The hard limit prevents recursive action storms and turns non-convergence
+ * into a fail-closed error rather than an unbounded controller loop.
+ */
+export async function drainOrchestrationLoop(
+  loop: OrchestrationLoop,
+  write: FencedWrite,
+  maximumTicks = MAX_ORCHESTRATION_DRAIN_TICKS,
+): Promise<OrchestrationDrainResult> {
+  if (!Number.isSafeInteger(maximumTicks) || maximumTicks < 1) {
+    throw new OrchestrationLoopError("orchestration drain limit is invalid");
+  }
+  const actions: OrchestrationAction[] = [];
+  let committed = false;
+  for (let tick = 1; tick <= maximumTicks; tick += 1) {
+    const result = await loop.tick(write);
+    actions.push(...result.actions);
+    committed ||= result.committed;
+    if (result.actions.length === 0) {
+      return Object.freeze({
+        ticks: tick,
+        actions: Object.freeze(actions),
+        committed,
+      });
+    }
+  }
+  throw new OrchestrationLoopError(
+    `orchestration did not quiesce within ${String(maximumTicks)} ticks`,
+  );
+}
+
+/**
  * Drives one orchestration cycle: load the current snapshot, decide the next
  * actions with the pure `planOrchestration` reducer, carry them out through
  * the injected `OrchestrationEffects` port, and persist the result in a
@@ -93,6 +147,7 @@ export class OrchestrationLoop {
   readonly #runId: string;
   readonly #dependenciesByStory: ReadonlyMap<string, readonly string[]>;
   readonly #initialTeam: InitialOrchestrationTeam | null;
+  #tickQueue: Promise<void> = Promise.resolve();
 
   // `clock` is accepted (not merely `write.now`) so callers can source
   // deterministic timestamps for anything they layer on top of a tick (e.g.
@@ -107,20 +162,67 @@ export class OrchestrationLoop {
     this.#initialTeam = dependencies.initialTeam ?? null;
   }
 
-  async tick(write: FencedWrite): Promise<OrchestrationTickResult> {
+  tick(write: FencedWrite): Promise<OrchestrationTickResult> {
+    const execution = this.#tickQueue.then(() => this.#executeTick(write));
+    this.#tickQueue = execution.then(
+      () => undefined,
+      () => undefined,
+    );
+    return execution;
+  }
+
+  async #executeTick(write: FencedWrite): Promise<OrchestrationTickResult> {
     const snapshot = this.#repository.loadSnapshot(this.#runId);
-    if (snapshot === null || TERMINAL_RUN_STATUSES.has(snapshot.run.status)) {
+    if (
+      snapshot === null ||
+      TERMINAL_RUN_STATUSES.has(snapshot.run.status) ||
+      snapshot.run.status === "planning" ||
+      snapshot.run.status === "awaiting-approval" ||
+      snapshot.run.status === "blocked"
+    ) {
       return Object.freeze({ actions: [], committed: false });
     }
 
-    const projected = snapshot.stories.map((story) =>
-      projectStory(story, this.#dependenciesByStory),
+    let current: ControllerSnapshot = snapshot;
+    const events: ControllerEventInput[] = [];
+    if (snapshot.run.status === "ready") {
+      const active = transitionRun(snapshot.run, {
+        type: "run-started",
+        at: write.now,
+        integrationWorktreeReady: true,
+      });
+      current = Object.freeze({
+        revision: snapshot.revision,
+        run: active,
+        stories: snapshot.stories,
+        agents: snapshot.agents,
+      });
+      events.push({
+        eventId: `run-started-${this.#runId}-${String(write.now)}`,
+        type: "run-started",
+        entityType: "run",
+        entityId: this.#runId,
+        payload: { integrationWorktreeReady: true },
+        occurredAt: write.now,
+      });
+    }
+
+    const projected = current.stories.map((story) =>
+      projectStory(story, current, this.#dependenciesByStory),
     );
     const actions: OrchestrationAction[] = [];
-    const primaryStory = snapshot.stories[0];
+    const primaryStory = current.stories[0];
     if (this.#initialTeam !== null && primaryStory !== undefined) {
       const launchedRoles = new Set(
-        snapshot.agents.map((agent) => agent.roleRuntimeId),
+        current.agents
+          .filter((agent) => {
+            if (agent.status !== "launching") return true;
+            return (
+              this.#repository.readAgentLaunch(current.run.id, agent.id)
+                ?.status === "confirmed"
+            );
+          })
+          .map((agent) => agent.roleRuntimeId),
       );
       if (!launchedRoles.has(this.#initialTeam.projectManagerRoleRuntimeId)) {
         actions.push({
@@ -135,14 +237,18 @@ export class OrchestrationLoop {
         actions.push({ type: "assign-advisor", storyId: primaryStory.id });
       }
     }
-    actions.push(...planOrchestration(projected, snapshot.run.complexity));
-    if (actions.length === 0) {
-      return Object.freeze({ actions, committed: false });
+    actions.push(...planOrchestration(projected, current.run.complexity));
+    const capacityDecision = reserveAgentLaunchCapacity(
+      actions,
+      current.run.complexity,
+      countOccupiedAgentSlots(current.agents),
+    );
+    const admittedActions = capacityDecision.actions;
+    if (admittedActions.length === 0 && events.length === 0) {
+      return Object.freeze({ actions: admittedActions, committed: false });
     }
 
-    let current: ControllerSnapshot = snapshot;
-    const events: ControllerEventInput[] = [];
-    for (const action of actions) {
+    for (const action of admittedActions) {
       const result = await this.#effects.execute(action, current);
       events.push(...result.events);
       current = Object.freeze({
@@ -153,11 +259,26 @@ export class OrchestrationLoop {
       });
     }
 
-    const commit = (base: ControllerSnapshot): void => {
+    const commit = (base: ControllerSnapshot): boolean => {
       const merged =
         base === snapshot
           ? current
           : mergeAfterConcurrentChildMessage(base, current);
+      if (
+        base !== snapshot &&
+        JSON.stringify({
+          run: base.run,
+          stories: base.stories,
+          agents: base.agents,
+        }) ===
+          JSON.stringify({
+            run: merged.run,
+            stories: merged.stories,
+            agents: merged.agents,
+          })
+      ) {
+        return false;
+      }
       this.#repository.commitSnapshot({
         write,
         runId: this.#runId,
@@ -169,16 +290,18 @@ export class OrchestrationLoop {
         agents: merged.agents,
         events,
       });
+      return true;
     };
+    let committed = false;
     try {
-      commit(snapshot);
+      committed = commit(snapshot);
     } catch (error) {
       if (!isStaleRevision(error)) throw error;
       const latest = this.#repository.loadSnapshot(this.#runId);
       if (latest === null) throw error;
-      commit(latest);
+      committed = commit(latest);
     }
 
-    return Object.freeze({ actions, committed: true });
+    return Object.freeze({ actions: admittedActions, committed });
   }
 }

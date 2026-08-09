@@ -1,16 +1,12 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ControllerOrchestrationExecutor } from "../../controller/process-entry.ts";
 import { createProductionOrchestrationLoop } from "../../application/orchestration/production-composition.ts";
+import { drainOrchestrationLoop } from "../../application/orchestration/orchestration-loop.ts";
+import { ControllerAgentLifecycle } from "../../application/orchestration/controller-agent-lifecycle.ts";
+import { IdleAgentSupervisor } from "../../application/orchestration/idle-agent-supervisor.ts";
 import { ControllerAgentFactory } from "../../application/launch/controller-agent-factory.ts";
 import { EnvironmentLaunchConfigurationResolver } from "../../application/launch/environment-launch-configuration.ts";
 import { HerdrAgentPaneAllocator } from "../../application/launch/herdr-agent-pane-allocator.ts";
@@ -31,13 +27,27 @@ import { ProductionSandboxLaunchGate } from "../../application/sandbox/productio
 import { RealOrchestrationContext } from "../../application/orchestration/real-orchestration-context.ts";
 import { ControllerRuntimeLaunchEndpointResolver } from "./runtime-orchestration-endpoint.ts";
 import type { ControllerRuntime } from "./controller-runtime.ts";
-import type { FencedWrite } from "../../application/ports/controller-repository.ts";
+import type {
+  FencedWrite,
+  JsonValue,
+} from "../../application/ports/controller-repository.ts";
+import type { AgentMessage } from "../../domain/agent-communication.ts";
 import type { RunState, StoryState } from "../../domain/controller-state.ts";
 import type { AssignmentRoleSelector } from "../../application/launch/role-resource-resolver.ts";
 import type { LoadedRole } from "../role-packs/file-role-pack-repository.ts";
 import type { StoryAgentKind } from "../../application/launch/assignment-preparation.ts";
 import type { GitAssignmentEvidence } from "../../application/launch/assignment-resource-evidence.ts";
 import { composeTeam } from "../../domain/team-composition.ts";
+import { DeterministicAssignmentPreparation } from "../../application/launch/assignment-preparation.ts";
+import {
+  AgentPaneRestorationController,
+  type RestorationRepository,
+} from "../../application/recovery/agent-pane-restoration.ts";
+import {
+  createControllerLaunchComposition,
+  type ControllerLaunchComposition,
+  type ControllerLaunchCompositionEnvironment,
+} from "./controller-launch-composition.ts";
 
 export class ProductionOrchestrationProviderError extends Error {
   constructor(message: string) {
@@ -46,52 +56,8 @@ export class ProductionOrchestrationProviderError extends Error {
   }
 }
 
-interface ProductionEnvironment {
-  readonly AGENTWORKS_WORKSPACE_ID?: string;
-  readonly HERDR_WORKSPACE_ID?: string;
-  readonly AGENTWORKS_HERDR_PATH?: string;
-  readonly AGENTWORKS_PI_CLI_PATH?: string;
-  readonly AGENTWORKS_PI_PACKAGE_PATH?: string;
-  readonly PI_PROVIDER?: string;
-  readonly PI_MODEL?: string;
-  readonly PI_REASONING_LEVEL?: string;
-  readonly AGENTWORKS_ALLOW_HOST_NETWORK?: string;
-}
-
-function required(value: string | undefined, label: string): string {
-  if (value === undefined || value.trim().length === 0) {
-    throw new ProductionOrchestrationProviderError(`${label} is required`);
-  }
-  return value.trim();
-}
-
-function executable(name: string): string {
-  try {
-    const path = execFileSync("which", [name], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-    if (path.length === 0) throw new Error("which returned no path");
-    return realpathSync(path);
-  } catch (error) {
-    throw new ProductionOrchestrationProviderError(
-      `cannot resolve ${name}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
-function packageRootFromExecutable(path: string): string {
-  let current = dirname(path);
-  for (;;) {
-    if (existsSync(join(current, "package.json"))) return current;
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new ProductionOrchestrationProviderError(
-    `cannot find package root for ${path}`,
-  );
-}
+type ProductionEnvironment = ControllerLaunchCompositionEnvironment;
+const PRODUCTION_WRITER_LEASE_TTL_MS = 15 * 60_000;
 
 function trustedPrivateSource(path: string, label: string): void {
   const status = lstatSync(path);
@@ -112,6 +78,23 @@ export function installSelectedProviderAuthentication(
   providerId: string,
   authenticationPath = join(homedir(), ".pi", "agent", "auth.json"),
 ): void {
+  const destination = join(configPath, "auth.json");
+  if (existsSync(destination)) {
+    trustedPrivateSource(destination, "private authentication configuration");
+    const existing: unknown = JSON.parse(readFileSync(destination, "utf8"));
+    if (
+      existing !== null &&
+      typeof existing === "object" &&
+      !Array.isArray(existing) &&
+      Object.keys(existing).length === 1 &&
+      (existing as Record<string, unknown>)[providerId] !== undefined
+    ) {
+      return;
+    }
+    throw new ProductionOrchestrationProviderError(
+      "private authentication configuration is not limited to the selected provider",
+    );
+  }
   const source = authenticationPath;
   if (!existsSync(source)) return;
   trustedPrivateSource(source, "global authentication configuration");
@@ -123,22 +106,7 @@ export function installSelectedProviderAuthentication(
   }
   const credential = (parsed as Record<string, unknown>)[providerId];
   if (credential === undefined) return;
-  const destination = join(configPath, "auth.json");
   const content = `${JSON.stringify({ [providerId]: credential }, null, 2)}\n`;
-  if (existsSync(destination)) {
-    trustedPrivateSource(destination, "private authentication configuration");
-    const existing: unknown = JSON.parse(readFileSync(destination, "utf8"));
-    if (
-      existing !== null &&
-      typeof existing === "object" &&
-      !Array.isArray(existing) &&
-      (existing as Record<string, unknown>)[providerId] !== undefined
-    ) {
-      return;
-    }
-    writeFileSync(destination, content, { encoding: "utf8", mode: 0o600 });
-    return;
-  }
   writeFileSync(destination, content, {
     encoding: "utf8",
     mode: 0o600,
@@ -150,8 +118,61 @@ function installSelectedModelConfiguration(
   configPath: string,
   providerId: string,
   modelId: string,
+  modelConfigurationPath = join(homedir(), ".pi", "agent", "models.json"),
 ): void {
-  const source = join(homedir(), ".pi", "agent", "models.json");
+  const destination = join(configPath, "models.json");
+  if (existsSync(destination)) {
+    trustedPrivateSource(destination, "private model configuration");
+    const existing: unknown = JSON.parse(readFileSync(destination, "utf8"));
+    if (
+      existing === null ||
+      typeof existing !== "object" ||
+      Array.isArray(existing)
+    ) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration is invalid",
+      );
+    }
+    const providers = (existing as Record<string, unknown>).providers;
+    if (
+      providers === null ||
+      typeof providers !== "object" ||
+      Array.isArray(providers) ||
+      Object.keys(providers).length !== 1 ||
+      (providers as Record<string, unknown>)[providerId] === undefined
+    ) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration differs from the selected provider",
+      );
+    }
+    const selected = (providers as Record<string, unknown>)[providerId];
+    if (
+      selected === null ||
+      typeof selected !== "object" ||
+      Array.isArray(selected)
+    ) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration has invalid selected-provider evidence",
+      );
+    }
+    const models = (selected as Record<string, unknown>).models;
+    if (
+      Array.isArray(models) &&
+      !models.some(
+        (entry) =>
+          entry !== null &&
+          typeof entry === "object" &&
+          !Array.isArray(entry) &&
+          (entry as Record<string, unknown>).id === modelId,
+      )
+    ) {
+      throw new ProductionOrchestrationProviderError(
+        "private model configuration differs from the selected model",
+      );
+    }
+    return;
+  }
+  const source = modelConfigurationPath;
   if (!existsSync(source)) return;
   trustedPrivateSource(source, "global model configuration");
   const parsed: unknown = JSON.parse(readFileSync(source, "utf8"));
@@ -207,15 +228,6 @@ function installSelectedModelConfiguration(
     null,
     2,
   )}\n`;
-  const destination = join(configPath, "models.json");
-  if (existsSync(destination)) {
-    if (readFileSync(destination, "utf8") !== content) {
-      throw new ProductionOrchestrationProviderError(
-        "private model configuration changed during relaunch",
-      );
-    }
-    return;
-  }
   writeFileSync(destination, content, {
     encoding: "utf8",
     mode: 0o600,
@@ -229,34 +241,47 @@ function stableUuid(value: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20)}`;
 }
 
-function hostNetworkApproved(value: string | undefined): boolean {
-  if (value === undefined || value === "0") return false;
-  if (value !== "1") {
-    throw new ProductionOrchestrationProviderError(
-      "AGENTWORKS_ALLOW_HOST_NETWORK must be exactly 0 or 1",
-    );
-  }
-  return true;
+export function createLazyProductionOrchestrationExecutor(
+  compose: (write: FencedWrite) => Promise<ControllerOrchestrationExecutor>,
+): ControllerOrchestrationExecutor {
+  return Object.freeze({
+    async execute(write: FencedWrite) {
+      return (await compose(write)).execute(write);
+    },
+    async handleAgentMessage(
+      message: AgentMessage,
+      write: FencedWrite,
+      requestId: string,
+    ) {
+      const operation = await compose(write);
+      if (operation.handleAgentMessage === undefined) {
+        throw new ProductionOrchestrationProviderError(
+          "agent lifecycle handling is absent from the live composition",
+        );
+      }
+      return operation.handleAgentMessage(message, write, requestId);
+    },
+    async restorePanes(write: FencedWrite) {
+      const operation = await compose(write);
+      if (operation.restorePanes === undefined) {
+        throw new ProductionOrchestrationProviderError(
+          "pane restoration is absent from the live composition",
+        );
+      }
+      return operation.restorePanes(write);
+    },
+  });
 }
 
-function thinking(
-  value: string | undefined,
-): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" {
-  const selected = value ?? "high";
-  if (
-    selected !== "off" &&
-    selected !== "minimal" &&
-    selected !== "low" &&
-    selected !== "medium" &&
-    selected !== "high" &&
-    selected !== "xhigh" &&
-    selected !== "max"
-  ) {
-    throw new ProductionOrchestrationProviderError(
-      `PI_REASONING_LEVEL is invalid: ${selected}`,
-    );
-  }
-  return selected;
+function supportsPaneRestoration(
+  repository: ControllerRuntime["repository"],
+): repository is ControllerRuntime["repository"] & RestorationRepository {
+  return (
+    repository.reserveAgentPaneRestorations !== undefined &&
+    repository.bindAgentPaneRestoration !== undefined &&
+    repository.confirmAgentPaneRestoration !== undefined &&
+    repository.readAgentPaneRestoration !== undefined
+  );
 }
 
 function chooseRole(
@@ -332,40 +357,28 @@ function ensureIntegrationWorkspace(
   });
 }
 
-export function createProductionOrchestrationProvider(
-  environment: ProductionEnvironment,
-  packageRoot: string,
+export function createProductionOrchestrationProviderFromComposition(
+  composition: ControllerLaunchComposition,
 ): (runtime: ControllerRuntime) => ControllerOrchestrationExecutor {
-  const workspaceId = required(
-    environment.AGENTWORKS_WORKSPACE_ID ?? environment.HERDR_WORKSPACE_ID,
-    "HERDR workspace id (AGENTWORKS_WORKSPACE_ID or HERDR_WORKSPACE_ID)",
-  );
-  const provider = required(environment.PI_PROVIDER, "PI_PROVIDER");
-  const model = required(environment.PI_MODEL, "PI_MODEL");
-  const herdr = new HerdrCliGateway({
-    herdrPath: environment.AGENTWORKS_HERDR_PATH ?? "herdr",
-  });
-  const piCliPath = environment.AGENTWORKS_PI_CLI_PATH
-    ? realpathSync(resolve(environment.AGENTWORKS_PI_CLI_PATH))
-    : executable("pi");
-  const piPackagePath = environment.AGENTWORKS_PI_PACKAGE_PATH
-    ? realpathSync(resolve(environment.AGENTWORKS_PI_PACKAGE_PATH))
-    : packageRootFromExecutable(piCliPath);
-  const agentworksPackagePath = realpathSync(resolve(packageRoot));
-  const childBridgePath = join(
-    agentworksPackagePath,
-    "src",
-    "extension",
-    "child-mode.ts",
-  );
-  const nodePath = process.execPath;
-  const launchThinking = thinking(environment.PI_REASONING_LEVEL);
-  const allowHostNetwork = hostNetworkApproved(
-    environment.AGENTWORKS_ALLOW_HOST_NETWORK,
-  );
+  if (!composition.liveOrchestration) {
+    throw new ProductionOrchestrationProviderError(
+      "live orchestration composition is disabled",
+    );
+  }
+  const workspaceId = composition.workspaceId ?? "";
+  const provider = composition.provider ?? "";
+  const model = composition.model ?? "";
+  const herdr = new HerdrCliGateway({ herdrPath: composition.herdrPath ?? "" });
+  const piCliPath = composition.piCliPath ?? "";
+  const piPackagePath = composition.piPackagePath ?? "";
+  const agentworksPackagePath = composition.agentworksPackagePath;
+  const childBridgePath = composition.childBridgePath;
+  const nodePath = composition.nodePath;
+  const launchThinking = composition.thinking ?? "high";
+  const controllerHomePath = composition.homePath;
 
-  return (runtime) => ({
-    async execute(write: FencedWrite) {
+  return (runtime) =>
+    createLazyProductionOrchestrationExecutor(async (write: FencedWrite) => {
       const descriptor = runtime.descriptor;
       if (descriptor === null) {
         throw new ProductionOrchestrationProviderError(
@@ -374,7 +387,15 @@ export function createProductionOrchestrationProvider(
       }
       const snapshot = runtime.repository.loadSnapshot(descriptor.runId);
       if (snapshot === null) {
-        return { accepted: false, actions: [] };
+        return {
+          execute: () => Promise.resolve({ accepted: false, actions: [] }),
+          restorePanes: () =>
+            Promise.reject(
+              new ProductionOrchestrationProviderError(
+                "controller run is unavailable",
+              ),
+            ),
+        };
       }
       const run = snapshot.run;
       ensureIntegrationWorkspace(
@@ -386,12 +407,23 @@ export function createProductionOrchestrationProvider(
       const git = new GitCliWorkspaceGateway();
       const discovery = await discoverRolePacks({
         roots: [
-          { scope: "builtin", path: join(agentworksPackagePath, "role-packs") },
+          {
+            scope: "builtin",
+            path: join(agentworksPackagePath, "role-packs"),
+          },
           {
             scope: "user",
-            path: join(homedir(), ".config", "pi-agentworks", "role-packs"),
+            path: join(
+              controllerHomePath,
+              ".config",
+              "pi-agentworks",
+              "role-packs",
+            ),
           },
-          { scope: "project", path: join(run.originalCheckout, "role-packs") },
+          {
+            scope: "project",
+            path: join(run.originalCheckout, "role-packs"),
+          },
         ],
         projectTrusted: false,
       });
@@ -403,11 +435,10 @@ export function createProductionOrchestrationProvider(
         );
       }
       const roles = discovery.packs.flatMap((pack) => pack.roles);
-      const runtimeRoles = allowHostNetwork
-        ? roles.map((role) =>
-            Object.freeze({ ...role, networkAccess: "required" as const }),
-          )
-        : roles;
+      // Network access is a role capability, never a run-wide switch. The
+      // legacy host-network flag is retained in launch evidence for restart
+      // compatibility, but it cannot widen isolated roles or task tools.
+      const runtimeRoles = roles;
       const team = composeTeam({
         taskText: `${run.title} ${snapshot.stories
           .flatMap((story) => story.planning?.taskKinds ?? [])
@@ -462,8 +493,13 @@ export function createProductionOrchestrationProvider(
             session.configPath,
             provider,
             model,
+            join(controllerHomePath, ".pi", "agent", "models.json"),
           );
-          installSelectedProviderAuthentication(session.configPath, provider);
+          installSelectedProviderAuthentication(
+            session.configPath,
+            provider,
+            join(controllerHomePath, ".pi", "agent", "auth.json"),
+          );
           return session;
         },
         cleanup: privateSessions.cleanup.bind(privateSessions),
@@ -520,6 +556,181 @@ export function createProductionOrchestrationProvider(
       const sandbox = new BubblewrapSandboxGateway(
         new ProductionSandboxLaunchGate(new BubblewrapCapabilityDoctor()),
       );
+      const piLauncher = new SecurePiAgentLauncher(sandbox, herdr);
+      const controllerRepository = runtime.repository;
+      if (!supportsPaneRestoration(controllerRepository)) {
+        throw new ProductionOrchestrationProviderError(
+          "controller repository does not support pane restoration reservations",
+        );
+      }
+      const restorationRepository: RestorationRepository = controllerRepository;
+      const paneRestoration = new AgentPaneRestorationController({
+        repository: restorationRepository,
+        herdr,
+        processEvidence: new LinuxPaneProcessEvidenceGateway(herdr),
+        lifecycle: paneLifecycle,
+        launcher: piLauncher,
+        resolveRoleLabel: async (agent) => {
+          const role = await roleCatalog.find(agent.roleRuntimeId);
+          if (role === null) {
+            throw new ProductionOrchestrationProviderError(
+              `restoration role ${agent.roleRuntimeId} is unavailable`,
+            );
+          }
+          return role.label;
+        },
+        preparation: {
+          async prepare(input) {
+            const current = input.snapshot;
+            const currentAgent = current.agents.find(
+              (agent) => agent.id === input.agent.id,
+            );
+            if (currentAgent === undefined) {
+              throw new ProductionOrchestrationProviderError(
+                `restoration agent ${input.agent.id} is absent from the controller roster`,
+              );
+            }
+            const role = await roleCatalog.find(currentAgent.roleRuntimeId);
+            if (role === null) {
+              throw new ProductionOrchestrationProviderError(
+                `restoration role ${currentAgent.roleRuntimeId} is unavailable`,
+              );
+            }
+            const kind: StoryAgentKind =
+              role.authority === "project-manager"
+                ? "project-manager"
+                : role.authority === "advisor"
+                  ? "advisor"
+                  : role.authority === "reviewer"
+                    ? "reviewer"
+                    : "writer";
+            const sourceStory =
+              currentAgent.taskId === null
+                ? current.stories[0]
+                : current.stories.find(
+                    (story) => story.id === currentAgent.taskId,
+                  );
+            if (sourceStory === undefined) {
+              throw new ProductionOrchestrationProviderError(
+                `restoration agent ${currentAgent.id} has no exact story authority`,
+              );
+            }
+            const target =
+              kind === "project-manager"
+                ? Object.freeze({
+                    ...sourceStory,
+                    id: `${sourceStory.id}-management`,
+                    branchName: current.run.integrationBranch,
+                    worktreePath: current.run.integrationWorktree,
+                  })
+                : sourceStory;
+            const configuration = await launchConfiguration.resolve(
+              kind,
+              role,
+              currentAgent,
+              target,
+              current.run,
+              current,
+            );
+            if (configuration.sessionId !== input.sessionId) {
+              throw new ProductionOrchestrationProviderError(
+                `restoration session ${input.sessionId} conflicts with deterministic launch authority`,
+              );
+            }
+            const session = await sessions.create(
+              current.run,
+              target,
+              currentAgent.id,
+            );
+            let writerLease =
+              kind === "writer"
+                ? runtime.repository.readWriterLease(
+                    current.run.id,
+                    sourceStory.id,
+                  )
+                : null;
+            if (
+              kind === "writer" &&
+              (writerLease?.ownerAgentId !== currentAgent.id ||
+                writerLease.expiresAt === null ||
+                writerLease.expiresAt <= write.now)
+            ) {
+              writerLease = runtime.repository.acquireWriterLease({
+                write,
+                runId: current.run.id,
+                storyId: sourceStory.id,
+                ownerAgentId: currentAgent.id,
+                ttlMs: PRODUCTION_WRITER_LEASE_TTL_MS,
+              });
+            }
+            const writerLeaseActive =
+              kind !== "writer" ||
+              (writerLease?.ownerAgentId === currentAgent.id &&
+                writerLease.expiresAt !== null &&
+                writerLease.expiresAt > write.now);
+            const preparation = new DeterministicAssignmentPreparation({
+              resolveRole: () =>
+                Promise.resolve({
+                  role,
+                  runtimeId: role.runtimeId,
+                  rolePrompt: role.systemPrompt,
+                }),
+              resolveResources: () =>
+                Promise.resolve({
+                  agent: currentAgent,
+                  paneId: input.paneId,
+                  sessionId: input.sessionId,
+                  sessionPath: session.sessionPath,
+                  configPath: session.configPath,
+                  runtimePath: configuration.runtimePath,
+                  controllerSocketPath: configuration.controllerSocketPath,
+                  controllerChildAuthToken: session.controllerChildAuthToken,
+                  piCliPath: configuration.piCliPath,
+                  piPackagePath: configuration.piPackagePath,
+                  agentworksPackagePath: configuration.agentworksPackagePath,
+                  childBridgePath: configuration.childBridgePath,
+                  nodePath: configuration.nodePath,
+                  gitMetadataPaths: configuration.gitMetadataPaths,
+                  additionalReadOnlyPaths:
+                    configuration.additionalReadOnlyPaths,
+                  provider: configuration.provider,
+                  model: configuration.model,
+                  thinking: configuration.thinking,
+                  writerLeaseActive,
+                  controllerFenceCurrent: configuration.controllerFenceCurrent,
+                  expectedRevisionMatches:
+                    configuration.expectedRevisionMatches,
+                }),
+            });
+            const prepared = await (kind === "project-manager"
+              ? preparation.prepareProjectManager(
+                  sourceStory,
+                  current.run,
+                  current,
+                )
+              : kind === "advisor"
+                ? preparation.prepareAdvisor(sourceStory, current.run, current)
+                : kind === "reviewer"
+                  ? preparation.prepareReviewer(
+                      sourceStory,
+                      current.run,
+                      current,
+                    )
+                  : preparation.prepareWriter(
+                      sourceStory,
+                      current.run,
+                      current,
+                    ));
+            return Object.freeze({
+              ...prepared.request,
+              requireExistingSession: true,
+              ...(currentAgent.piSessionPath === null
+                ? {}
+                : { expectedSessionFile: currentAgent.piSessionPath }),
+            });
+          },
+        },
+      });
       const loop = createProductionOrchestrationLoop({
         repository: runtime.repository,
         git,
@@ -536,7 +747,7 @@ export function createProductionOrchestrationProvider(
         ),
         write,
         clock: Date.now,
-        piLauncher: new SecurePiAgentLauncher(sandbox, herdr),
+        piLauncher,
         roleCatalog,
         roleSelector,
         agentFactory: new ControllerAgentFactory(Date.now),
@@ -557,23 +768,98 @@ export function createProductionOrchestrationProvider(
             return Promise.resolve();
           },
         },
-        writerLeaseTtlMs: 15_000,
+        writerLeaseTtlMs: PRODUCTION_WRITER_LEASE_TTL_MS,
         initialTeam: {
           projectManagerRoleRuntimeId: projectManager.runtimeId,
           advisorRoleRuntimeId: advisor?.runtimeId ?? null,
         },
       });
-      const result = await loop.tick(write);
+      const agentLifecycle = new ControllerAgentLifecycle({
+        repository: runtime.repository,
+        git,
+        roleCatalog,
+        clock: Date.now,
+        writerLeaseTtlMs: PRODUCTION_WRITER_LEASE_TTL_MS,
+      });
+      const idleSupervisor = new IdleAgentSupervisor({
+        repository: runtime.repository,
+        herdr,
+        clock: Date.now,
+      });
       return {
-        accepted: true,
-        committed: result.committed,
-        actions: result.actions.map((action) => {
-          if ("storyId" in action) {
-            return `${action.type}:${action.storyId}`;
+        async execute(currentWrite) {
+          const current = runtime.repository.loadSnapshot(run.id);
+          if (current !== null) {
+            await idleSupervisor.supervise(current, currentWrite);
           }
-          return action.type;
-        }),
+          const result = await drainOrchestrationLoop(loop, currentWrite);
+          return {
+            accepted: true,
+            committed: result.committed,
+            ticks: result.ticks,
+            actions: result.actions.map((action) => {
+              if ("storyId" in action) {
+                return `${action.type}:${action.storyId}`;
+              }
+              return action.type;
+            }),
+          };
+        },
+        async handleAgentMessage(message, currentWrite, requestId) {
+          const result = await agentLifecycle.handle(
+            message,
+            currentWrite,
+            requestId,
+          );
+          return JSON.parse(JSON.stringify(result)) as JsonValue;
+        },
+        async restorePanes() {
+          const result = await paneRestoration.restoreMissingPane({
+            runId: descriptor.runId,
+            workspaceId,
+            write,
+            metadataSequence: snapshot.revision,
+          });
+          return {
+            restored: result.restored,
+            restorations: result.restorations.map((restoration) => ({
+              agentId: restoration.agentId,
+              slot: restoration.slot,
+              priorPaneId: restoration.priorPaneId,
+              replacementPaneId: restoration.replacementPaneId,
+              sessionId: restoration.sessionId,
+              processIds: [...restoration.processIds],
+            })),
+            agentId: result.agentId,
+            slot: result.slot,
+            priorPaneId: result.priorPaneId,
+            replacementPaneId: result.replacementPaneId,
+            sessionId: result.sessionId,
+            processIds: [...result.processIds],
+          };
+        },
       };
-    },
-  });
+    });
+}
+
+export function createProductionOrchestrationProvider(
+  environment: ProductionEnvironment,
+  packageRoot: string,
+): (runtime: ControllerRuntime) => ControllerOrchestrationExecutor {
+  return (runtime) => {
+    const descriptor = runtime.descriptor;
+    if (descriptor === null) {
+      throw new ProductionOrchestrationProviderError(
+        "controller runtime is not running",
+      );
+    }
+    const composition = createControllerLaunchComposition(
+      descriptor.runId,
+      environment,
+      packageRoot,
+    );
+    return createProductionOrchestrationProviderFromComposition(composition)(
+      runtime,
+    );
+  };
 }

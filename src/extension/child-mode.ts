@@ -9,14 +9,18 @@ import {
   type Stats,
 } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { JsonValue } from "../application/ports/controller-repository.ts";
 import {
   agentBlocked,
+  candidateReady,
   heartbeat,
   operationCompleted,
   operationProgress,
   operationStarted,
+  reviewSubmitted,
   sessionShutdown,
   sessionStarted,
   type AgentMessage,
@@ -37,6 +41,7 @@ export interface ChildModeEnvironment {
   readonly AGENTWORKS_AGENT_ID?: string;
   readonly AGENTWORKS_CONTROLLER_SOCKET?: string;
   readonly AGENTWORKS_CONTROLLER_TOKEN_FILE?: string;
+  readonly AGENTWORKS_CONTROLLER_ACTIONS?: string;
   readonly AGENTWORKS_RUN_ID?: string;
 }
 
@@ -45,6 +50,7 @@ export interface ChildModeConfiguration {
   readonly agentId: string;
   readonly controllerSocketPath: string;
   readonly controllerAuthToken: string;
+  readonly controllerActions: readonly string[];
 }
 
 interface ChildControllerClient {
@@ -174,11 +180,26 @@ export function resolveChildModeConfiguration(
       "Controller capability path is missing",
     );
   }
+  const controllerActions = (environment.AGENTWORKS_CONTROLLER_ACTIONS ?? "")
+    .split(",")
+    .filter((action) => action.length > 0);
+  if (
+    controllerActions.length > 16 ||
+    controllerActions.some(
+      (action) => !/^[a-z][a-z0-9-]{0,63}$/u.test(action),
+    ) ||
+    new Set(controllerActions).size !== controllerActions.length
+  ) {
+    throw new ChildBridgeConfigurationError(
+      "Controller action authority is invalid",
+    );
+  }
   return Object.freeze({
     runId,
     agentId,
     controllerSocketPath,
     controllerAuthToken: readControllerCapability(tokenFile),
+    controllerActions: Object.freeze(controllerActions),
   });
 }
 
@@ -315,15 +336,99 @@ export function installChildBridge(
         const replacement = await connectAuthenticatedClient();
         client = replacement;
         await sendMessage(replacement, message);
-      } catch {
+      } catch (error) {
         authenticated = false;
         client?.close();
         client = null;
+        throw new ChildBridgeUnavailableError(
+          `Agentworks child message delivery failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     });
     messageQueue = queued.catch(() => undefined);
     return queued;
   };
+
+  pi.registerTool({
+    name: "agentworks_submit_work",
+    label: "Submit Work",
+    description:
+      "Ask the Agentworks controller to inspect the assigned writer worktree and create the exact candidate commit. Takes no Git evidence from the child.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    async execute(_toolCallId, _parameters, _signal, _onUpdate, context) {
+      if (!configuration.controllerActions.includes("submit-work")) {
+        throw new ChildBridgeUnavailableError(
+          "This child identity has no submit-work authority",
+        );
+      }
+      await reportMessage(
+        candidateReady(configuration.runId, configuration.agentId),
+      );
+      context.shutdown();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "The controller accepted the work submission and owns candidate creation.",
+          },
+        ],
+        details: undefined,
+        terminate: true,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "agentworks_submit_review",
+    label: "Submit Review",
+    description:
+      "Submit approve or changes-requested for the exact candidate and integration heads supplied by the Agentworks controller.",
+    parameters: Type.Object(
+      {
+        outcome: StringEnum(["approved", "changes-requested"] as const),
+        candidateStoryHead: Type.String({
+          minLength: 40,
+          maxLength: 64,
+          pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+        }),
+        integrationHead: Type.String({
+          minLength: 40,
+          maxLength: 64,
+          pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+        }),
+      },
+      { additionalProperties: false },
+    ),
+    async execute(_toolCallId, parameters, _signal, _onUpdate, context) {
+      if (!configuration.controllerActions.includes("submit-review")) {
+        throw new ChildBridgeUnavailableError(
+          "This child identity has no submit-review authority",
+        );
+      }
+      await reportMessage(
+        reviewSubmitted(
+          configuration.runId,
+          configuration.agentId,
+          parameters.outcome,
+          parameters.candidateStoryHead,
+          parameters.integrationHead,
+        ),
+      );
+      context.shutdown();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "The controller accepted the exact review submission.",
+          },
+        ],
+        details: undefined,
+        terminate: true,
+      };
+    },
+  });
 
   pi.on("session_start", async (_event, context) => {
     operationStartedAt = null;
@@ -356,6 +461,20 @@ export function installChildBridge(
         ),
       );
       authenticated = true;
+      const lifecycleTools = new Set([
+        "agentworks_submit_work",
+        "agentworks_submit_review",
+      ]);
+      const activeTools = pi
+        .getActiveTools()
+        .filter((name) => !lifecycleTools.has(name));
+      if (configuration.controllerActions.includes("submit-work")) {
+        activeTools.push("agentworks_submit_work");
+      }
+      if (configuration.controllerActions.includes("submit-review")) {
+        activeTools.push("agentworks_submit_review");
+      }
+      pi.setActiveTools([...new Set(activeTools)]);
     } catch (error) {
       nextClient?.close();
       if (client === nextClient) client = null;

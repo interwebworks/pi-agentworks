@@ -77,14 +77,32 @@ function assertSafeIdentifier(
   return value;
 }
 
-function ownershipEnvironment(
+function baseOwnershipEnvironment(
   request: EnsureManagementPaneRequest,
 ): Readonly<Record<string, string>> {
   return Object.freeze({
     [ENVIRONMENT_KEYS.kind]: MANAGEMENT_KIND,
     [ENVIRONMENT_KEYS.operation]: request.operationId,
-    [ENVIRONMENT_KEYS.parent]: request.parentPaneId,
     [ENVIRONMENT_KEYS.run]: request.runId,
+  });
+}
+
+function ownershipEnvironment(
+  request: EnsureManagementPaneRequest,
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    ...baseOwnershipEnvironment(request),
+    [ENVIRONMENT_KEYS.parent]: request.parentPaneId,
+  });
+}
+
+function baseOwnershipTokens(
+  request: EnsureManagementPaneRequest,
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    [TOKEN_KEYS.kind]: MANAGEMENT_KIND,
+    [TOKEN_KEYS.operation]: request.operationId,
+    [TOKEN_KEYS.run]: request.runId,
   });
 }
 
@@ -92,10 +110,8 @@ function ownershipTokens(
   request: EnsureManagementPaneRequest,
 ): Readonly<Record<string, string>> {
   return Object.freeze({
-    [TOKEN_KEYS.kind]: MANAGEMENT_KIND,
-    [TOKEN_KEYS.operation]: request.operationId,
+    ...baseOwnershipTokens(request),
     [TOKEN_KEYS.parent]: request.parentPaneId,
-    [TOKEN_KEYS.run]: request.runId,
   });
 }
 
@@ -124,53 +140,76 @@ export class ManagementPaneLifecycle {
     request: EnsureManagementPaneRequest,
   ): Promise<ManagementPaneEvidence> {
     this.#validateRequest(request);
-    const panes = await this.#herdr.listPanes(request.workspaceId);
-    const parent = panes.find((pane) => pane.paneId === request.parentPaneId);
+    // Ownership is operation-global, not local to the caller's current
+    // workspace or tab. Reconcile every live pane before creating anything.
+    const panes = await this.#herdr.listPanes();
+    const parents = panes.filter(
+      (pane) => pane.paneId === request.parentPaneId,
+    );
+    const parent = parents[0];
     if (
+      parents.length !== 1 ||
       parent?.workspaceId !== request.workspaceId ||
       parent.tabId !== request.parentTabId
     ) {
       throw new ManagementPaneRecoveryRequiredError(
-        "The parent Herdr pane is absent or has moved to another tab",
+        "The controller-recorded parent Herdr pane is absent or has moved",
       );
     }
 
+    const expectedBaseEnvironment = baseOwnershipEnvironment(request);
     const expectedEnvironment = ownershipEnvironment(request);
+    const expectedBaseTokens = baseOwnershipTokens(request);
     const expectedTokens = ownershipTokens(request);
     const candidates: {
       pane: HerdrPane;
       process: PaneShellEnvironmentEvidence;
     }[] = [];
     for (const pane of panes) {
-      if (
-        pane.paneId === parent.paneId ||
-        pane.workspaceId !== request.workspaceId ||
-        pane.tabId !== request.parentTabId
-      ) {
-        continue;
-      }
-      const hasTokens = containsOwnership(pane.tokens, expectedTokens);
+      const hasBaseTokens = containsOwnership(pane.tokens, expectedBaseTokens);
       const process = await this.#processEvidence.readShellEnvironment(
         pane.paneId,
       );
       if (process === null) {
-        if (hasTokens) {
+        if (hasBaseTokens) {
           throw new ManagementPaneRecoveryRequiredError(
             `Pane ${pane.paneId} has management metadata without matching process ownership`,
           );
         }
         continue;
       }
-      const hasEnvironment = containsOwnership(
+      const hasBaseEnvironment = containsOwnership(
         process.environment,
-        expectedEnvironment,
+        expectedBaseEnvironment,
       );
-      if (hasTokens && !hasEnvironment) {
+      if (hasBaseTokens && !hasBaseEnvironment) {
         throw new ManagementPaneRecoveryRequiredError(
           `Pane ${pane.paneId} has management metadata without matching process ownership`,
         );
       }
-      if (hasEnvironment) candidates.push({ pane, process });
+      if (!hasBaseEnvironment) continue;
+      if (pane.paneId === parent.paneId) {
+        throw new ManagementPaneRecoveryRequiredError(
+          "The parent pane cannot also own the management operation",
+        );
+      }
+      if (
+        process.environment[ENVIRONMENT_KEYS.parent] !== request.parentPaneId
+      ) {
+        throw new ManagementPaneRecoveryRequiredError(
+          `Pane ${pane.paneId} management process ownership has parent-origin drift`,
+        );
+      }
+      if (
+        pane.tokens[TOKEN_KEYS.kind] === MANAGEMENT_KIND &&
+        (!hasBaseTokens ||
+          pane.tokens[TOKEN_KEYS.parent] !== request.parentPaneId)
+      ) {
+        throw new ManagementPaneRecoveryRequiredError(
+          `Pane ${pane.paneId} management metadata has parent-origin drift`,
+        );
+      }
+      candidates.push({ pane, process });
     }
     if (candidates.length > 1) {
       throw new ManagementPaneRecoveryRequiredError(

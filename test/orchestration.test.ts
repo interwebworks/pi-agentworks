@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   planOrchestration,
+  reserveAgentLaunchCapacity,
+  type OrchestrationAction,
   type OrchestrationStory,
 } from "../src/domain/orchestration.ts";
 
@@ -12,6 +14,8 @@ function story(
     status: "ready",
     dependencies: [],
     reviewerAssigned: false,
+    reviewerClosed: false,
+    workspaceCleaned: false,
     ...overrides,
   };
 }
@@ -35,7 +39,7 @@ test("assigns ready stories whose dependencies are merged", () => {
 test("requests a merge for approved stories and cleanup for merged ones", () => {
   const actions = planOrchestration(
     [
-      story({ id: "a", status: "approved" }),
+      story({ id: "a", status: "approved", reviewerClosed: true }),
       story({ id: "b", status: "merged" }),
     ],
     "NORMAL",
@@ -97,4 +101,57 @@ test("completes the run once every story is merged", () => {
 
 test("an empty run produces no actions", () => {
   assert.deepEqual(planOrchestration([], "HIGH"), []);
+});
+
+test("advisors and reviewers reserve the same global slots as writers and managers", () => {
+  const candidates: readonly OrchestrationAction[] = [
+    { type: "assign-project-manager", storyId: "a" },
+    { type: "assign-advisor", storyId: "a" },
+    { type: "assign-reviewer", storyId: "a" },
+    { type: "assign-story", storyId: "b" },
+    { type: "request-merge", storyId: "c" },
+  ];
+  const decision = reserveAgentLaunchCapacity(candidates, "LOW", 2);
+  assert.deepEqual(decision, {
+    actions: [
+      { type: "assign-project-manager", storyId: "a" },
+      { type: "assign-advisor", storyId: "a" },
+      { type: "request-merge", storyId: "c" },
+    ],
+    occupied: 2,
+    reserved: 2,
+    remaining: 0,
+  });
+});
+
+test("reviewers advance before new multi-story work at the global boundary", () => {
+  const actions = planOrchestration(
+    [
+      story({ id: "review-a", status: "awaiting-review" }),
+      story({ id: "review-b", status: "awaiting-review" }),
+      story({ id: "write-a", status: "ready" }),
+      story({ id: "write-b", status: "ready" }),
+    ],
+    "LOW",
+    3,
+  );
+  assert.deepEqual(actions, [{ type: "assign-reviewer", storyId: "review-a" }]);
+});
+
+test("multi-story starts retain the story cap and also honor remaining agent capacity", () => {
+  const stories = Array.from({ length: 10 }, (_unused, index) =>
+    story({ id: `story-${String(index)}` }),
+  );
+  assert.equal(
+    planOrchestration(stories, "NORMAL", 6).filter(
+      (action) => action.type === "assign-story",
+    ).length,
+    2,
+  );
+  assert.equal(
+    planOrchestration(stories, "NORMAL", 8).filter(
+      (action) => action.type === "assign-story",
+    ).length,
+    0,
+  );
 });

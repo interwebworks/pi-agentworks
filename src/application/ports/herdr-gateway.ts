@@ -1,4 +1,5 @@
-export const HERDR_PROTOCOL_VERSION = 17 as const;
+/** Protocol implemented by the supported Herdr CLI (0.8.x). */
+export const HERDR_PROTOCOL_VERSION = 19 as const;
 
 export type HerdrAgentStatus =
   "idle" | "working" | "blocked" | "done" | "unknown";

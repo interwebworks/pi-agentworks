@@ -32,14 +32,29 @@ function messageEvent(
   requestId: string,
   occurredAt: number,
 ): ControllerEventInput {
+  const payload =
+    message.type === "review-submitted"
+      ? Object.freeze({
+          type: message.type,
+          outcome: message.outcome,
+          candidateStoryHead: message.candidateStoryHead,
+          integrationHead: message.integrationHead,
+        })
+      : Object.freeze({ type: message.type });
   return Object.freeze({
     eventId: requestId,
     type: `agent-${message.type}`,
     entityType: "agent",
     entityId: message.agentId,
-    payload: Object.freeze({ type: message.type }),
+    payload,
     occurredAt,
   });
+}
+
+function requiresDurableControllerHandling(message: AgentMessage): boolean {
+  return ["candidate-ready", "review-submitted", "session-shutdown"].includes(
+    message.type,
+  );
 }
 
 /** Applies authenticated child messages through the fenced repository boundary. */
@@ -78,7 +93,8 @@ export class AgentMessageController {
       );
     }
     const reaction = reactionForAgentMessage(message);
-    if (!state.changed) {
+    const durableControlSignal = requiresDurableControllerHandling(message);
+    if (!state.changed && !durableControlSignal) {
       return Object.freeze({
         revision: snapshot.revision,
         changed: false,

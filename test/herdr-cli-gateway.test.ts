@@ -92,8 +92,8 @@ class FakeExecutor implements HerdrCommandExecutor {
   }
 }
 
-function capabilityResponses(protocol = 17): readonly unknown[] {
-  return ["herdr 0.7.5\n", { protocol, schema_version: 1 }];
+function capabilityResponses(protocol = 19): readonly unknown[] {
+  return ["herdr 0.8.0\n", { protocol, schema_version: 1 }];
 }
 
 function gateway(executor: FakeExecutor): HerdrCliGateway {
@@ -144,9 +144,9 @@ test("protocol-pinned reads map bounded Herdr responses into domain evidence", a
   const client = gateway(executor);
 
   assert.deepEqual(await client.assertCompatible(), {
-    protocolVersion: 17,
+    protocolVersion: 19,
     schemaVersion: 1,
-    cliVersion: "0.7.5",
+    cliVersion: "0.8.0",
   });
   assert.equal((await client.listTabs("w1P"))[0]?.tabId, "w1P:t2");
   assert.equal((await client.listPanes("w1P"))[0]?.tokens.run, "run-1");
@@ -377,7 +377,7 @@ test("typed mutations build exact argv and quote terminal commands as inert shel
 
 test("protocol, response, server, and input widening failures are typed and fail closed", async () => {
   await assert.rejects(
-    gateway(new FakeExecutor(capabilityResponses(18))).assertCompatible(),
+    gateway(new FakeExecutor(capabilityResponses(20))).assertCompatible(),
     InvalidHerdrResponseError,
   );
   await assert.rejects(

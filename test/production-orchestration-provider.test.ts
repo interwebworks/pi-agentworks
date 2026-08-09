@@ -40,3 +40,34 @@ test("private child configuration receives only the selected provider credential
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("restoration reuses the private selected credential without reading a caller credential source", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-provider-reuse-"));
+  const config = join(root, "config");
+  try {
+    mkdirSync(config, { mode: 0o700 });
+    writeFileSync(
+      join(config, "auth.json"),
+      JSON.stringify({
+        "openai-codex": { type: "oauth", access: "private-selected-secret" },
+      }),
+      { mode: 0o600 },
+    );
+    installSelectedProviderAuthentication(
+      config,
+      "openai-codex",
+      join(root, "missing-caller-auth.json"),
+    );
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(config, "auth.json"), "utf8")),
+      {
+        "openai-codex": {
+          type: "oauth",
+          access: "private-selected-secret",
+        },
+      },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

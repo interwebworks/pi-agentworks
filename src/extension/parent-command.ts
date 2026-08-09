@@ -90,6 +90,7 @@ export const AgentworksToolInputSchema = Type.Object(
     ),
     task: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
     runId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+    agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
     message: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
   },
   { additionalProperties: false },
@@ -109,7 +110,7 @@ export function parseAgentworksToolInput(value: unknown): AgentworksToolInput {
     throw new InvalidAgentworksToolInputError(
       "Invalid agentworks tool input: expected an object with a valid " +
         `action (one of ${AGENTWORKS_TOOL_ACTIONS.join(", ")}) and optional ` +
-        "mode/task/runId/message fields",
+        "mode/task/runId/agentId/message fields",
     );
   }
   return Object.freeze(value);

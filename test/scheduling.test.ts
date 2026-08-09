@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentCapacity,
+  countOccupiedAgentSlots,
+  occupiesAgentCapacity,
   scheduleStories,
   storyConcurrencyCap,
   SchedulingError,
   type SchedulableStory,
 } from "../src/domain/scheduling.ts";
+import type { AgentStatus } from "../src/domain/controller-state.ts";
 
 function story(
   id: string,
@@ -99,4 +103,54 @@ test("concurrency cap leaves room for the PM and a reviewer", () => {
   assert.equal(storyConcurrencyCap("LOW"), 2); // 4 - 2
   assert.equal(storyConcurrencyCap("NORMAL"), 6); // 8 - 2
   assert.equal(storyConcurrencyCap("HIGH"), 14); // 16 - 2
+});
+
+test("all unclosed agent states occupy the one run-level capacity", () => {
+  const statuses: readonly AgentStatus[] = [
+    "planned",
+    "launching",
+    "idle",
+    "working",
+    "waiting",
+    "blocked",
+    "reviewing",
+    "disconnected",
+    "completed",
+    "failed",
+    "closed",
+  ];
+  assert.deepEqual(statuses.filter(occupiesAgentCapacity), [
+    "planned",
+    "launching",
+    "idle",
+    "working",
+    "waiting",
+    "blocked",
+    "reviewing",
+    "disconnected",
+    "completed",
+    "failed",
+  ]);
+  assert.equal(
+    countOccupiedAgentSlots(statuses.map((status) => ({ status }))),
+    10,
+  );
+  assert.deepEqual(agentCapacity("LOW", 4), {
+    limit: 4,
+    occupied: 4,
+    available: 0,
+  });
+});
+
+test("capacity is released only after the agent is closed", () => {
+  for (const status of [
+    "blocked",
+    "disconnected",
+    "completed",
+    "failed",
+  ] as const) {
+    assert.equal(occupiesAgentCapacity(status), true);
+  }
+  assert.equal(occupiesAgentCapacity("closed"), false);
+  assert.throws(() => agentCapacity("LOW", -1), SchedulingError);
 });

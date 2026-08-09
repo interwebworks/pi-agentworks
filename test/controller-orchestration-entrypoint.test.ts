@@ -1,20 +1,85 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   createConfiguredControllerProcessDependencies,
+  assessDeferredInitialResume,
+  executeCommittedAgentMessage,
   executeInjectedOrchestration,
+  executeInjectedPaneRestoration,
   resolveConfiguredOrchestrationProvider,
   resolveControllerOrchestrationExecutor,
+  resumeDeferredInitialOrchestration,
   type ControllerOrchestrationExecutor,
 } from "../src/controller/process-entry.ts";
-import type { FencedWrite } from "../src/application/ports/controller-repository.ts";
+import type {
+  ControllerSnapshot,
+  FencedWrite,
+} from "../src/application/ports/controller-repository.ts";
+import {
+  createAgentState,
+  createRunState,
+  createStoryState,
+  transitionRun,
+  transitionStory,
+} from "../src/domain/controller-state.ts";
 import type { ControllerRuntime } from "../src/infrastructure/controller/controller-runtime.ts";
+import { SqliteControllerRepository } from "../src/infrastructure/controller/sqlite-controller-repository.ts";
+import { candidateReady } from "../src/domain/agent-communication.ts";
+import { ControllerRequestError } from "../src/infrastructure/controller/unix-controller-transport.ts";
 
 const write: FencedWrite = {
   ownerId: "controller",
   fencingToken: 4,
   now: 100,
 };
+
+function deferredSnapshot(): ControllerSnapshot {
+  const run = transitionRun(
+    createRunState({
+      id: "run-1",
+      title: "Deferred run",
+      complexity: "HIGH",
+      repositoryRoot: "/repo",
+      originalCheckout: "/repo",
+      baseBranch: "main",
+      integrationBranch: "agentworks/run-1/integration",
+      integrationWorktree: "/worktrees/run-1/integration",
+      createdAt: 1,
+    }),
+    { type: "plan-prepared", at: 1 },
+  );
+  const story = transitionStory(
+    createStoryState({
+      id: "story-1",
+      runId: run.id,
+      title: "Implement recovery",
+      branchName: "agentworks/run-1/story-1",
+      worktreePath: "/worktrees/run-1/story-1",
+      createdAt: 1,
+    }),
+    { type: "story-prepared", complexity: "HIGH", at: 1 },
+  );
+  return { revision: 1, run, stories: [story], agents: [] };
+}
+
+function runtimeAuthority(
+  read: () => ControllerSnapshot,
+  overrides: { readonly leaseExpiresAt?: number } = {},
+): ControllerRuntime {
+  return {
+    assertReadyForWork: () => undefined,
+    currentWrite: () => write,
+    descriptor: {
+      ownerId: write.ownerId,
+      fencingToken: write.fencingToken,
+      leaseExpiresAt: overrides.leaseExpiresAt ?? write.now + 1_000,
+    },
+    repository: { loadSnapshot: read },
+  } as unknown as ControllerRuntime;
+}
 
 test("injected orchestration entrypoint forwards current fenced write to executor", async () => {
   let received: FencedWrite | null = null;
@@ -30,6 +95,65 @@ test("injected orchestration entrypoint forwards current fenced write to executo
     { accepted: true },
   );
   assert.deepEqual(received, write);
+});
+
+test("pane restoration is parent-only and forwards exact fenced authority", async () => {
+  let received: FencedWrite | null = null;
+  const executor: ControllerOrchestrationExecutor = {
+    execute: () => Promise.resolve({ accepted: true }),
+    restorePanes(current) {
+      received = current;
+      return Promise.resolve({ restored: true, slot: 1 });
+    },
+  };
+  assert.deepEqual(
+    await executeInjectedPaneRestoration("parent", {}, write, executor),
+    { restored: true, slot: 1 },
+  );
+  assert.equal(received, write);
+  await assert.rejects(
+    executeInjectedPaneRestoration("management", {}, write, executor),
+    /Only a parent client/u,
+  );
+  await assert.rejects(
+    executeInjectedPaneRestoration("parent", {}, write, {
+      execute: () => Promise.resolve({ accepted: true }),
+    }),
+    /not configured/u,
+  );
+});
+
+test("pane restoration serializes behind ordinary orchestration effects", async () => {
+  let releaseExecute: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    releaseExecute = resolve;
+  });
+  const order: string[] = [];
+  const executor: ControllerOrchestrationExecutor = {
+    async execute() {
+      order.push("execute-start");
+      await gate;
+      order.push("execute-end");
+      return { accepted: true };
+    },
+    restorePanes() {
+      order.push("restore");
+      return Promise.resolve({ restored: true });
+    },
+  };
+
+  const executing = executeInjectedOrchestration("parent", {}, write, executor);
+  const restoring = executeInjectedPaneRestoration(
+    "parent",
+    {},
+    write,
+    executor,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["execute-start"]);
+  releaseExecute?.();
+  await Promise.all([executing, restoring]);
+  assert.deepEqual(order, ["execute-start", "execute-end", "restore"]);
 });
 
 test("orchestration execution is serialized per controller executor", async () => {
@@ -66,6 +190,260 @@ test("orchestration execution is serialized per controller executor", async () =
     { sequence: 2 },
   ]);
   assert.equal(maximumActive, 1);
+});
+
+test("child lifecycle effects run only after the durable message commit and deduplicate retries", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agentworks-child-trigger-"));
+  const repository = new SqliteControllerRepository(
+    join(directory, "controller.sqlite"),
+  );
+  try {
+    const lease = repository.acquireLease("controller", 100, 10_000);
+    const currentWrite: FencedWrite = {
+      ownerId: lease.ownerId,
+      fencingToken: lease.fencingToken,
+      now: 101,
+    };
+    const base = deferredSnapshot();
+    const writer = {
+      ...createAgentState({
+        id: "writer-1",
+        runId: base.run.id,
+        roleRuntimeId: "software-development/backend-developer",
+        taskId: "story-1",
+        worktreePath: base.stories[0]?.worktreePath ?? "/worktree",
+        createdAt: 1,
+      }),
+      status: "idle" as const,
+      updatedAt: 2,
+    };
+    repository.initializeRun({
+      write: currentWrite,
+      idempotencyKey: "initialize-child-trigger",
+      request: { command: "initialize" },
+      run: base.run,
+      stories: base.stories,
+      agents: [writer],
+      events: [
+        {
+          eventId: "run-initialized",
+          type: "run-initialized",
+          entityType: "run",
+          entityId: base.run.id,
+          payload: {},
+          occurredAt: 101,
+        },
+      ],
+    });
+    const order: string[] = [];
+    const executor: ControllerOrchestrationExecutor = {
+      execute() {
+        order.push(
+          `tick:r${String(repository.loadSnapshot("run-1")?.revision)}`,
+        );
+        return Promise.resolve({ accepted: true });
+      },
+      handleAgentMessage(_message, _write, requestId) {
+        order.push(
+          `lifecycle:${requestId}:r${String(
+            repository.loadSnapshot("run-1")?.revision,
+          )}`,
+        );
+        return Promise.resolve({ accepted: true });
+      },
+    };
+    const runtime = {
+      assertReadyForWork: () => undefined,
+      currentWrite: () => currentWrite,
+      descriptor: {
+        ownerId: currentWrite.ownerId,
+        fencingToken: currentWrite.fencingToken,
+        leaseExpiresAt: 10_100,
+      },
+      repository,
+    } as unknown as ControllerRuntime;
+    const message = candidateReady("run-1", "writer-1");
+
+    const [first, retry] = await Promise.all([
+      executeCommittedAgentMessage(
+        message,
+        "candidate-request",
+        runtime,
+        executor,
+      ),
+      executeCommittedAgentMessage(
+        message,
+        "candidate-request",
+        runtime,
+        executor,
+      ),
+    ]);
+
+    assert.deepEqual(first, retry);
+    assert.deepEqual(order, ["lifecycle:candidate-request:r2", "tick:r2"]);
+    assert.equal(repository.loadSnapshot("run-1")?.revision, 2);
+    assert.deepEqual(
+      repository
+        .readEvents("run-1", { revision: 0, eventIndex: -1 }, 10)
+        .map((event) => event.type),
+      ["run-initialized", "agent-candidate-ready"],
+    );
+  } finally {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("deferred initial resume coalesces concurrent retries and launches exactly once", async () => {
+  let snapshot = deferredSnapshot();
+  let releaseLaunch: (() => void) | undefined;
+  const launchGate = new Promise<void>((resolve) => {
+    releaseLaunch = resolve;
+  });
+  let launchSets = 0;
+  const executor: ControllerOrchestrationExecutor = {
+    async execute() {
+      launchSets += 1;
+      await launchGate;
+      snapshot = {
+        ...snapshot,
+        agents: [
+          createAgentState({
+            id: "agent-1",
+            runId: snapshot.run.id,
+            roleRuntimeId: "general-delivery/project-manager",
+            taskId: null,
+            worktreePath: snapshot.run.integrationWorktree,
+            createdAt: write.now,
+          }),
+        ],
+      };
+      return { accepted: true };
+    },
+  };
+  const runtime = runtimeAuthority(() => snapshot);
+
+  assert.deepEqual(assessDeferredInitialResume(snapshot), {
+    eligible: true,
+    reason: "eligible",
+  });
+  const resumes = Array.from({ length: 4 }, () =>
+    resumeDeferredInitialOrchestration(
+      "parent",
+      {},
+      runtime,
+      "run-1",
+      executor,
+    ),
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(launchSets, 1);
+  releaseLaunch?.();
+  const results = await Promise.all(resumes);
+  assert.equal(
+    results.every((result) => {
+      if (
+        result === null ||
+        typeof result !== "object" ||
+        Array.isArray(result)
+      ) {
+        return false;
+      }
+      return (result as Readonly<Record<string, unknown>>).resumed === true;
+    }),
+    true,
+  );
+  assert.equal(launchSets, 1);
+
+  assert.deepEqual(
+    await resumeDeferredInitialOrchestration(
+      "parent",
+      {},
+      runtime,
+      "run-1",
+      executor,
+    ),
+    {
+      accepted: true,
+      resumed: false,
+      reason: "launch-already-started",
+      revision: 1,
+      agentCount: 1,
+    },
+  );
+  assert.equal(launchSets, 1);
+});
+
+test("deferred resume waits for an in-flight ordinary first tick before deciding", async () => {
+  let snapshot = deferredSnapshot();
+  let releaseLaunch: (() => void) | undefined;
+  const launchGate = new Promise<void>((resolve) => {
+    releaseLaunch = resolve;
+  });
+  let launchSets = 0;
+  const executor: ControllerOrchestrationExecutor = {
+    async execute() {
+      launchSets += 1;
+      await launchGate;
+      snapshot = {
+        ...snapshot,
+        agents: [
+          createAgentState({
+            id: "agent-ordinary",
+            runId: snapshot.run.id,
+            roleRuntimeId: "general-delivery/project-manager",
+            taskId: null,
+            worktreePath: snapshot.run.integrationWorktree,
+            createdAt: write.now,
+          }),
+        ],
+      };
+      return { accepted: true };
+    },
+  };
+  const ordinary = executeInjectedOrchestration("parent", {}, write, executor);
+  const resumed = resumeDeferredInitialOrchestration(
+    "parent",
+    {},
+    runtimeAuthority(() => snapshot),
+    "run-1",
+    executor,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(launchSets, 1);
+  releaseLaunch?.();
+
+  await ordinary;
+  assert.deepEqual(await resumed, {
+    accepted: true,
+    resumed: false,
+    reason: "launch-already-started",
+    revision: 1,
+    agentCount: 1,
+  });
+  assert.equal(launchSets, 1);
+});
+
+test("deferred initial resume rejects stale fencing before effects", async () => {
+  const snapshot = deferredSnapshot();
+  let launchSets = 0;
+  await assert.rejects(
+    resumeDeferredInitialOrchestration(
+      "parent",
+      {},
+      runtimeAuthority(() => snapshot, { leaseExpiresAt: write.now }),
+      "run-1",
+      {
+        execute() {
+          launchSets += 1;
+          return Promise.resolve({ accepted: true });
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof ControllerRequestError && error.code === "stale-fence",
+  );
+  assert.equal(launchSets, 0);
 });
 
 test("host dependency adapter remains dormant unless explicitly enabled", () => {
@@ -140,6 +518,16 @@ test("orchestration entrypoint stays fail closed without injection or parent ide
     executeInjectedOrchestration("management", {}, write, {
       execute: () => Promise.resolve({ accepted: true }),
     }),
+    /Only a parent client/u,
+  );
+  await assert.rejects(
+    resumeDeferredInitialOrchestration(
+      "management",
+      {},
+      runtimeAuthority(deferredSnapshot),
+      "run-1",
+      { execute: () => Promise.resolve({ accepted: true }) },
+    ),
     /Only a parent client/u,
   );
 });

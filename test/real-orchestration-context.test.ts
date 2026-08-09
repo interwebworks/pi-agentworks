@@ -32,6 +32,8 @@ class FakeRepository implements ControllerRepository {
   renewLease = unsupported;
   releaseLease = unsupported;
   acquireWriterLease = unsupported;
+  confirmAgentLaunch = unsupported;
+  readAgentLaunch = unsupported;
   renewWriterLease = unsupported;
   releaseWriterLease = unsupported;
   revokeWriterLease = unsupported;

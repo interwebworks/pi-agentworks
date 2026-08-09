@@ -151,10 +151,11 @@ export class DeterministicAssignmentPreparation implements StoryAgentLaunchPrepa
       this.#resolver.resolveResources(kind, story, run, snapshot),
     ]);
     const role = resolvedRole.role;
+    const sourceStory = planningStory(story);
     const assignmentStory =
       kind === "project-manager"
         ? Object.freeze({
-            ...planningStory(story),
+            ...sourceStory,
             id: `${story.id}-management`,
             title: `Manage: ${run.title}`,
             objective: `Coordinate the Agentworks run and supervise delivery of: ${run.title}`,
@@ -163,7 +164,9 @@ export class DeterministicAssignmentPreparation implements StoryAgentLaunchPrepa
               "Coordinate the team, monitor dependencies, and report material decisions or blockers",
             ],
           })
-        : planningStory(story);
+        : kind === "reviewer"
+          ? this.#reviewAssignment(sourceStory, story)
+          : sourceStory;
     const task = buildAssignment({
       runId: run.id,
       story: assignmentStory,
@@ -208,6 +211,26 @@ export class DeterministicAssignmentPreparation implements StoryAgentLaunchPrepa
         controllerFenceCurrent: resources.controllerFenceCurrent,
         expectedRevisionMatches: resources.expectedRevisionMatches,
       },
+    });
+  }
+
+  #reviewAssignment(source: UserStory, story: StoryState): UserStory {
+    if (
+      story.candidateStoryHead === null ||
+      story.reviewedIntegrationHead === null
+    ) {
+      throw new AssignmentPreparationError(
+        `story ${story.id} lacks exact candidate review heads`,
+      );
+    }
+    return Object.freeze({
+      ...source,
+      writable: false,
+      constraints: Object.freeze([
+        ...source.constraints,
+        `Review exactly candidate HEAD ${story.candidateStoryHead} against integration HEAD ${story.reviewedIntegrationHead}.`,
+        "Submit the decision with agentworks_submit_review using those exact controller-supplied heads.",
+      ]),
     });
   }
 }

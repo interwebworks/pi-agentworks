@@ -48,6 +48,8 @@ export interface DetachedControllerSupervisorOptions {
   readonly leaseTtlMs?: number;
   readonly renewIntervalMs?: number;
   readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly inheritEnvironment?: boolean;
+  readonly requireLaunchComposition?: boolean;
   readonly clock?: () => number;
 }
 
@@ -135,6 +137,7 @@ export class DetachedControllerSupervisor {
   readonly #leaseTtlMs: number | null;
   readonly #renewIntervalMs: number | null;
   readonly #environment: Readonly<Record<string, string | undefined>>;
+  readonly #requireLaunchComposition: boolean;
   readonly #clock: () => number;
 
   constructor(options: DetachedControllerSupervisorOptions) {
@@ -167,9 +170,10 @@ export class DetachedControllerSupervisor {
         ? null
         : positiveSafeInteger(options.renewIntervalMs, "renew interval");
     this.#environment = Object.freeze({
-      ...process.env,
+      ...(options.inheritEnvironment === false ? {} : process.env),
       ...options.environment,
     });
+    this.#requireLaunchComposition = options.requireLaunchComposition ?? false;
     if (
       this.#leaseTtlMs !== null &&
       this.#renewIntervalMs !== null &&
@@ -360,6 +364,9 @@ export class DetachedControllerSupervisor {
           ...(this.#renewIntervalMs === null
             ? []
             : ["--renew-interval-ms", String(this.#renewIntervalMs)]),
+          ...(this.#requireLaunchComposition
+            ? ["--require-launch-composition", "1"]
+            : []),
         ],
         {
           detached: true,

@@ -62,11 +62,19 @@ test("a reclaimed pane whose token changed is disconnected", () => {
 });
 
 test("terminal agents are inactive with nothing to restore", () => {
-  for (const status of ["completed", "closed", "failed", "disconnected"]) {
+  for (const status of ["completed", "closed", "failed"]) {
     const result = only(assessAgentConnections([agent({ status })], []));
     assert.equal(result.connection, "inactive");
     assert.equal(result.restoration, "none");
   }
+});
+
+test("a durably disconnected agent still plans exact session restoration", () => {
+  const result = only(
+    assessAgentConnections([agent({ status: "disconnected" })], []),
+  );
+  assert.equal(result.connection, "disconnected");
+  assert.equal(result.restoration, "resume-session");
 });
 
 test("restoration filter returns only the agents needing action", () => {

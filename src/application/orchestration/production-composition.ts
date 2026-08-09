@@ -98,6 +98,7 @@ export function createProductionOrchestrationLoop(
     panes: dependencies.paneAllocator,
     sessions: dependencies.sessions,
     configuration: dependencies.launchConfiguration,
+    roles: dependencies.roleCatalog,
     gitRollback: dependencies.gitRollback,
   });
   const resources = new ControllerOwnedAssignmentResourceProvider({
@@ -116,6 +117,8 @@ export function createProductionOrchestrationLoop(
   const launcher = new SecureStoryAgentLauncherAdapter({
     launcher: dependencies.piLauncher,
     preparation,
+    launchAuthority: dependencies.repository,
+    write: dependencies.write,
     clock: dependencies.clock,
   });
   const effects = new ControllerOrchestrationEffects({

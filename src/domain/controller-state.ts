@@ -42,6 +42,12 @@ export type AgentStatus =
   | "disconnected"
   | "closed";
 
+export interface ManagementPaneOrigin {
+  readonly workspaceId: string;
+  readonly tabId: string;
+  readonly paneId: string;
+}
+
 export interface RunState {
   readonly schemaVersion: typeof CONTROLLER_STATE_SCHEMA_VERSION;
   readonly id: string;
@@ -53,6 +59,8 @@ export interface RunState {
   readonly baseBranch: string;
   readonly integrationBranch: string;
   readonly integrationWorktree: string;
+  /** Immutable launch ownership used for fail-closed management recovery. */
+  readonly managementPaneOrigin?: ManagementPaneOrigin;
   readonly blockedReason: string | null;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -93,6 +101,8 @@ export interface StoryState {
   readonly reviewedIntegrationHead: string | null;
   readonly reviewerAgentId: string | null;
   readonly mergeHead: string | null;
+  /** Present only after controller-owned Git cleanup has completed. */
+  readonly workspaceCleaned?: true;
   readonly blockedReason: string | null;
   readonly blockedFrom: Exclude<
     StoryStatus,
@@ -228,6 +238,16 @@ export const RunStateSchema = Type.Object(
     baseBranch: NonEmptyStateString,
     integrationBranch: NonEmptyStateString,
     integrationWorktree: NonEmptyStateString,
+    managementPaneOrigin: Type.Optional(
+      Type.Object(
+        {
+          workspaceId: NonEmptyStateString,
+          tabId: NonEmptyStateString,
+          paneId: NonEmptyStateString,
+        },
+        { additionalProperties: false },
+      ),
+    ),
     blockedReason: NullableStateString,
     createdAt: StateTimestamp,
     updatedAt: StateTimestamp,
@@ -250,6 +270,7 @@ export const StoryStateSchema = Type.Object(
     reviewedIntegrationHead: NullableStateString,
     reviewerAgentId: NullableStateString,
     mergeHead: NullableStateString,
+    workspaceCleaned: Type.Optional(Type.Literal(true)),
     blockedReason: NullableStateString,
     blockedFrom: Type.Union([Type.Null(), ResumableStoryStatusSchema]),
     createdAt: StateTimestamp,
@@ -332,6 +353,7 @@ export type StoryTransition =
       readonly complexity: ComplexityMode;
     }
   | { readonly type: "story-plan-approved"; readonly at: number }
+  | { readonly type: "story-plan-revision-requested"; readonly at: number }
   | {
       readonly type: "story-assigned";
       readonly at: number;
@@ -563,7 +585,7 @@ export function transitionRun(
         updatedAt: transition.at,
       });
     case "run-blocked":
-      if (current.status !== "active")
+      if (!(current.status === "ready" || current.status === "active"))
         invalid("run", current.status, transition);
       return Object.freeze({
         ...current,
@@ -576,7 +598,9 @@ export function transitionRun(
         invalid("run", current.status, transition);
       return Object.freeze({
         ...current,
-        status: "active",
+        status: current.blockedReason?.startsWith("parent pause:")
+          ? "ready"
+          : "active",
         blockedReason: null,
         updatedAt: transition.at,
       });
@@ -681,6 +705,13 @@ export function transitionStory(
       return Object.freeze({
         ...current,
         status: "ready",
+        updatedAt: transition.at,
+      });
+    case "story-plan-revision-requested":
+      assertStoryStatus(current, transition, ["awaiting-approval"]);
+      return Object.freeze({
+        ...current,
+        status: "planned",
         updatedAt: transition.at,
       });
     case "story-assigned":
@@ -802,7 +833,7 @@ export function transitionStory(
         updatedAt: transition.at,
       });
     case "review-invalidated":
-      assertStoryStatus(current, transition, ["approved"]);
+      assertStoryStatus(current, transition, ["awaiting-review", "approved"]);
       return Object.freeze({
         ...current,
         status: "awaiting-review",

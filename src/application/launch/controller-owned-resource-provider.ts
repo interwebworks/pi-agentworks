@@ -16,6 +16,8 @@ export type ProvisionedAssignmentResources = Omit<
   "writerLeaseActive"
 > & {
   readonly writerLeaseActive?: boolean;
+  /** Stable slot proven by the Herdr allocator and persisted with launch authority. */
+  readonly paneSlot?: number;
 };
 
 export interface AssignmentPrivilegedResourceProvisioner {
@@ -153,6 +155,10 @@ export class ControllerOwnedAssignmentResourceProvider {
           write: this.#write,
           agent: resources.agent,
           paneId: resources.paneId,
+          sessionId: resources.sessionId,
+          ...(resources.paneSlot === undefined
+            ? {}
+            : { slot: resources.paneSlot }),
         });
         resources = Object.freeze({ ...resources, agent: launchedAgent });
       }

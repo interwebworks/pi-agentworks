@@ -43,6 +43,26 @@ export interface ControllerLease {
   readonly expiresAt: number;
 }
 
+export interface ControllerLeaseState {
+  readonly ownerId: string | null;
+  readonly fencingToken: number;
+  readonly expiresAt: number | null;
+}
+
+export interface ControllerLaunchCompositionRecord {
+  readonly runId: string;
+  readonly compositionJson: string;
+  readonly authenticationTag: string;
+  readonly boundAt: number;
+}
+
+export interface BindControllerLaunchCompositionInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly compositionJson: string;
+  readonly authenticationTag: string;
+}
+
 export interface FencedWrite {
   readonly ownerId: string;
   readonly fencingToken: number;
@@ -88,6 +108,91 @@ export interface MaterializeAgentLaunchInput {
   readonly write: FencedWrite;
   readonly agent: AgentState;
   readonly paneId: string;
+  readonly sessionId: string;
+  /** Stable Herdr grid slot. Older launch records may not have this evidence. */
+  readonly slot?: number;
+}
+
+export interface ConfirmAgentLaunchInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly agentId: string;
+  readonly paneId: string;
+  readonly sessionId: string;
+  readonly processIds: readonly number[];
+  readonly commandSha256: string;
+}
+
+export interface AgentLaunchRecord {
+  readonly runId: string;
+  readonly agentId: string;
+  readonly paneId: string;
+  readonly sessionId: string;
+  readonly slot: number | null;
+  readonly status: "materialized" | "confirmed";
+  readonly processIds: readonly number[];
+  readonly commandSha256: string | null;
+  readonly updatedAt: number;
+}
+
+export interface AgentPaneRestorationRecord {
+  readonly runId: string;
+  readonly agentId: string;
+  readonly restorationId: string;
+  readonly operationId: string;
+  readonly slot: number;
+  readonly priorPaneId: string;
+  readonly replacementPaneId: string | null;
+  readonly sessionId: string;
+  readonly status: "reserved" | "bound" | "confirmed";
+  readonly updatedAt: number;
+}
+
+export interface ReserveAgentPaneRestorationInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly agentId: string;
+  readonly restorationId: string;
+  readonly operationId: string;
+  readonly slot: number;
+  readonly priorPaneId: string;
+  readonly sessionId: string;
+}
+
+export interface AgentPaneRestorationRosterEntry {
+  readonly agentId: string;
+  readonly slot: number;
+  readonly paneId: string;
+  readonly sessionId: string;
+}
+
+export interface ReserveAgentPaneRestorationSetInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly operationId: string;
+  readonly expectedRevision: number;
+  readonly expectedRoster: readonly AgentPaneRestorationRosterEntry[];
+  readonly reservations: readonly Omit<
+    ReserveAgentPaneRestorationInput,
+    "write" | "runId" | "operationId"
+  >[];
+}
+
+export interface BindAgentPaneRestorationInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly agentId: string;
+  readonly restorationId: string;
+  readonly replacementPaneId: string;
+}
+
+export interface ConfirmAgentPaneRestorationInput {
+  readonly write: FencedWrite;
+  readonly runId: string;
+  readonly agentId: string;
+  readonly restorationId: string;
+  readonly replacementPaneId: string;
+  readonly sessionId: string;
 }
 
 export interface InitializeRunInput {
@@ -125,6 +230,31 @@ export interface ControllerRepository {
   acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease;
   /** Optional during test-only/in-memory composition; production SQLite implements it. */
   materializeAgentLaunch?(input: MaterializeAgentLaunchInput): AgentState;
+  confirmAgentLaunch(input: ConfirmAgentLaunchInput): AgentLaunchRecord;
+  readAgentLaunch(runId: string, agentId: string): AgentLaunchRecord | null;
+  reserveAgentPaneRestoration?(
+    input: ReserveAgentPaneRestorationInput,
+  ): AgentPaneRestorationRecord;
+  reserveAgentPaneRestorations?(
+    input: ReserveAgentPaneRestorationSetInput,
+  ): readonly AgentPaneRestorationRecord[];
+  bindAgentPaneRestoration?(
+    input: BindAgentPaneRestorationInput,
+  ): AgentPaneRestorationRecord;
+  confirmAgentPaneRestoration?(
+    input: ConfirmAgentPaneRestorationInput,
+  ): AgentPaneRestorationRecord;
+  readAgentPaneRestoration?(
+    runId: string,
+    agentId: string,
+  ): AgentPaneRestorationRecord | null;
+  bindControllerLaunchComposition?(
+    input: BindControllerLaunchCompositionInput,
+  ): ControllerLaunchCompositionRecord;
+  readControllerLaunchComposition?(
+    runId: string,
+  ): ControllerLaunchCompositionRecord | null;
+  readControllerLease?(): ControllerLeaseState;
   renewWriterLease(input: HeldWriterLeaseInput, ttlMs: number): WriterLease;
   releaseWriterLease(input: HeldWriterLeaseInput): WriterLease;
   revokeWriterLease(input: RevokeWriterLeaseInput): WriterLease;
