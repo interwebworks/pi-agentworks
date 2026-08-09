@@ -112,7 +112,7 @@ Controller handling renews active writer leases from progress, resolves each can
 A one-time durable workspace-cleanup marker prevents repeated cleanup effects while dependent stories are admitted.
 The deterministic proof uses SQLite, real disposable Git worktrees, two stories with a dependency, exact controller-authored candidate and merge commits, stale and self-review rejection, raw unauthorized and terminal lifecycle-signal rejection before privileged effects, cleanup, terminal completion, global-cap accounting, and an unchanged original checkout.
 It does not run a real model or Herdr process and is not a live E2E claim.
-A failed review is durably recorded as `changes-requested`, but returning it to a fresh writer and renewed reviewer remains open because current deterministic agent identity cannot safely relaunch a closed prior attempt.
+A failed review is durably recorded as `changes-requested`; scheduling maps it back to a fresh writer attempt with a bounded retry identity, after which candidate creation launches a renewed independent reviewer.
 Crash recovery between writer-lease release, candidate creation, and lifecycle-state commit also remains open and fails closed rather than adopting incomplete evidence.
 
 Add repeated or event-driven orchestration ticks rather than relying on one initial tick.
@@ -145,10 +145,13 @@ Acceptance evidence:
 
 ## 7. Complete management and parent controls
 
-Implement approvals, steering, supervisor directives, pause, resume, restoration, close-all, scrolling, sorting, keyboard navigation, mouse selection, and pane focus.
-Route every mutating action through authenticated controller commands with current fencing and bounded payloads.
+Approvals, steering, supervisor directives, pause, resume, focus, and close now
+route through authenticated controller commands with current fencing and
+bounded payloads. Dashboard scrolling, sorting, keyboard navigation, and mouse
+selection remain presentation work.
 Keep dashboard polling read-only and use separate authenticated identities for mutations.
-Add LOW and NORMAL confirmation flows before those modes can launch production agents.
+LOW and NORMAL confirmation flows now gate orchestration before production
+agents launch.
 
 Acceptance evidence:
 
@@ -220,6 +223,6 @@ Do not remove `pi-subagents` or the legacy Herdr pane extension until Agentworks
    - [x] Prove the deterministic controller-serialized production-Git lifecycle with two dependent stories.
    - [ ] Prove the same flow in an installed real child/Herdr run and add failed-review reassignment plus interrupted-candidate recovery.
 7. [ ] Run the large-grid and restart E2E matrix.
-8. [ ] Add advanced management controls and LOW/NORMAL confirmations.
+8. [x] Add advanced management controls and LOW/NORMAL confirmations.
 9. [x] Integrate safe `pi-subagents` public components.
-10. [ ] Replace host networking, complete documentation, publish, and tag.
+10. [ ] Complete live mediated model egress validation, publish, and tag.

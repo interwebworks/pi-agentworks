@@ -100,7 +100,7 @@ test("parent extension delegates launch commands and tool actions to its gateway
         provider: "local-sglang",
         model: "Qwen/Qwen3.5-2B",
         thinking: "off",
-        allowHostNetwork: true,
+        allowHostNetwork: false,
       },
     },
     { action: "status", runId: "run-1" },

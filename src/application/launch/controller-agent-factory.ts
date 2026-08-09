@@ -56,8 +56,8 @@ export class ControllerAgentFactory implements AssignmentAgentFactory {
     run: RunState,
     snapshot: ControllerSnapshot,
   ): Promise<AgentState> {
-    const agentId = this.#idFactory(kind, role, story, run);
-    const existing = snapshot.agents.find((agent) => agent.id === agentId);
+    const baseAgentId = this.#idFactory(kind, role, story, run);
+    const existing = snapshot.agents.find((agent) => agent.id === baseAgentId);
     if (existing !== undefined) {
       if (
         existing.runId !== run.id ||
@@ -65,11 +65,25 @@ export class ControllerAgentFactory implements AssignmentAgentFactory {
         existing.taskId !== (kind === "project-manager" ? null : story.id)
       ) {
         throw new ControllerAgentFactoryError(
-          `agent id ${agentId} already exists with different identity`,
+          `agent id ${baseAgentId} already exists with different identity`,
         );
       }
-      return Promise.resolve(existing);
+      if (!["completed", "failed", "closed"].includes(existing.status)) {
+        return Promise.resolve(existing);
+      }
     }
+    const retryPrefix = `${baseAgentId}-retry-`;
+    const retryCount = snapshot.agents.reduce((highest, agent) => {
+      if (!agent.id.startsWith(retryPrefix)) return highest;
+      const suffix = Number(agent.id.slice(retryPrefix.length));
+      return Number.isSafeInteger(suffix) && suffix > highest
+        ? suffix
+        : highest;
+    }, 0);
+    const agentId =
+      existing === undefined
+        ? baseAgentId
+        : `${retryPrefix}${String(retryCount + 1)}`;
     return Promise.resolve(
       createAgentState({
         id: agentId,

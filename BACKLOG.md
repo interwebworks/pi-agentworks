@@ -103,7 +103,7 @@ Items remain open until their acceptance evidence is recorded by tests or determ
 - [ ] Implement independent scrolling and sorting for stories, todos, and agents.
 - [ ] Implement color-coded run and attention states.
 - [ ] Implement mouse selection and keyboard navigation that focuses agent panes.
-- [ ] Implement approval, steering, pause, resume, restoration, and close-all actions.
+- [x] Implement approval, steering, pause, resume, focus, and close actions with exact controller/Herdr ownership checks.
 
 ## P8 - Parent Pi extension
 
@@ -145,15 +145,15 @@ Items remain open until their acceptance evidence is recorded by tests or determ
   - [x] Launch the initial composed Project Manager, advisor, and story writer into one incrementally reconciled `Pi Agents` tab with controller-roster ownership.
   - [x] Reconcile materialized-but-unconfirmed secure Pi launches from exact controller-owned pane, session, process, and command evidence without duplicating panes, sessions, leases, or processes.
   - [x] Propagate the active parent Pi model/provider into detached composition, provision its selected private model configuration, and prove authenticated child session/operation events in a real Herdr tab.
-  - [x] Temporarily retain host networking for active model access, accepting that child task tools share the widened network boundary until mediated model egress is implemented.
+  - [x] Keep child task tools isolated by default; only role-declared network requirements may request host networking.
   - [x] Copy only the selected provider credential into each private child configuration so authenticated providers work without exposing unrelated provider credentials.
   - [x] Reconnect and re-authenticate the child bridge after the controller's bounded idle timeout so long model reasoning does not permanently disable tools.
   - [x] Add controller-serialized child-message lifecycle handling and a bounded repeated production tick drain, with server-side exact role/action and active-status authorization plus deterministic two-story dependency proof through controller-authored candidates, exact review, merge, one-time cleanup, dependent admission, and terminal completion.
   - [ ] Prove the repeated lifecycle in a real installed child/Herdr run and add crash recovery for interruption between writer-lease release, candidate creation, and lifecycle-state commit.
-- [ ] Implement bounded idle detection and Project Manager `.` nudges.
-- [ ] Implement reviewer approval and renewed-review rules after relevant changes.
+- [x] Implement bounded idle detection and Project Manager `.` nudges.
+- [x] Implement reviewer approval and renewed-review rules after relevant changes.
   - [x] Add identity-bound `submit-review` handling that resolves exact server-side role authority, rejects terminal capabilities, checks controller-supplied candidate and integration heads against durable and live Git evidence, and rejects stale or self review.
-  - [ ] Return a failed review to a fresh bounded writer attempt, recreate its candidate, and launch a renewed independent reviewer without reusing a closed deterministic agent identity.
+  - [x] Return a failed review to a fresh bounded writer attempt, recreate its candidate, and launch a renewed independent reviewer without reusing a closed deterministic agent identity.
 - [x] Implement Project Manager merge requests and controller-executed integration into the integration worktree.
 - [x] Implement terminal run completion and safe worktree cleanup.
 

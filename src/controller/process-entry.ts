@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   AgentMessageController,
@@ -16,6 +17,7 @@ import type {
   RunState,
   StoryState,
 } from "../domain/controller-state.ts";
+import { transitionRun, transitionStory } from "../domain/controller-state.ts";
 import {
   decodeAuthenticatedAgentMessage,
   InvalidAgentMessageRouteError,
@@ -762,6 +764,333 @@ function parseRunInitializationPayload(payload: JsonValue): {
   };
 }
 
+type ParentControlAction =
+  "approve" | "reject" | "steer" | "pause" | "resume" | "focus" | "close";
+
+interface ParentControlPayload {
+  readonly action: ParentControlAction;
+  readonly agentId?: string;
+  readonly message?: string;
+}
+
+function parseParentControlPayload(payload: JsonValue): ParentControlPayload {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Parent control payload is invalid",
+    );
+  }
+  const record = payload as Readonly<Record<string, JsonValue>>;
+  if (
+    Object.keys(record).some(
+      (key) => !["action", "agentId", "message"].includes(key),
+    )
+  ) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Parent control payload contains unknown fields",
+    );
+  }
+  const action = record.action;
+  const allowed = new Set([
+    "approve",
+    "reject",
+    "steer",
+    "pause",
+    "resume",
+    "focus",
+    "close",
+  ]);
+  if (typeof action !== "string" || !allowed.has(action)) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Parent control action is invalid",
+    );
+  }
+  const agentId = record.agentId;
+  const message = record.message;
+  if (
+    agentId !== undefined &&
+    (typeof agentId !== "string" ||
+      agentId.trim().length === 0 ||
+      agentId.length > 128)
+  ) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Parent control agentId is invalid",
+    );
+  }
+  if (
+    message !== undefined &&
+    (typeof message !== "string" ||
+      message.trim().length === 0 ||
+      message.length > 8192)
+  ) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Parent control message is invalid",
+    );
+  }
+  if (action === "steer" && message === undefined) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Steer requires a message",
+    );
+  }
+  if (action === "focus" && agentId === undefined) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Focus requires an agentId",
+    );
+  }
+  return Object.freeze({
+    action: action as ParentControlAction,
+    ...(agentId === undefined ? {} : { agentId }),
+    ...(message === undefined ? {} : { message }),
+  });
+}
+
+function parentControlEvent(
+  action: ParentControlAction,
+  entityType: ControllerEventInput["entityType"],
+  entityId: string,
+  payload: JsonValue,
+  occurredAt: number,
+): ControllerEventInput {
+  return {
+    eventId: randomUUID(),
+    type: `parent-${action}`,
+    entityType,
+    entityId,
+    payload,
+    occurredAt,
+  };
+}
+
+function executeParentControl(
+  request: {
+    readonly requestId: string;
+    readonly idempotencyKey: string | null;
+    readonly payload: JsonValue;
+  },
+  runtime: ControllerRuntime,
+  runId: string,
+): JsonValue {
+  const control = parseParentControlPayload(request.payload);
+  const snapshot = runtime.repository.loadSnapshot(runId);
+  if (snapshot === null) {
+    throw new ControllerRequestError(
+      "unknown-run",
+      "Run has not been initialized",
+    );
+  }
+  const now = Date.now();
+  let run = snapshot.run;
+  let stories = snapshot.stories;
+  const events: ControllerEventInput[] = [];
+  const targetAgent =
+    control.agentId === undefined
+      ? undefined
+      : snapshot.agents.find((agent) => agent.id === control.agentId);
+  if (control.agentId !== undefined && targetAgent === undefined) {
+    throw new ControllerRequestError(
+      "unknown-agent",
+      "Parent control target agent is not registered",
+    );
+  }
+
+  switch (control.action) {
+    case "approve":
+      if (run.status === "awaiting-approval") {
+        run = transitionRun(run, { type: "plan-approved", at: now });
+        events.push(
+          parentControlEvent(
+            "approve",
+            "run",
+            runId,
+            { status: run.status },
+            now,
+          ),
+        );
+      } else if (run.status !== "ready") {
+        throw new ControllerRequestError(
+          "invalid-state",
+          `Cannot approve a run in ${run.status} state`,
+        );
+      }
+      stories = stories.map((story) => {
+        if (story.status !== "awaiting-approval") return story;
+        const approved = transitionStory(story, {
+          type: "story-plan-approved",
+          at: now,
+        });
+        events.push(
+          parentControlEvent(
+            "approve",
+            "story",
+            story.id,
+            { status: approved.status },
+            now,
+          ),
+        );
+        return approved;
+      });
+      break;
+    case "reject":
+      if (run.status === "awaiting-approval") {
+        run = transitionRun(run, { type: "plan-revision-requested", at: now });
+        events.push(
+          parentControlEvent(
+            "reject",
+            "run",
+            runId,
+            { status: run.status },
+            now,
+          ),
+        );
+      } else if (run.status !== "planning") {
+        throw new ControllerRequestError(
+          "invalid-state",
+          `Cannot reject a run in ${run.status} state`,
+        );
+      }
+      stories = stories.map((story) => {
+        if (story.status !== "awaiting-approval") return story;
+        const revised = transitionStory(story, {
+          type: "story-plan-revision-requested",
+          at: now,
+        });
+        events.push(
+          parentControlEvent(
+            "reject",
+            "story",
+            story.id,
+            { status: revised.status },
+            now,
+          ),
+        );
+        return revised;
+      });
+      break;
+    case "pause":
+      if (run.status === "blocked") break;
+      if (run.status !== "ready" && run.status !== "active") {
+        throw new ControllerRequestError(
+          "invalid-state",
+          `Cannot pause a run in ${run.status} state`,
+        );
+      }
+      run = transitionRun(run, {
+        type: "run-blocked",
+        at: now,
+        reason: `parent pause: ${control.message?.trim() ?? "paused by parent"}`,
+      });
+      events.push(
+        parentControlEvent(
+          "pause",
+          "run",
+          runId,
+          { reason: run.blockedReason },
+          now,
+        ),
+      );
+      break;
+    case "resume":
+      if (run.status === "blocked") {
+        run = transitionRun(run, { type: "run-resumed", at: now });
+        events.push(
+          parentControlEvent(
+            "resume",
+            "run",
+            runId,
+            { status: run.status },
+            now,
+          ),
+        );
+      } else if (run.status !== "ready" && run.status !== "active") {
+        throw new ControllerRequestError(
+          "invalid-state",
+          `Cannot resume a run in ${run.status} state`,
+        );
+      }
+      break;
+    case "close":
+      if (!["completed", "failed", "cancelled"].includes(run.status)) {
+        run = transitionRun(run, {
+          type: "run-cancelled",
+          at: now,
+          reason: `parent close: ${control.message?.trim() ?? "closed by parent"}`,
+        });
+        events.push(
+          parentControlEvent(
+            "close",
+            "run",
+            runId,
+            { status: run.status },
+            now,
+          ),
+        );
+      }
+      break;
+    case "steer":
+    case "focus":
+      if (targetAgent === undefined) {
+        throw new ControllerRequestError(
+          "invalid-payload",
+          `${control.action} requires an agentId`,
+        );
+      }
+      events.push(
+        parentControlEvent(
+          control.action,
+          "agent",
+          targetAgent.id,
+          {
+            ...(control.message === undefined
+              ? {}
+              : { message: control.message }),
+          },
+          now,
+        ),
+      );
+      break;
+  }
+
+  if (events.length > 0) {
+    const result = runtime.repository.commitSnapshot({
+      write: runtime.currentWrite(),
+      runId,
+      expectedRevision: snapshot.revision,
+      idempotencyKey: request.idempotencyKey ?? request.requestId,
+      request: request.payload,
+      run,
+      stories,
+      agents: snapshot.agents,
+      events,
+    });
+    return toJsonValue({
+      accepted: true,
+      action: control.action,
+      revision: result.revision,
+      runStatus: run.status,
+      agentId: targetAgent?.id ?? null,
+      paneId: targetAgent?.paneId ?? null,
+    });
+  }
+  return toJsonValue({
+    accepted: true,
+    action: control.action,
+    revision: snapshot.revision,
+    runStatus: run.status,
+    agentId: targetAgent?.id ?? null,
+    paneId: targetAgent?.paneId ?? null,
+  });
+}
+
 export async function runControllerProcess(
   configuration: ControllerProcessConfiguration,
   dependencies: ControllerProcessDependencies = {},
@@ -914,6 +1243,15 @@ export async function runControllerProcess(
         );
       }
       switch (request.action) {
+        case "parent.control": {
+          if (request.clientKind !== "parent") {
+            throw new ControllerRequestError(
+              "forbidden",
+              "Only a parent client can control a run",
+            );
+          }
+          return executeParentControl(request, runtime, configuration.runId);
+        }
         case "controller.ping": {
           if (!isEmptyObject(request.payload)) {
             throw new ControllerRequestError(

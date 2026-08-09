@@ -18,6 +18,8 @@ import {
   type ParentManagementResult,
 } from "./parent-command.ts";
 import { createDiscoveredParentManagementGateway } from "../infrastructure/controller/parent-management-gateway.ts";
+import { HerdrCliGateway } from "../infrastructure/herdr/herdr-cli-gateway.ts";
+import { PaneFocusService } from "../application/herdr/pane-focus-service.ts";
 import { resolveAgentworksRuntimeRoot } from "../infrastructure/controller/runtime-root.ts";
 import { isControllerRunBackgroundWorkActive } from "../infrastructure/controller/controller-background-work.ts";
 import {
@@ -69,9 +71,45 @@ function createParentGateway(
     configuredHerdrPath === undefined || configuredHerdrPath.length === 0
       ? "herdr"
       : configuredHerdrPath;
+  const herdr = new HerdrCliGateway({ herdrPath });
+  const paneFocus = new PaneFocusService(herdr);
+  const assertOwnedPane = async (
+    runId: string,
+    agentId: string,
+    paneId: string,
+  ) => {
+    const pane = await herdr.getPane(paneId);
+    if (
+      pane.tokens.aw_kind !== "agent" ||
+      pane.tokens.aw_run !== runId ||
+      pane.tokens.aw_agent !== agentId
+    ) {
+      throw new Error(
+        "Herdr pane ownership does not match the controller agent",
+      );
+    }
+    return pane;
+  };
   return createDiscoveredParentManagementGateway(runtimeRoot, process.cwd(), {
     enableLiveComposition: true,
     herdrPath,
+    agentControl: {
+      async focus({ runId, agent }) {
+        if (agent.paneId === null) throw new Error("Agent has no live pane");
+        await assertOwnedPane(runId, agent.id, agent.paneId);
+        await paneFocus.focus(agent.paneId);
+      },
+      async steer({ runId, agent, message }) {
+        if (agent.paneId === null) throw new Error("Agent has no live pane");
+        await assertOwnedPane(runId, agent.id, agent.paneId);
+        await herdr.sendText(agent.paneId, `${message}\n`);
+      },
+      async close({ runId, agent }) {
+        if (agent.paneId === null) return;
+        await assertOwnedPane(runId, agent.id, agent.paneId);
+        await herdr.closePane(agent.paneId);
+      },
+    },
   });
 }
 
@@ -79,10 +117,7 @@ function withLaunchRuntime(
   request: ParentManagementRequest,
   context: Pick<ExtensionContext, "model" | "thinkingLevel"> | undefined,
 ): ParentManagementRequest {
-  if (
-    (request.action !== "launch" && request.action !== "status") ||
-    context?.model === undefined
-  ) {
+  if (request.action !== "launch" || context?.model === undefined) {
     return request;
   }
   const workspaceId = process.env.HERDR_WORKSPACE_ID?.trim();
@@ -104,10 +139,10 @@ function withLaunchRuntime(
       provider: context.model.provider,
       model: context.model.id,
       thinking: context.thinkingLevel ?? "off",
-      // Model calls must reach either a host-local or remote provider. This
-      // temporarily gives the child host networking while egress mediation is
-      // still under development.
-      allowHostNetwork: true,
+      // Keep child task tools network-isolated by default. A role pack may
+      // explicitly request network access; the parent must not widen every
+      // child implicitly.
+      allowHostNetwork: false,
     },
   });
 }
@@ -178,8 +213,8 @@ export function installParentExtension(
         action === "status"
           ? "Agentworks: status requires a run id, e.g. /agentworks status run-123."
           : task.length > 0
-            ? `Agentworks: would launch a ${modeLabel} run for "${task}", but this is not yet wired to the controller runtime.`
-            : "Agentworks: not yet wired to the controller runtime. Provide a task, e.g. /agentworks NORMAL build the thing.",
+            ? `Agentworks: launch of a ${modeLabel} run for "${task}" requires an active controller gateway.`
+            : "Agentworks: an active controller gateway is required. Provide a task, e.g. /agentworks NORMAL build the thing.",
         "info",
       );
       return Promise.resolve();
@@ -191,15 +226,14 @@ export function installParentExtension(
     label: "Agentworks",
     description:
       "Launch, inspect, or steer an Agentworks multi-agent run. Actions: " +
-      "launch, status, approve, reject, steer, pause, resume, focus, close. " +
-      "Not yet wired to the controller runtime.",
+      "launch, status, approve, reject, steer, pause, resume, focus, close.",
     parameters: AgentworksToolInputSchema,
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
       const input = parseAgentworksToolInput(params);
       const result =
         gateway === null
           ? {
-              text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
+              text: `Agentworks action "${input.action}" requires an active controller gateway.`,
             }
           : await gateway
               .execute(withLaunchRuntime(input, context))

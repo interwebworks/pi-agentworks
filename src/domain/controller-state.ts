@@ -353,6 +353,7 @@ export type StoryTransition =
       readonly complexity: ComplexityMode;
     }
   | { readonly type: "story-plan-approved"; readonly at: number }
+  | { readonly type: "story-plan-revision-requested"; readonly at: number }
   | {
       readonly type: "story-assigned";
       readonly at: number;
@@ -584,7 +585,7 @@ export function transitionRun(
         updatedAt: transition.at,
       });
     case "run-blocked":
-      if (current.status !== "active")
+      if (!(current.status === "ready" || current.status === "active"))
         invalid("run", current.status, transition);
       return Object.freeze({
         ...current,
@@ -597,7 +598,9 @@ export function transitionRun(
         invalid("run", current.status, transition);
       return Object.freeze({
         ...current,
-        status: "active",
+        status: current.blockedReason?.startsWith("parent pause:")
+          ? "ready"
+          : "active",
         blockedReason: null,
         updatedAt: transition.at,
       });
@@ -702,6 +705,13 @@ export function transitionStory(
       return Object.freeze({
         ...current,
         status: "ready",
+        updatedAt: transition.at,
+      });
+    case "story-plan-revision-requested":
+      assertStoryStatus(current, transition, ["awaiting-approval"]);
+      return Object.freeze({
+        ...current,
+        status: "planned",
         updatedAt: transition.at,
       });
     case "story-assigned":

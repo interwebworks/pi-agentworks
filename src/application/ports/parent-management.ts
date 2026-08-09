@@ -27,6 +27,7 @@ export interface ParentManagementRequest {
   readonly mode?: "LOW" | "NORMAL" | "HIGH";
   readonly task?: string;
   readonly runId?: string;
+  readonly agentId?: string;
   readonly message?: string;
   readonly runtime?: ParentLaunchRuntime;
 }

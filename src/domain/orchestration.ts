@@ -89,6 +89,7 @@ function schedulingStatus(status: StoryStatus): StorySchedulingStatus {
     case "blocked":
       return "failed";
     case "ready":
+    case "changes-requested":
       return "pending";
     default:
       return "running";

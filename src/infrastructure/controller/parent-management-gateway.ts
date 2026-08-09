@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync } from "node:fs";
 import { resolve } from "node:path";
 import type {
@@ -19,6 +19,7 @@ import {
   transitionStory,
   type ManagementPaneOrigin,
 } from "../../domain/controller-state.ts";
+import type { AgentState } from "../../domain/controller-state.ts";
 import { DetachedControllerSupervisor } from "./detached-controller-supervisor.ts";
 import { GitCliRepositoryInspector } from "../git/git-cli-repository-inspector.ts";
 import {
@@ -150,6 +151,38 @@ function orchestrationPlan(value: JsonValue): readonly string[] {
 interface DeferredInitialResumeResult {
   readonly resumed: boolean;
   readonly agentCount: number;
+}
+
+interface ParentControlResult {
+  readonly action: string;
+  readonly revision: number;
+  readonly runStatus: string;
+  readonly agentId: string | null;
+  readonly paneId: string | null;
+}
+
+function parentControlResult(value: JsonValue): ParentControlResult {
+  const object = record(value, "parent control");
+  if (
+    object.accepted !== true ||
+    typeof object.action !== "string" ||
+    typeof object.revision !== "number" ||
+    !Number.isSafeInteger(object.revision) ||
+    typeof object.runStatus !== "string" ||
+    (object.agentId !== null && typeof object.agentId !== "string") ||
+    (object.paneId !== null && typeof object.paneId !== "string")
+  ) {
+    throw new ParentManagementGatewayError(
+      "controller returned an invalid parent control result",
+    );
+  }
+  return Object.freeze({
+    action: object.action,
+    revision: object.revision,
+    runStatus: object.runStatus,
+    agentId: object.agentId,
+    paneId: object.paneId,
+  });
 }
 
 function deferredInitialResumeResult(
@@ -328,21 +361,65 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
     if (input.action === "launch") {
       if (this.#launchHandler === null) {
         return Object.freeze({
-          text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
+          text: `Agentworks action "${input.action}" requires a configured launch handler.`,
           notificationType: "warning",
         });
       }
       return this.#launchHandler(input);
     }
-    if (input.action !== "status") {
-      return Object.freeze({
-        text: `Agentworks action "${input.action}" is not yet wired to the controller runtime.`,
-        notificationType: "warning",
-      });
-    }
     const runId = requiredRunId(input);
     const client = await this.#clientFactory(runId);
     try {
+      if (input.action !== "status") {
+        const control = parentControlResult(
+          await client.request({
+            action: "parent.control",
+            idempotencyKey: `parent-${createHash("sha256")
+              .update(
+                `${input.action}\0${runId}\0${input.agentId ?? "run"}\0${input.message ?? ""}`,
+              )
+              .digest("hex")
+              .slice(0, 48)}`,
+            payload: {
+              action: input.action,
+              ...(input.agentId === undefined
+                ? {}
+                : { agentId: input.agentId }),
+              ...(input.message === undefined
+                ? {}
+                : { message: input.message }),
+            },
+          }),
+        );
+        let orchestrationWarning = "";
+        if (input.action === "approve" && control.runStatus === "ready") {
+          try {
+            await client.request({
+              action: "orchestration.execute",
+              payload: {},
+            });
+          } catch (error) {
+            if (
+              error instanceof ControllerRemoteError &&
+              error.code === "not-configured"
+            ) {
+              orchestrationWarning = " Live orchestration is not configured.";
+            } else {
+              throw error;
+            }
+          }
+        }
+        const target =
+          control.agentId === null
+            ? "run"
+            : `agent ${control.agentId}${control.paneId === null ? "" : ` (pane ${control.paneId})`}`;
+        return Object.freeze({
+          text: `Agentworks ${input.action} accepted for ${target}; run is ${control.runStatus} at revision ${String(control.revision)}.${orchestrationWarning}`,
+          ...(orchestrationWarning.length > 0
+            ? { notificationType: "warning" as const }
+            : {}),
+        });
+      }
       const { view, plannedActions } = await readControllerDashboard(client);
       const attention = view.supervisorAttention
         .map((item) => `  ! ${item.agentId}: ${item.reason}`)
@@ -648,6 +725,23 @@ export interface DiscoveredParentManagementGatewayOptions {
   readonly controllerRenewIntervalMs?: number;
   readonly controllerStartupTimeoutMs?: number;
   readonly controllerPollIntervalMs?: number;
+  readonly agentControl?: ParentAgentControl;
+}
+
+export interface ParentAgentControl {
+  focus(input: {
+    readonly runId: string;
+    readonly agent: AgentState;
+  }): Promise<void>;
+  steer(input: {
+    readonly runId: string;
+    readonly agent: AgentState;
+    readonly message: string;
+  }): Promise<void>;
+  close(input: {
+    readonly runId: string;
+    readonly agent: AgentState;
+  }): Promise<void>;
 }
 
 export function createDiscoveredParentManagementGateway(
@@ -952,6 +1046,67 @@ export function createDiscoveredParentManagementGateway(
         }
       }
       let result = await gateway.execute(input);
+      if (
+        options.agentControl !== undefined &&
+        input.runId !== undefined &&
+        (input.action === "focus" ||
+          input.action === "steer" ||
+          input.action === "close")
+      ) {
+        const controlClient = await clientFactory(input.runId);
+        try {
+          const current = snapshot(
+            await controlClient.request({
+              action: "snapshot.get",
+              payload: {},
+            }),
+          );
+          const targets =
+            input.action === "close" && input.agentId === undefined
+              ? current.agents.filter((agent) => agent.paneId !== null)
+              : [
+                  current.agents.find(
+                    (candidate) => candidate.id === input.agentId,
+                  ),
+                ];
+          if (targets.some((agent) => agent === undefined)) {
+            throw new ParentManagementGatewayError(
+              `agent ${input.agentId ?? "target"} is not registered`,
+            );
+          }
+          if (input.action === "focus") {
+            const agent = targets[0];
+            if (agent === undefined) {
+              throw new ParentManagementGatewayError(
+                "focus target is not registered",
+              );
+            }
+            await options.agentControl.focus({ runId: input.runId, agent });
+          } else if (input.action === "steer") {
+            const agent = targets[0];
+            if (agent === undefined) {
+              throw new ParentManagementGatewayError(
+                "steer target is not registered",
+              );
+            }
+            await options.agentControl.steer({
+              runId: input.runId,
+              agent,
+              message: input.message?.trim() ?? "",
+            });
+          } else {
+            for (const agent of targets) {
+              if (agent === undefined) continue;
+              await options.agentControl.close({ runId: input.runId, agent });
+            }
+          }
+        } finally {
+          controlClient.close();
+        }
+        result = Object.freeze({
+          text: `${result.text} Herdr action completed.`,
+        });
+      }
       if (restorationText.length > 0) {
         result = Object.freeze({
           text: `${result.text}${restorationText}`,

@@ -33,9 +33,13 @@ Parent sessions use a private default runtime root under `~/.pi/agent/agentworks
 Status requests use the authenticated controller read gateway and launch creates a durable planning run through the authenticated controller.
 In a Herdr/Pi session, HIGH launches create a fail-closed right-side management dashboard and start the composed Project Manager, advisor, and story writer in one `Pi Agents` tab.
 Missing model, workspace, origin-pane, or dashboard evidence is reported as an error rather than an apparent launch.
-Active models temporarily retain the host network namespace, which also widens network access for that child's task tools.
+Child task tools are network-isolated by default. Network access is granted only
+when the selected role explicitly declares `networkAccess: required`; a run-wide
+host-network flag no longer widens every child.
 Each private child configuration receives only the selected provider credential.
-Completion, restart recovery, advanced management actions, and subsequent reviewer orchestration remain under live validation.
+Completion and live Herdr restart/reconnect validation remain deployment checks;
+the parent approval, steering, pause/resume, focus, close, idle-supervision, and
+renewed-review controller paths are implemented and covered at the state boundary.
 See [Project status](#project-status--roadmap) below.
 
 ## Configuration
@@ -123,10 +127,10 @@ Do not uninstall `pi-subagents` or the existing Herdr mirror (`pi-herdr-subagent
 Implementation progress is tracked canonically in [BACKLOG.md](BACKLOG.md); this is a short honest summary, current as of this writing. P0 through most of P6 are implemented and tested (complexity/task contracts, role-pack loading, controller state/persistence/protocol/recovery, Git isolation and worktree lifecycle, role packs and team composition, the Bubblewrap sandbox, and Herdr tab/pane/layout/alert adapters). Not yet implemented:
 
 - **Mode-specific TUI approvals** and Project Manager tuning/supervisor messages from the parent (P3).
-- **Structured agent lifecycle/operation/result/blocker communication** and disconnected-pane detection with resumable session restoration (P6).
-- **Advanced management controls** - the live dashboard now renders run, story, agent, next-action, and attention state, while independent scrolling/sorting, mouse/keyboard focus, and approval/steering/pause/resume/close actions remain (P7).
+- **Structured agent lifecycle/operation/result/blocker communication** and disconnected-pane detection with resumable session restoration (P6) are implemented at the authenticated controller boundary; installed live restart/reconnect proof remains.
+- **Advanced management controls** - authenticated approval/steering/pause/resume/focus/close actions are implemented; independent scrolling/sorting, colorized presentation, mouse/keyboard navigation, and the persistent overlay remain (P7).
 - **The parent Pi extension's real behavior** — status uses the authenticated controller read gateway and launch creates a durable planning run under the private default runtime root (or `AGENTWORKS_RUNTIME_ROOT` when explicitly configured). Herdr/Pi sessions with the required environment now enable the production orchestration provider and request the first HIGH tick; the persistent right-side overlay, narrow-terminal fallback, run restoration, and full child lifecycle remain under validation (P8).
-- **Orchestration** — dependency-aware scheduling, concurrency caps, controller-side writer/reviewer launches, reviewed merge requests, run completion, and safe cleanup are implemented in the core and covered by tests (P9). Remaining P9 work is bounded idle `.` nudging and renewed-review handling, plus composition into the live controller/parent surfaces.
+- **Orchestration** — dependency-aware scheduling, concurrency caps, controller-side writer/reviewer launches, reviewed merge requests, run completion, safe cleanup, bounded idle nudges, and fresh writer/reviewer attempts after rejected review are implemented in the core and covered by tests (P9).
 - **Distribution polish** — this document plus package metadata (P10, in progress), replacing `pi-herdr-subagent-panes.ts` and retiring `pi-subagents` only after live validation, and migrating any still-useful concepts from the prior architect/worker definitions.
 - **Live end-to-end proof** — LOW/NORMAL/HIGH scenario tests, sandbox-escape negative tests, Herdr layout tests at 1/4/6/9/12/16 agents, and a fully green formatting/lint/typecheck/unit/integration/packaging/E2E suite (P11).
 

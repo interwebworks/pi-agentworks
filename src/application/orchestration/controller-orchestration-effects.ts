@@ -153,7 +153,17 @@ export class ControllerOrchestrationEffects implements OrchestrationEffects {
       snapshot.run,
       snapshot,
     );
-    const assigned = transitionStory(story, {
+    const ready =
+      story.status === "changes-requested"
+        ? transitionStory(story, {
+            type: "story-reassignment-requested",
+            at: this.#clock(),
+            reason:
+              "review requested changes; launching a fresh writer attempt",
+            writerLeaseReleased: true,
+          })
+        : story;
+    const assigned = transitionStory(ready, {
       type: "story-assigned",
       at: this.#clock(),
       agentId: launch.agent.id,

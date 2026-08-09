@@ -4,7 +4,11 @@ import {
   type OrchestrationAction,
   type OrchestrationStory,
 } from "../../domain/orchestration.ts";
-import type { RunState, StoryState } from "../../domain/controller-state.ts";
+import {
+  transitionRun,
+  type RunState,
+  type StoryState,
+} from "../../domain/controller-state.ts";
 import { countOccupiedAgentSlots } from "../../domain/scheduling.ts";
 import type {
   ControllerEventInput,
@@ -169,22 +173,52 @@ export class OrchestrationLoop {
 
   async #executeTick(write: FencedWrite): Promise<OrchestrationTickResult> {
     const snapshot = this.#repository.loadSnapshot(this.#runId);
-    if (snapshot === null || TERMINAL_RUN_STATUSES.has(snapshot.run.status)) {
+    if (
+      snapshot === null ||
+      TERMINAL_RUN_STATUSES.has(snapshot.run.status) ||
+      snapshot.run.status === "planning" ||
+      snapshot.run.status === "awaiting-approval" ||
+      snapshot.run.status === "blocked"
+    ) {
       return Object.freeze({ actions: [], committed: false });
     }
 
-    const projected = snapshot.stories.map((story) =>
-      projectStory(story, snapshot, this.#dependenciesByStory),
+    let current: ControllerSnapshot = snapshot;
+    const events: ControllerEventInput[] = [];
+    if (snapshot.run.status === "ready") {
+      const active = transitionRun(snapshot.run, {
+        type: "run-started",
+        at: write.now,
+        integrationWorktreeReady: true,
+      });
+      current = Object.freeze({
+        revision: snapshot.revision,
+        run: active,
+        stories: snapshot.stories,
+        agents: snapshot.agents,
+      });
+      events.push({
+        eventId: `run-started-${this.#runId}-${String(write.now)}`,
+        type: "run-started",
+        entityType: "run",
+        entityId: this.#runId,
+        payload: { integrationWorktreeReady: true },
+        occurredAt: write.now,
+      });
+    }
+
+    const projected = current.stories.map((story) =>
+      projectStory(story, current, this.#dependenciesByStory),
     );
     const actions: OrchestrationAction[] = [];
-    const primaryStory = snapshot.stories[0];
+    const primaryStory = current.stories[0];
     if (this.#initialTeam !== null && primaryStory !== undefined) {
       const launchedRoles = new Set(
-        snapshot.agents
+        current.agents
           .filter((agent) => {
             if (agent.status !== "launching") return true;
             return (
-              this.#repository.readAgentLaunch(snapshot.run.id, agent.id)
+              this.#repository.readAgentLaunch(current.run.id, agent.id)
                 ?.status === "confirmed"
             );
           })
@@ -203,19 +237,17 @@ export class OrchestrationLoop {
         actions.push({ type: "assign-advisor", storyId: primaryStory.id });
       }
     }
-    actions.push(...planOrchestration(projected, snapshot.run.complexity));
+    actions.push(...planOrchestration(projected, current.run.complexity));
     const capacityDecision = reserveAgentLaunchCapacity(
       actions,
-      snapshot.run.complexity,
-      countOccupiedAgentSlots(snapshot.agents),
+      current.run.complexity,
+      countOccupiedAgentSlots(current.agents),
     );
     const admittedActions = capacityDecision.actions;
-    if (admittedActions.length === 0) {
+    if (admittedActions.length === 0 && events.length === 0) {
       return Object.freeze({ actions: admittedActions, committed: false });
     }
 
-    let current: ControllerSnapshot = snapshot;
-    const events: ControllerEventInput[] = [];
     for (const action of admittedActions) {
       const result = await this.#effects.execute(action, current);
       events.push(...result.events);

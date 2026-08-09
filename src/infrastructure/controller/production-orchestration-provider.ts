@@ -6,6 +6,7 @@ import type { ControllerOrchestrationExecutor } from "../../controller/process-e
 import { createProductionOrchestrationLoop } from "../../application/orchestration/production-composition.ts";
 import { drainOrchestrationLoop } from "../../application/orchestration/orchestration-loop.ts";
 import { ControllerAgentLifecycle } from "../../application/orchestration/controller-agent-lifecycle.ts";
+import { IdleAgentSupervisor } from "../../application/orchestration/idle-agent-supervisor.ts";
 import { ControllerAgentFactory } from "../../application/launch/controller-agent-factory.ts";
 import { EnvironmentLaunchConfigurationResolver } from "../../application/launch/environment-launch-configuration.ts";
 import { HerdrAgentPaneAllocator } from "../../application/launch/herdr-agent-pane-allocator.ts";
@@ -374,7 +375,6 @@ export function createProductionOrchestrationProviderFromComposition(
   const childBridgePath = composition.childBridgePath;
   const nodePath = composition.nodePath;
   const launchThinking = composition.thinking ?? "high";
-  const allowHostNetwork = composition.allowHostNetwork ?? false;
   const controllerHomePath = composition.homePath;
 
   return (runtime) =>
@@ -435,11 +435,10 @@ export function createProductionOrchestrationProviderFromComposition(
         );
       }
       const roles = discovery.packs.flatMap((pack) => pack.roles);
-      const runtimeRoles = allowHostNetwork
-        ? roles.map((role) =>
-            Object.freeze({ ...role, networkAccess: "required" as const }),
-          )
-        : roles;
+      // Network access is a role capability, never a run-wide switch. The
+      // legacy host-network flag is retained in launch evidence for restart
+      // compatibility, but it cannot widen isolated roles or task tools.
+      const runtimeRoles = roles;
       const team = composeTeam({
         taskText: `${run.title} ${snapshot.stories
           .flatMap((story) => story.planning?.taskKinds ?? [])
@@ -782,9 +781,18 @@ export function createProductionOrchestrationProviderFromComposition(
         clock: Date.now,
         writerLeaseTtlMs: PRODUCTION_WRITER_LEASE_TTL_MS,
       });
+      const idleSupervisor = new IdleAgentSupervisor({
+        repository: runtime.repository,
+        herdr,
+        clock: Date.now,
+      });
       return {
-        async execute() {
-          const result = await drainOrchestrationLoop(loop, write);
+        async execute(currentWrite) {
+          const current = runtime.repository.loadSnapshot(run.id);
+          if (current !== null) {
+            await idleSupervisor.supervise(current, currentWrite);
+          }
+          const result = await drainOrchestrationLoop(loop, currentWrite);
           return {
             accepted: true,
             committed: result.committed,

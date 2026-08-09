@@ -273,6 +273,16 @@ class FakeClient implements ParentControllerClient {
     if (input.action === "orchestration.plan") {
       return Promise.resolve({ revision: 2, actions: [] });
     }
+    if (input.action === "parent.control") {
+      return Promise.resolve({
+        accepted: true,
+        action: "pause",
+        revision: 2,
+        runStatus: "blocked",
+        agentId: null,
+        paneId: null,
+      });
+    }
     return Promise.resolve([
       {
         eventId: "event-1",
@@ -418,7 +428,7 @@ test("status from another pane restores management beside the controller-recorde
     provider: "local-sglang",
     model: "Qwen/Qwen3.5-2B",
     thinking: "off" as const,
-    allowHostNetwork: true,
+    allowHostNetwork: false,
   };
   let runId: string | undefined;
   try {
@@ -497,7 +507,7 @@ test("management pane failure prevents agents and status retries bootstrap", asy
     provider: "local-sglang",
     model: "Qwen/Qwen3.5-2B",
     thinking: "off" as const,
-    allowHostNetwork: true,
+    allowHostNetwork: false,
   };
   try {
     const gateway = createDiscoveredParentManagementGateway(
@@ -604,7 +614,7 @@ test("status never adopts the caller origin when controller state has none", asy
         provider: "local-sglang",
         model: "Qwen/Qwen3.5-2B",
         thinking: "off",
-        allowHostNetwork: true,
+        allowHostNetwork: false,
       },
     });
     assert.equal(status.notificationType, "warning");
@@ -683,7 +693,7 @@ test("HIGH launch resumes exactly one first tick after dashboard recovery", asyn
       provider: "local-sglang",
       model: "Qwen/Qwen3.5-2B",
       thinking: "off" as const,
-      allowHostNetwork: true,
+      allowHostNetwork: false,
     };
     const gateway = createDiscoveredParentManagementGateway(
       runtimeRoot,
@@ -810,7 +820,7 @@ test("live launch explains that an unborn repository needs an initial commit", a
         provider: "local-sglang",
         model: "Qwen/Qwen3.5-2B",
         thinking: "off",
-        allowHostNetwork: true,
+        allowHostNetwork: false,
       },
     });
     assert.equal(result.notificationType, "error");
@@ -836,7 +846,7 @@ test("a fresh parent Pi surface reconnects active and dead controllers without d
     provider: "local-sglang",
     model: "Qwen/Qwen3.5-2B",
     thinking: "off" as const,
-    allowHostNetwork: true,
+    allowHostNetwork: false,
   };
   let dashboardStarts = 0;
   let managementEnsures = 0;
@@ -1590,13 +1600,13 @@ test("status refuses incomplete startup recovery evidence before restart", async
   }
 });
 
-test("unsupported parent actions remain explicitly gated", async () => {
+test("parent controls round-trip through the controller gateway", async () => {
   const result = await new ControllerParentManagementGateway(
     () => new FakeClient(),
   ).execute({
     action: "pause",
     runId: "run-1",
   });
-  assert.equal(result.notificationType, "warning");
-  assert.match(result.text, /not yet wired/u);
+  assert.equal(result.notificationType, undefined);
+  assert.match(result.text, /pause accepted/u);
 });
