@@ -65,7 +65,7 @@ Heartbeats prove process life but do not postpone a nudge when no meaningful wor
 `ControllerServer` exposes a versioned authenticated Unix socket protocol.
 
 `HerdrGateway` creates, lays out, focuses, labels, restores, and closes tabs and panes.
-The CLI adapter pins Herdr protocol 17, validates the bundled schema before use, executes argument arrays with the host shell disabled, bounds execution time and output, and strictly parses each typed JSON response variant.
+The CLI adapter pins Herdr protocol 19 (Herdr 0.8.x), validates the bundled schema before use, executes argument arrays with the host shell disabled, bounds execution time and output, and strictly parses each typed JSON response variant.
 One-way lifecycle, session, metadata, terminal-run, and literal-text commands are modeled separately from commands that return JSON evidence.
 Terminal command arrays are encoded as individually single-quoted POSIX shell words with embedded-quote handling before being sent to Herdr's interactive shell.
 

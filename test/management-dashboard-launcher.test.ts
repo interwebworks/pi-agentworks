@@ -79,7 +79,7 @@ test("creates the right sibling and starts the bounded live dashboard command", 
       assertCompatible: () => {
         order.push("compatibility");
         return Promise.resolve({
-          protocolVersion: 17,
+          protocolVersion: 19,
           schemaVersion: 1,
           cliVersion: "test",
         });
@@ -137,7 +137,7 @@ test("does not restart an already exact dashboard process", async () => {
     {
       assertCompatible: () =>
         Promise.resolve({
-          protocolVersion: 17,
+          protocolVersion: 19,
           schemaVersion: 1,
           cliVersion: "test",
         }),
@@ -173,7 +173,7 @@ test("refuses to inject the dashboard command over an arbitrary foreground proce
     {
       assertCompatible: () =>
         Promise.resolve({
-          protocolVersion: 17,
+          protocolVersion: 19,
           schemaVersion: 1,
           cliVersion: "test",
         }),

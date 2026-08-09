@@ -924,7 +924,7 @@ const args = process.argv.slice(2);
 if (args[0] === "--version") {
   process.stdout.write("herdr 1.0.0\\n");
 } else if (args[0] === "api" && args[1] === "schema") {
-  process.stdout.write(JSON.stringify({ protocol: 17, schema_version: 1 }));
+  process.stdout.write(JSON.stringify({ protocol: 19, schema_version: 1 }));
 } else if (args[0] === "pane" && args[1] === "list") {
   process.stdout.write(JSON.stringify({ id: "fake-pane-list", result: { type: "pane_list", panes: [${JSON.stringify(pane)}] } }));
 } else if (args[0] === "pane" && args[1] === "process-info") {

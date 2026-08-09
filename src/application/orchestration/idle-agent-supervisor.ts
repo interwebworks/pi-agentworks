@@ -5,7 +5,7 @@ import type {
   ControllerRepository,
   FencedWrite,
 } from "../ports/controller-repository.ts";
-import type { HerdrGateway } from "../ports/herdr-gateway.ts";
+import type { HerdrGateway, HerdrPane } from "../ports/herdr-gateway.ts";
 import {
   assessAgentLiveness,
   transitionAgent,
@@ -13,7 +13,7 @@ import {
 } from "../../domain/controller-state.ts";
 
 export interface IdleAgentSupervisionResult {
-  readonly action: "none" | "nudge" | "escalate";
+  readonly action: "none" | "nudge" | "pane-lost" | "escalate";
   readonly agentId?: string;
   readonly reason?: string;
   readonly revision: number;
@@ -50,13 +50,18 @@ export class IdleAgentSupervisor {
       if (decision.action === "none") continue;
       if (decision.action === "nudge") {
         if (agent.paneId === null) continue;
-        const pane = await this.#herdr.getPane(agent.paneId);
+        let pane: HerdrPane;
+        try {
+          pane = await this.#herdr.getPane(agent.paneId);
+        } catch {
+          return this.#recordPaneLoss(snapshot, write, agent);
+        }
         if (
           pane.tokens.aw_kind !== "agent" ||
           pane.tokens.aw_run !== snapshot.run.id ||
           pane.tokens.aw_agent !== agent.id
         ) {
-          continue;
+          return this.#recordPaneLoss(snapshot, write, agent);
         }
         await this.#herdr.sendText(agent.paneId, ".");
         const nudged = transitionAgent(agent, {
@@ -92,6 +97,30 @@ export class IdleAgentSupervisor {
       });
     }
     return Object.freeze({ action: "none", revision: snapshot.revision });
+  }
+
+  #recordPaneLoss(
+    snapshot: ControllerSnapshot,
+    write: FencedWrite,
+    agent: AgentState,
+  ): IdleAgentSupervisionResult {
+    const disconnected = transitionAgent(agent, {
+      type: "pane-lost",
+      at: Math.max(this.#clock(), agent.updatedAt),
+    });
+    const result = this.#commit(
+      snapshot,
+      write,
+      disconnected,
+      "agent-pane-lost",
+      { reason: "Herdr pane is unavailable or no longer owned" },
+    );
+    return Object.freeze({
+      action: "pane-lost",
+      agentId: agent.id,
+      reason: disconnected.blockedReason ?? "Herdr pane is unavailable",
+      revision: result.revision,
+    });
   }
 
   #commit(

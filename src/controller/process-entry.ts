@@ -1019,6 +1019,18 @@ function executeParentControl(
       }
       break;
     case "close":
+      if (targetAgent !== undefined) {
+        events.push(
+          parentControlEvent(
+            "close",
+            "agent",
+            targetAgent.id,
+            { paneId: targetAgent.paneId },
+            now,
+          ),
+        );
+        break;
+      }
       if (!["completed", "failed", "cancelled"].includes(run.status)) {
         run = transitionRun(run, {
           type: "run-cancelled",
