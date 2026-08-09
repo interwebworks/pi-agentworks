@@ -123,6 +123,22 @@ test("pane restoration is parent-only and forwards exact fenced authority", asyn
   );
 });
 
+test("pane restoration preserves actionable executor failures", async () => {
+  await assert.rejects(
+    executeInjectedPaneRestoration("parent", {}, write, {
+      execute: () => Promise.resolve({}),
+      restorePanes: () =>
+        Promise.reject(new Error("launch evidence is unavailable")),
+    }),
+    (error) => {
+      assert.ok(error instanceof ControllerRequestError);
+      assert.equal(error.code, "restoration-failed");
+      assert.equal(error.message, "launch evidence is unavailable");
+      return true;
+    },
+  );
+});
+
 test("pane restoration serializes behind ordinary orchestration effects", async () => {
   let releaseExecute: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => {

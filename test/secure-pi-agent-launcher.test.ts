@@ -347,6 +347,27 @@ test("composes one fenced interactive Pi process through Bubblewrap and Herdr", 
   }
 });
 
+test("recognizes the Bubblewrap wrapper as evidence for its exact Pi command", async () => {
+  const current = fixture();
+  try {
+    const expectedArgv = [...current.herdr.processArgv];
+    current.herdr.processArgv = [
+      "/usr/bin/bwrap",
+      "--unshare-pid",
+      "--clearenv",
+      "--",
+      ...expectedArgv,
+    ];
+
+    const evidence = await current.launcher.launch(current.request);
+
+    assert.deepEqual(evidence.processIds, [201]);
+    assert.equal(current.herdr.commands.length, 1);
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
 test("read-only roles receive a read-only worktree without a writer lease", async () => {
   const current = fixture();
   try {

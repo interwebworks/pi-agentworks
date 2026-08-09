@@ -526,10 +526,21 @@ export async function executeInjectedPaneRestoration(
       "Agent pane restoration is not configured",
     );
   }
-  return enqueueExecutorOperation(
-    executor,
-    () => executor.restorePanes?.(write) ?? Promise.resolve({}),
-  );
+  return enqueueExecutorOperation(executor, async () => {
+    try {
+      return await (executor.restorePanes?.(write) ?? Promise.resolve({}));
+    } catch (error) {
+      if (error instanceof ControllerRequestError) throw error;
+      const message =
+        error instanceof Error
+          ? error.message.slice(0, 512)
+          : "Agent pane restoration failed";
+      throw new ControllerRequestError(
+        "restoration-failed",
+        message.length > 0 ? message : "Agent pane restoration failed",
+      );
+    }
+  });
 }
 
 export type DeferredInitialResumeReason =

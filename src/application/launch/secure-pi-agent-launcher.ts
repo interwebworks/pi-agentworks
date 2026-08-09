@@ -635,10 +635,21 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     const [nodePath, piCliPath] = expectedArgv;
     const exact = info.foregroundProcesses.filter((process) => {
       const argv = process.argv ?? [];
-      return (
+      const directMatch =
         argv.length === expectedArgv.length &&
-        argv.every((argument, index) => argument === expectedArgv[index])
-      );
+        argv.every((argument, index) => argument === expectedArgv[index]);
+      const executable = argv[0] ?? "";
+      const separator = argv.lastIndexOf("--");
+      const sandboxedCommand = argv.slice(separator + 1);
+      const bubblewrapMatch =
+        (executable === "bwrap" || executable.endsWith("/bwrap")) &&
+        argv.includes("--unshare-pid") &&
+        separator >= 0 &&
+        sandboxedCommand.length === expectedArgv.length &&
+        sandboxedCommand.every(
+          (argument, index) => argument === expectedArgv[index],
+        );
+      return directMatch || bubblewrapMatch;
     });
     const conflictingPi = info.foregroundProcesses.some((process) => {
       const argv = process.argv ?? [];
