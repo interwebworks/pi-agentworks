@@ -669,6 +669,17 @@ export class AgentPaneRestorationController {
         pane.paneId,
       );
       const environment = process?.environment ?? {};
+      // Management panes carry the run id so their lifecycle can be
+      // reconciled, but they are not members of the agent roster. Ignore a
+      // management claim before applying the stricter agent identity checks;
+      // otherwise the management pane is incorrectly reported as spoofed
+      // agent ownership during every restoration tick.
+      if (
+        pane.tokens.aw_kind === "management" ||
+        environment[ENVIRONMENT.kind] === "management"
+      ) {
+        continue;
+      }
       const related =
         pane.tokens.aw_run === request.runId ||
         environment[ENVIRONMENT.run] === request.runId;

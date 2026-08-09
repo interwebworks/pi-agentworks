@@ -484,6 +484,43 @@ test("retains an exact live pane when launch confirmation was interrupted", asyn
   }
 });
 
+test("ignores a run-scoped management pane while restoring agent slots", async () => {
+  const fixture = createFixture();
+  try {
+    fixture.herdr.panes.push({
+      ...pane(0, "w1P:pM"),
+      tabId: "w1P:tM",
+      cwd: "/management",
+      foregroundCwd: "/management",
+      label: "Agentworks Management",
+      tokens: {
+        aw_kind: "management",
+        aw_operation: `management-${RUN_ID}`,
+        aw_run: RUN_ID,
+      },
+    });
+    fixture.herdr.processEvidence.environments.set("w1P:pM", {
+      AGENTWORKS_PANE_KIND: "management",
+      AGENTWORKS_PANE_OPERATION_ID: `management-${RUN_ID}`,
+      AGENTWORKS_RUN_ID: RUN_ID,
+    });
+
+    const result = await fixture.controller().restoreMissingPane({
+      runId: RUN_ID,
+      workspaceId: "w1P",
+      write: fixture.write,
+      metadataSequence: 1,
+    });
+
+    assert.equal(result.restored, true);
+    assert.equal(result.agentId, "agent-1");
+    assert.equal(fixture.herdr.splitRequests.length, 1);
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 test("restores missing slots 1 and 3 in a five-agent roster without moving surviving slots 0, 2, or 4", async () => {
   const fixture = createFixture(5, [0, 2, 4]);
   try {
