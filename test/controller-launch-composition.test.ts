@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,15 +19,14 @@ import {
 const TOKEN = "test-controller-token-with-at-least-thirty-two-bytes";
 
 function liveComposition(runId = "run-composition") {
-  const herdrPath = execFileSync("which", ["herdr"], {
-    encoding: "utf8",
-  }).trim();
   return createControllerLaunchComposition(
     runId,
     {
       AGENTWORKS_ENABLE_LIVE_ORCHESTRATION: "1",
       AGENTWORKS_WORKSPACE_ID: "w1P",
-      AGENTWORKS_HERDR_PATH: herdrPath,
+      // These tests validate immutable composition and authentication. The
+      // live Herdr binary is intentionally not required in the unit runner.
+      AGENTWORKS_HERDR_PATH: process.execPath,
       PI_PROVIDER: "local-sglang",
       PI_MODEL: "Qwen/Qwen3.5-2B",
       PI_REASONING_LEVEL: "off",

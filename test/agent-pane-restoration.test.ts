@@ -256,6 +256,7 @@ interface Fixture {
 function createFixture(
   agentCount = 3,
   survivingSlots: readonly number[] = [0, 2],
+  unconfirmedSlots: readonly number[] = [],
 ): Fixture {
   const directory = mkdtempSync(join(tmpdir(), "agentworks-pane-restore-"));
   const repository = new SqliteControllerRepository(
@@ -339,15 +340,17 @@ function createFixture(
       sessionId: SESSION_IDS[slot] ?? SESSION_IDS[0],
       slot,
     });
-    repository.confirmAgentLaunch({
-      write,
-      runId: RUN_ID,
-      agentId: agent.id,
-      paneId: `w1P:p${String(slot)}`,
-      sessionId: SESSION_IDS[slot] ?? SESSION_IDS[0],
-      processIds: [100 + slot],
-      commandSha256: String(slot).repeat(64),
-    });
+    if (!unconfirmedSlots.includes(slot)) {
+      repository.confirmAgentLaunch({
+        write,
+        runId: RUN_ID,
+        agentId: agent.id,
+        paneId: `w1P:p${String(slot)}`,
+        sessionId: SESSION_IDS[slot] ?? SESSION_IDS[0],
+        processIds: [100 + slot],
+        commandSha256: String(slot).repeat(64),
+      });
+    }
   }
   const herdr = new RosterHerdr(agentCount, survivingSlots);
   const lifecycle = new AgentsTabLifecycle(herdr, herdr.processEvidence);
@@ -449,6 +452,37 @@ function assertNoDuplicates(fixture: Fixture): void {
   assert.deepEqual([...fixture.preparedSessions], [SESSION_IDS[1]]);
   assert.deepEqual([...fixture.launchedWorktrees], ["/worktrees/story-1"]);
 }
+
+test("retains an exact live pane when launch confirmation was interrupted", async () => {
+  const fixture = createFixture(3, [0, 1, 2], [1]);
+  try {
+    const result = await fixture.controller().restoreMissingPane({
+      runId: RUN_ID,
+      workspaceId: "w1P",
+      write: fixture.write,
+      metadataSequence: 1,
+    });
+
+    assert.deepEqual(result, {
+      restored: false,
+      restorations: [],
+      agentId: null,
+      slot: null,
+      priorPaneId: null,
+      replacementPaneId: null,
+      sessionId: null,
+      processIds: [],
+    });
+    assert.equal(
+      fixture.repository.readAgentLaunch(RUN_ID, "agent-1")?.status,
+      "materialized",
+    );
+    assert.equal(fixture.herdr.splitRequests.length, 0);
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
 
 test("restores missing slots 1 and 3 in a five-agent roster without moving surviving slots 0, 2, or 4", async () => {
   const fixture = createFixture(5, [0, 2, 4]);

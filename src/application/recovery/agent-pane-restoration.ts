@@ -639,7 +639,16 @@ export class AgentPaneRestorationController {
         snapshot.run.id,
         agent.id,
       );
-      if (restoration === null && launch.status !== "confirmed") {
+      // A launch is materialized before Herdr starts Pi. If the controller
+      // dies after the process is visible but before confirmation is persisted,
+      // the exact owned pane is still safe to retain. Missing panes continue
+      // through the normal restoration guards below, which fail closed when
+      // prior process evidence is not confirmed.
+      if (
+        restoration === null &&
+        launch.status !== "confirmed" &&
+        agent.paneId === null
+      ) {
         throw new AgentPaneRestorationError(
           `agent ${agent.id} launch is not confirmed for pane restoration`,
         );
