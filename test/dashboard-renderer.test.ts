@@ -52,6 +52,7 @@ const view: DashboardViewModel = {
       attention: "critical",
     },
   ],
+  staleAgents: [],
   supervisorAttention: [
     {
       eventId: "event-1",

@@ -1,4 +1,5 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { formatElapsedDuration } from "./dashboard-view-model.ts";
 import type {
   AgentRow,
   AttentionLevel,
@@ -73,6 +74,16 @@ export function renderDashboard(
     options.refreshedAt === undefined
       ? ""
       : `  refreshed ${new Date(options.refreshedAt).toISOString()}`;
+  const attentionLines = [
+    ...view.supervisorAttention.map(
+      (item) =>
+        `! ${sanitizeDashboardText(item.agentId)}: ${sanitizeDashboardText(item.reason)}`,
+    ),
+    ...view.staleAgents.map(
+      (item) =>
+        `! ${sanitizeDashboardText(item.agentId)}: no meaningful activity for ${formatElapsedDuration(item.staleForMs)}`,
+    ),
+  ];
   const lines = [
     `AGENTWORKS  ${sanitizeDashboardText(view.run.id)}  ${view.run.complexity}  ${view.run.status}  rev ${String(view.revision)}`,
     `${sanitizeDashboardText(view.run.title)}${refreshed}`,
@@ -85,13 +96,8 @@ export function renderDashboard(
     `AGENTS (${String(view.agents.length)})`,
     ...view.agents.map(agentLine),
     "",
-    `ATTENTION (${String(view.supervisorAttention.length)})`,
-    ...(view.supervisorAttention.length === 0
-      ? ["  none"]
-      : view.supervisorAttention.map(
-          (item) =>
-            `! ${sanitizeDashboardText(item.agentId)}: ${sanitizeDashboardText(item.reason)}`,
-        )),
+    `ATTENTION (${String(attentionLines.length)})`,
+    ...(attentionLines.length === 0 ? ["  none"] : attentionLines),
     "",
     "q quit  r refresh",
   ];

@@ -16,6 +16,13 @@ import {
 
 export type AttentionLevel = "normal" | "info" | "warn" | "critical";
 
+/**
+ * A working agent that has not reported meaningful progress for this long is
+ * called out in the dashboard. This is a presentation signal only: it does
+ * not change the agent state or trigger a nudge/escalation.
+ */
+export const DEFAULT_STALE_PROGRESS_THRESHOLD_MS = 5 * 60_000;
+
 const STORY_ATTENTION: Readonly<Record<StoryStatus, AttentionLevel>> =
   Object.freeze({
     planned: "normal",
@@ -76,6 +83,21 @@ export interface AgentRow {
   readonly attention: AttentionLevel;
 }
 
+export interface StaleAgentRow {
+  readonly agentId: string;
+  readonly role: string;
+  readonly status: Extract<AgentStatus, "working" | "reviewing">;
+  readonly staleForMs: number;
+  readonly lastMeaningfulActivityAt: number;
+}
+
+export interface DashboardViewModelOptions {
+  /** Current wall-clock time used for stale-progress detection. */
+  readonly now?: number;
+  /** Override the dashboard-only stale-progress threshold. */
+  readonly staleProgressThresholdMs?: number;
+}
+
 export interface RunHeader {
   readonly id: string;
   readonly title: string;
@@ -89,6 +111,7 @@ export interface DashboardViewModel {
   readonly run: RunHeader;
   readonly stories: readonly StoryRow[];
   readonly agents: readonly AgentRow[];
+  readonly staleAgents: readonly StaleAgentRow[];
   readonly supervisorAttention: readonly SupervisorAttentionRow[];
 }
 
@@ -144,9 +167,62 @@ function buildAgentRow(agent: AgentState): AgentRow {
   });
 }
 
+function buildStaleAgentRows(
+  agents: readonly AgentState[],
+  options: DashboardViewModelOptions,
+): readonly StaleAgentRow[] {
+  const now = options.now;
+  if (now === undefined) return Object.freeze([]);
+  const threshold =
+    options.staleProgressThresholdMs ?? DEFAULT_STALE_PROGRESS_THRESHOLD_MS;
+  if (!Number.isFinite(now) || !Number.isFinite(threshold) || threshold <= 0) {
+    return Object.freeze([]);
+  }
+  return Object.freeze(
+    agents
+      .filter(
+        (
+          agent,
+        ): agent is AgentState & {
+          readonly status: "working" | "reviewing";
+        } => agent.status === "working" || agent.status === "reviewing",
+      )
+      .map((agent) => ({
+        agentId: agent.id,
+        role: agent.roleRuntimeId,
+        status: agent.status,
+        staleForMs: Math.max(0, now - agent.lastMeaningfulActivityAt),
+        lastMeaningfulActivityAt: agent.lastMeaningfulActivityAt,
+      }))
+      .filter((agent) => agent.staleForMs >= threshold)
+      .map((agent) => Object.freeze(agent)),
+  );
+}
+
+export function formatElapsedDuration(milliseconds: number): string {
+  const totalMinutes = Math.floor(Math.max(0, milliseconds) / 60_000);
+  if (totalMinutes < 1) {
+    return `${String(Math.floor(Math.max(0, milliseconds) / 1_000))}s`;
+  }
+  const totalHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (totalHours < 1) return `${String(totalMinutes)}m`;
+  const totalDays = Math.floor(totalHours / 24);
+  if (totalDays < 1) {
+    return minutes === 0
+      ? `${String(totalHours)}h`
+      : `${String(totalHours)}h ${String(minutes)}m`;
+  }
+  const hours = totalHours % 24;
+  return hours === 0
+    ? `${String(totalDays)}d`
+    : `${String(totalDays)}d ${String(hours)}h`;
+}
+
 export function buildDashboardViewModel(
   snapshot: ControllerSnapshot,
   events: readonly ControllerEventRecord[] = [],
+  options: DashboardViewModelOptions = {},
 ): DashboardViewModel {
   return Object.freeze({
     revision: snapshot.revision,
@@ -159,6 +235,7 @@ export function buildDashboardViewModel(
     }),
     stories: Object.freeze(snapshot.stories.map(buildStoryRow)),
     agents: Object.freeze(snapshot.agents.map(buildAgentRow)),
+    staleAgents: buildStaleAgentRows(snapshot.agents, options),
     supervisorAttention: projectSupervisorAttention(events),
   });
 }
