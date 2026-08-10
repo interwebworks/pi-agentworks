@@ -18,6 +18,7 @@ import {
   attentionForAgent,
   attentionForStory,
   buildDashboardViewModel,
+  formatElapsedDuration,
 } from "../src/application/tui/dashboard-view-model.ts";
 
 function run(): RunState {
@@ -249,6 +250,25 @@ test("buildDashboardViewModel projects durable supervisor attention", () => {
       occurredAt: 4_000,
     },
   ]);
+});
+
+test("buildDashboardViewModel reports stale working agents without changing state", () => {
+  const viewModel = buildDashboardViewModel(snapshot(), [], {
+    now: 301_004,
+    staleProgressThresholdMs: 300_000,
+  });
+
+  assert.deepEqual(viewModel.staleAgents, [
+    {
+      agentId: "agent-1",
+      role: "software-development/backend-developer",
+      status: "working",
+      staleForMs: 300_001,
+      lastMeaningfulActivityAt: 1_003,
+    },
+  ]);
+  assert.equal(viewModel.agents[0]?.status, "working");
+  assert.equal(formatElapsedDuration(3_960_000), "1h 6m");
 });
 
 test("buildDashboardViewModel output is deeply frozen", () => {

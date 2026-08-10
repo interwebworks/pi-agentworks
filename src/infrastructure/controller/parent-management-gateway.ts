@@ -24,6 +24,7 @@ import { DetachedControllerSupervisor } from "./detached-controller-supervisor.t
 import { GitCliRepositoryInspector } from "../git/git-cli-repository-inspector.ts";
 import {
   buildDashboardViewModel,
+  formatElapsedDuration,
   type DashboardViewModel,
 } from "../../application/tui/dashboard-view-model.ts";
 import {
@@ -313,6 +314,7 @@ export interface ControllerDashboardData {
 /** Read and validate one bounded dashboard frame from an authenticated client. */
 export async function readControllerDashboard(
   client: ParentControllerClient,
+  now = Date.now(),
 ): Promise<ControllerDashboardData> {
   const current = snapshot(
     await client.request({ action: "snapshot.get", payload: {} }),
@@ -331,7 +333,7 @@ export async function readControllerDashboard(
     await client.request({ action: "orchestration.plan", payload: {} }),
   );
   return Object.freeze({
-    view: buildDashboardViewModel(current, eventRows),
+    view: buildDashboardViewModel(current, eventRows, { now }),
     plannedActions: Object.freeze([...plannedActions]),
   });
 }
@@ -421,9 +423,15 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
         });
       }
       const { view, plannedActions } = await readControllerDashboard(client);
-      const attention = view.supervisorAttention
-        .map((item) => `  ! ${item.agentId}: ${item.reason}`)
-        .join("\n");
+      const attention = [
+        ...view.supervisorAttention.map(
+          (item) => `  ! ${item.agentId}: ${item.reason}`,
+        ),
+        ...view.staleAgents.map(
+          (item) =>
+            `  ! ${item.agentId}: no meaningful activity for ${formatElapsedDuration(item.staleForMs)}`,
+        ),
+      ].join("\n");
       const stories = Object.entries(view.run.storyStatusCounts)
         .filter(([, count]) => count > 0)
         .map(([status, count]) => `${status}=${String(count)}`)
