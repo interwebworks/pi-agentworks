@@ -33,7 +33,7 @@
         "request-cleanup"
       ],
       "writePolicy": "read-only",
-      "networkAccess": "disabled",
+      "networkAccess": "required",
       "defaultThinking": "high"
     },
     {
@@ -55,7 +55,7 @@
         "submit-review"
       ],
       "writePolicy": "read-only",
-      "networkAccess": "disabled",
+      "networkAccess": "required",
       "defaultThinking": "medium"
     },
     {
@@ -74,7 +74,7 @@
       "tools": ["read", "write", "edit", "grep", "find", "ls", "bash"],
       "controllerActions": ["report-status", "contact-manager", "submit-work"],
       "writePolicy": "story-writer",
-      "networkAccess": "disabled",
+      "networkAccess": "required",
       "defaultThinking": "medium"
     }
   ]

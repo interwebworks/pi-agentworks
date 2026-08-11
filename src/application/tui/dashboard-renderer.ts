@@ -6,6 +6,7 @@ import type {
   DashboardViewModel,
   StoryRow,
 } from "./dashboard-view-model.ts";
+import type { RunStatus } from "../../domain/controller-state.ts";
 
 export interface DashboardRenderOptions {
   readonly width: number;
@@ -39,6 +40,21 @@ export function sanitizeDashboardText(value: string): string {
 function fit(value: string, width: number): string {
   if (width <= 0) return "";
   return truncateToWidth(sanitizeDashboardText(value), width, "...");
+}
+
+/** Show only commands that are valid in the current durable run state. */
+export function managementControlHint(status: RunStatus): string {
+  switch (status) {
+    case "awaiting-approval":
+      return "a approve  x reject  f show Pi Agents  r refresh  q quit";
+    case "ready":
+    case "active":
+      return "p pause  f show Pi Agents  r refresh  q quit";
+    case "blocked":
+      return "p resume  f show Pi Agents  r refresh  q quit";
+    default:
+      return "f show Pi Agents  r refresh  q quit";
+  }
 }
 
 function statusSummary(view: DashboardViewModel): string {
@@ -107,7 +123,7 @@ export function renderDashboard(
     `ATTENTION (${String(attentionLines.length)})`,
     ...(attentionLines.length === 0 ? ["  none"] : attentionLines),
     "",
-    "a approve  x reject  p pause/resume  r refresh  q quit",
+    managementControlHint(view.run.status),
   ];
   return Object.freeze(lines.slice(0, height).map((line) => fit(line, width)));
 }

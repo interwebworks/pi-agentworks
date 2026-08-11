@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -106,6 +114,29 @@ function onlyItem<T>(items: readonly T[]): T {
   assert.ok(item);
   return item;
 }
+
+test("built-in roles allow Pi to reach their configured model provider", async () => {
+  const packsDirectory = path.join(process.cwd(), "role-packs");
+  const packDirectories = await readdir(packsDirectory, {
+    withFileTypes: true,
+  });
+  for (const directory of packDirectories.filter((entry) =>
+    entry.isDirectory(),
+  )) {
+    const source = await readFile(
+      path.join(packsDirectory, directory.name, "pack.json"),
+      "utf8",
+    );
+    const parsed = parseRolePackManifest(JSON.parse(source) as unknown);
+    for (const role of parsed.roles) {
+      assert.equal(
+        role.networkAccess,
+        "required",
+        `${parsed.id}/${role.id} must reach its model provider`,
+      );
+    }
+  }
+});
 
 test("validates a strict data-only role pack manifest", () => {
   const parsed = parseRolePackManifest(manifest("software-development"));

@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { renderDashboard } from "../application/tui/dashboard-renderer.ts";
+import { HerdrCliGateway } from "../infrastructure/herdr/herdr-cli-gateway.ts";
 import type { RunStatus } from "../domain/controller-state.ts";
 import {
   createDiscoveredParentClientFactory,
@@ -86,6 +87,7 @@ export async function runManagementDashboard(
   let rendering = false;
   let authenticated = false;
   let currentRunStatus: RunStatus | null = null;
+  let currentAgentPaneIds: readonly string[] = [];
   let controlInFlight = false;
   let notice = "";
   const state: { timer?: NodeJS.Timeout } = {};
@@ -96,6 +98,9 @@ export async function runManagementDashboard(
     try {
       const dashboard = await readControllerDashboard(client);
       currentRunStatus = dashboard.view.run.status;
+      currentAgentPaneIds = dashboard.view.agents
+        .map((agent) => agent.paneId)
+        .filter((paneId): paneId is string => paneId !== null);
       if (!authenticated) {
         writeManagementDashboardReadyProof(
           configuration.readyPath,
@@ -150,12 +155,47 @@ export async function runManagementDashboard(
     }
     await render();
   };
+  const focusPiAgents = async (): Promise<void> => {
+    const paneId = currentAgentPaneIds[0];
+    if (paneId === undefined) {
+      notice = "No live Pi Agents pane is recorded for this run";
+      await render();
+      return;
+    }
+    try {
+      const herdr = new HerdrCliGateway();
+      const pane = await herdr.getPane(paneId);
+      await herdr.focusTab(pane.tabId);
+      notice = "Focused the Pi Agents tab";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notice = `Pi Agents tab is unavailable: ${message.replace(/[\r\n]+/gu, " ").slice(0, 240)}`;
+    }
+    await render();
+  };
+  const controlUnavailable = (action: "approve" | "reject"): void => {
+    notice = `${action} is only available while this run is awaiting approval; it is ${currentRunStatus ?? "still loading"}`;
+    void render().catch(showError);
+  };
   const onInput = (data: Buffer): void => {
     const text = data.toString("utf8");
     if (text === "q" || text === "\u0003") stop();
     if (text === "r") void render().catch(showError);
-    if (text === "a") void control("approve").catch(showError);
-    if (text === "x") void control("reject").catch(showError);
+    if (text === "f") void focusPiAgents().catch(showError);
+    if (text === "a") {
+      if (currentRunStatus === "awaiting-approval") {
+        void control("approve").catch(showError);
+      } else {
+        controlUnavailable("approve");
+      }
+    }
+    if (text === "x") {
+      if (currentRunStatus === "awaiting-approval") {
+        void control("reject").catch(showError);
+      } else {
+        controlUnavailable("reject");
+      }
+    }
     if (text === "p") {
       if (currentRunStatus === "blocked") {
         void control("resume").catch(showError);

@@ -33,9 +33,8 @@ Parent sessions use a private default runtime root under `~/.pi/agent/agentworks
 Status requests use the authenticated controller read gateway and launch creates a durable planning run through the authenticated controller.
 In a Herdr/Pi session, HIGH launches create a fail-closed right-side management dashboard and start the composed Project Manager, advisor, and story writer in one `Pi Agents` tab.
 Missing model, workspace, origin-pane, or dashboard evidence is reported as an error rather than an apparent launch.
-Child task tools are network-isolated by default. Network access is granted only
-when the selected role explicitly declares `networkAccess: required`; a run-wide
-host-network flag no longer widens every child.
+Every built-in role declares `networkAccess: required` because a Pi child must reach its configured model provider.
+A custom role may declare `networkAccess: disabled` only when it runs against an offline provider; otherwise model turns fail before the agent can perform work.
 Each private child configuration receives only the selected provider credential.
 Completion and live Herdr restart/reconnect validation remain deployment checks;
 the parent approval, steering, pause/resume, focus, close, idle-supervision, and

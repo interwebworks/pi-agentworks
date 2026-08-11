@@ -3,6 +3,7 @@ import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { DashboardViewModel } from "../src/application/tui/dashboard-view-model.ts";
 import {
+  managementControlHint,
   renderDashboard,
   sanitizeDashboardText,
 } from "../src/application/tui/dashboard-renderer.ts";
@@ -77,9 +78,22 @@ test("renders useful run, story, agent, next-action, and attention sections", ()
   assert.match(output, /Waiting for review/u);
   assert.match(output, /Next\s+launch-agent:story-1/u);
   assert.match(output, /agent-1: review required/u);
-  assert.match(
-    output,
-    /a approve {2}x reject {2}p pause\/resume {2}r refresh {2}q quit/u,
+  assert.match(output, /p pause {2}f show Pi Agents {2}r refresh {2}q quit/u);
+  assert.doesNotMatch(output, /a approve/u);
+});
+
+test("shows only state-valid workflow controls", () => {
+  assert.equal(
+    managementControlHint("awaiting-approval"),
+    "a approve  x reject  f show Pi Agents  r refresh  q quit",
+  );
+  assert.equal(
+    managementControlHint("blocked"),
+    "p resume  f show Pi Agents  r refresh  q quit",
+  );
+  assert.equal(
+    managementControlHint("completed"),
+    "f show Pi Agents  r refresh  q quit",
   );
 });
 
