@@ -896,6 +896,40 @@ function parentControlEvent(
   };
 }
 
+function blockRunAfterOrchestrationFailure(
+  request: {
+    readonly requestId: string;
+    readonly idempotencyKey: string | null;
+  },
+  runtime: ControllerRuntime,
+  runId: string,
+  error: unknown,
+): void {
+  if (
+    !(error instanceof ControllerRequestError) ||
+    error.code !== "orchestration-failed"
+  ) {
+    return;
+  }
+  const status = runtime.repository.loadSnapshot(runId)?.run.status;
+  if (status !== "ready" && status !== "active") return;
+  executeParentControl(
+    {
+      requestId: `${request.requestId}:orchestration-failure`,
+      idempotencyKey:
+        request.idempotencyKey === null
+          ? null
+          : `${request.idempotencyKey}:orchestration-failure`,
+      payload: {
+        action: "pause",
+        message: `orchestration failure: ${error.message}`,
+      },
+    },
+    runtime,
+    runId,
+  );
+}
+
 function executeParentControl(
   request: {
     readonly requestId: string;
@@ -1345,14 +1379,23 @@ export async function runControllerProcess(
           });
           return toJsonValue(result);
         }
-        case "orchestration.execute": {
+        case "orchestration.execute":
           return executeInjectedOrchestration(
             request.clientKind,
             request.payload,
             runtime.currentWrite(),
             orchestrationExecutor,
-          );
-        }
+          ).catch((error: unknown) => {
+            if (request.clientKind === "management") {
+              blockRunAfterOrchestrationFailure(
+                request,
+                runtime,
+                configuration.runId,
+                error,
+              );
+            }
+            throw error;
+          });
         case "orchestration.restore-panes": {
           return executeInjectedPaneRestoration(
             request.clientKind,

@@ -827,7 +827,9 @@ export function createDiscoveredParentManagementGateway(
         notificationType: "error" as const,
       });
     }
-    if (input.mode === "HIGH" && liveCompositionReady) {
+    // Every live run must retain the exact launch commit. LOW and NORMAL wait
+    // for approval, but their integration worktree is created only afterwards.
+    if (liveCompositionReady) {
       try {
         const repository = new GitCliRepositoryInspector().inspect(root);
         if (repository.headCommit === null) {
