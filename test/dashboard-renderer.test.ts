@@ -14,6 +14,7 @@ const view: DashboardViewModel = {
     title: "Build the live management dashboard",
     complexity: "HIGH",
     status: "active",
+    blockedReason: null,
     storyStatusCounts: {
       planned: 0,
       "awaiting-approval": 0,
@@ -77,6 +78,21 @@ test("renders useful run, story, agent, next-action, and attention sections", ()
   assert.match(output, /Next\s+launch-agent:story-1/u);
   assert.match(output, /agent-1: review required/u);
   assert.match(output, /q quit {2}r refresh/u);
+});
+
+test("renders the durable launch failure that prevented agent panes", () => {
+  const output = renderDashboard(
+    {
+      ...view,
+      run: {
+        ...view.run,
+        status: "blocked",
+        blockedReason: "initial orchestration failed: Integration base changed",
+      },
+    },
+    { width: 120, height: 40 },
+  ).join("\n");
+  assert.match(output, /RUN: initial orchestration failed/u);
 });
 
 test("never exceeds the requested terminal width or height", () => {

@@ -287,6 +287,30 @@ test("stale base evidence and a hijacked existing branch fail closed", () => {
   }
 });
 
+test("creates an integration workspace from the immutable launch commit after the base branch advances", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentworks-workspace-"));
+  try {
+    const repository = createRepository(root);
+    const launchHead = git(repository, "rev-parse", "HEAD");
+    writeFileSync(join(repository, "README.md"), "advanced\n");
+    git(repository, "add", "README.md");
+    git(repository, "commit", "-m", "Advance source branch");
+
+    const result = new GitCliWorkspaceGateway().createIntegrationWorkspace({
+      ...request(
+        repository,
+        join(root, "launch-snapshot-worktree"),
+        launchHead,
+      ),
+      allowBaseBranchAdvance: true,
+    });
+    assert.equal(result.status, "created");
+    assert.equal(result.branchHead, launchHead);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects paths inside the original checkout and unregistered existing paths", () => {
   const root = mkdtempSync(join(tmpdir(), "agentworks-workspace-"));
   try {

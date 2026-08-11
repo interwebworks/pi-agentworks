@@ -75,6 +75,9 @@ export function renderDashboard(
       ? ""
       : `  refreshed ${new Date(options.refreshedAt).toISOString()}`;
   const attentionLines = [
+    ...(view.run.blockedReason === null
+      ? []
+      : [`× RUN: ${sanitizeDashboardText(view.run.blockedReason)}`]),
     ...view.supervisorAttention.map(
       (item) =>
         `! ${sanitizeDashboardText(item.agentId)}: ${sanitizeDashboardText(item.reason)}`,

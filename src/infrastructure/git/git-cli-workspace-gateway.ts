@@ -52,6 +52,7 @@ interface CreateWorkspaceCommand {
   readonly commonGitDirectory: string;
   readonly baseBranch: string;
   readonly expectedBaseHead: string;
+  readonly allowBaseBranchAdvance?: true;
   readonly branch: string;
   readonly worktreePath: string;
 }
@@ -270,6 +271,9 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
       commonGitDirectory: request.commonGitDirectory,
       baseBranch: request.baseBranch,
       expectedBaseHead: request.expectedBaseHead,
+      ...(request.allowBaseBranchAdvance === true
+        ? { allowBaseBranchAdvance: true as const }
+        : {}),
       branch: request.integrationBranch,
       worktreePath: request.worktreePath,
     });
@@ -1149,7 +1153,10 @@ export class GitCliWorkspaceGateway implements GitWorkspaceGateway {
         "--verify",
         `refs/heads/${command.baseBranch}^{commit}`,
       ]);
-      if (baseHead !== command.expectedBaseHead) {
+      if (
+        baseHead !== command.expectedBaseHead &&
+        command.allowBaseBranchAdvance !== true
+      ) {
         throw new GitWorkspaceError(
           `${command.label} base branch HEAD changed before worktree creation`,
         );

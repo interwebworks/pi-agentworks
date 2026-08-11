@@ -57,6 +57,8 @@ export interface RunState {
   readonly repositoryRoot: string;
   readonly originalCheckout: string;
   readonly baseBranch: string;
+  /** Exact commit observed when this run was initialized. */
+  readonly baseCommit?: string;
   readonly integrationBranch: string;
   readonly integrationWorktree: string;
   /** Immutable launch ownership used for fail-closed management recovery. */
@@ -236,6 +238,7 @@ export const RunStateSchema = Type.Object(
     repositoryRoot: NonEmptyStateString,
     originalCheckout: NonEmptyStateString,
     baseBranch: NonEmptyStateString,
+    baseCommit: Type.Optional(NonEmptyStateString),
     integrationBranch: NonEmptyStateString,
     integrationWorktree: NonEmptyStateString,
     managementPaneOrigin: Type.Optional(

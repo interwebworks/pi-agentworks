@@ -351,7 +351,10 @@ function ensureIntegrationWorkspace(
     repositoryRoot: run.repositoryRoot,
     commonGitDirectory: inspection.commonGitDirectory,
     baseBranch: run.baseBranch,
-    expectedBaseHead: inspection.headCommit,
+    expectedBaseHead: run.baseCommit ?? inspection.headCommit,
+    ...(run.baseCommit === undefined
+      ? {}
+      : { allowBaseBranchAdvance: true as const }),
     integrationBranch: run.integrationBranch,
     worktreePath: run.integrationWorktree,
   });

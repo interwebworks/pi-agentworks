@@ -634,6 +634,111 @@ test("status never adopts the caller origin when controller state has none", asy
   }
 });
 
+test("HIGH launch persists an orchestration bootstrap failure for the management dashboard", async () => {
+  const runtimeRoot = mkdtempSync(
+    join(tmpdir(), "agentworks-bootstrap-failure-"),
+  );
+  const repositoryRoot = mkdtempSync(
+    join(tmpdir(), "agentworks-bootstrap-failure-repository-"),
+  );
+  const runId = "run-bootstrap-failure";
+  const controllerProcess = runControllerProcess(
+    { runtimeRoot, runId, ownerId: "bootstrap-failure-controller" },
+    {
+      launchComposition: createControllerLaunchComposition(
+        runId,
+        {},
+        process.cwd(),
+      ),
+      orchestrationFactory: () => ({
+        execute: () =>
+          Promise.reject(
+            new Error(
+              "Integration base branch HEAD changed before worktree creation",
+            ),
+          ),
+      }),
+    },
+  );
+  try {
+    execFileSync("git", ["init", "-b", "main", repositoryRoot]);
+    execFileSync("git", ["-C", repositoryRoot, "config", "user.name", "Test"]);
+    execFileSync("git", [
+      "-C",
+      repositoryRoot,
+      "config",
+      "user.email",
+      "test@example.com",
+    ]);
+    writeFileSync(join(repositoryRoot, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repositoryRoot, "add", "README.md"]);
+    execFileSync("git", ["-C", repositoryRoot, "commit", "-m", "fixture"]);
+    execFileSync("git", ["-C", repositoryRoot, "switch", "-c", "feature"]);
+    await waitFor(() => discoverControllerRuntime(runtimeRoot, runId) !== null);
+    const runtime = {
+      workspaceId: "w1P",
+      origin: { tabId: "w1P:t2", paneId: "w1P:p1" },
+      provider: "local-sglang",
+      model: "Qwen/Qwen3.5-2B",
+      thinking: "off" as const,
+      allowHostNetwork: false,
+    };
+    const gateway = createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      repositoryRoot,
+      {
+        enableLiveComposition: true,
+        managementPaneLauncher: {
+          ensure: () =>
+            Promise.resolve({
+              paneId: "w1P:p2",
+              paneCreated: true,
+              dashboardStarted: true,
+            }),
+        },
+      },
+    );
+    const launched = await gateway.execute({
+      action: "launch",
+      mode: "HIGH",
+      task: "make launch failures visible",
+      runId,
+      runtime,
+    });
+    assert.equal(launched.notificationType, "error");
+    assert.match(launched.text, /is blocked before Pi agents could start/u);
+
+    const client =
+      await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+    let current: ControllerSnapshot;
+    try {
+      current = (await client.request({
+        action: "snapshot.get",
+        payload: {},
+      })) as unknown as ControllerSnapshot;
+    } finally {
+      client.close();
+    }
+    assert.equal(current.run.status, "blocked");
+    assert.equal(current.run.baseBranch, "feature");
+    assert.match(
+      current.run.blockedReason ?? "",
+      /Integration base branch HEAD changed/u,
+    );
+
+    const status = await gateway.execute({ action: "status", runId, runtime });
+    assert.match(
+      status.text,
+      /Blocked: parent pause: initial orchestration failed/u,
+    );
+  } finally {
+    await stopDiscoveredController(runtimeRoot, runId);
+    await controllerProcess;
+    rmSync(runtimeRoot, { recursive: true, force: true });
+    rmSync(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
 test("HIGH launch resumes exactly one first tick after dashboard recovery", async () => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-deferred-tick-"));
   const runId = "run-deferred";

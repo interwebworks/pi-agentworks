@@ -171,6 +171,7 @@ test("buildDashboardViewModel projects run header, story rows, and agent rows", 
     title: "Ship P7",
     complexity: "NORMAL",
     status: "planning",
+    blockedReason: null,
     storyStatusCounts: {
       planned: 1,
       "awaiting-approval": 0,
@@ -227,6 +228,22 @@ test("buildDashboardViewModel projects run header, story rows, and agent rows", 
     paneId: "pane-2",
     attention: "critical",
   });
+});
+
+test("buildDashboardViewModel projects a durable run block reason", () => {
+  const blocked = {
+    ...snapshot(),
+    run: {
+      ...snapshot().run,
+      status: "blocked" as const,
+      blockedReason: "initial orchestration failed: Herdr unavailable",
+    },
+  };
+  const viewModel = buildDashboardViewModel(blocked);
+  assert.equal(
+    viewModel.run.blockedReason,
+    "initial orchestration failed: Herdr unavailable",
+  );
 });
 
 test("buildDashboardViewModel projects durable supervisor attention", () => {

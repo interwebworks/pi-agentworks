@@ -499,7 +499,21 @@ export async function executeInjectedOrchestration(
       "Live orchestration effects are not configured",
     );
   }
-  return enqueueExecutorOperation(executor, () => executor.execute(write));
+  try {
+    return await enqueueExecutorOperation(executor, () =>
+      executor.execute(write),
+    );
+  } catch (error) {
+    if (error instanceof ControllerRequestError) throw error;
+    const detail = (error instanceof Error ? error.message : String(error))
+      .replace(/[\r\n\t]+/gu, " ")
+      .trim()
+      .slice(0, 400);
+    throw new ControllerRequestError(
+      "orchestration-failed",
+      `Orchestration failed: ${detail || "unknown error"}`,
+    );
+  }
 }
 
 export async function executeInjectedPaneRestoration(

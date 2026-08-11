@@ -15,6 +15,11 @@ export interface CreateIntegrationWorkspaceRequest {
   readonly commonGitDirectory: string;
   readonly baseBranch: string;
   readonly expectedBaseHead: string;
+  /**
+   * Allows an integration branch to be created from the run's immutable
+   * launch commit after the user advances the source branch.
+   */
+  readonly allowBaseBranchAdvance?: true;
   readonly integrationBranch: string;
   readonly worktreePath: string;
 }

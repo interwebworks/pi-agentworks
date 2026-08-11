@@ -394,7 +394,11 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
           }),
         );
         let orchestrationWarning = "";
-        if (input.action === "approve" && control.runStatus === "ready") {
+        if (
+          (input.action === "approve" && control.runStatus === "ready") ||
+          (input.action === "resume" &&
+            (control.runStatus === "ready" || control.runStatus === "active"))
+        ) {
           try {
             await client.request({
               action: "orchestration.execute",
@@ -440,6 +444,9 @@ export class ControllerParentManagementGateway implements ParentManagementGatewa
         text: [
           `${view.run.title} [${view.run.complexity}] - ${view.run.status}`,
           `Stories: ${stories || "none"}`,
+          view.run.blockedReason === null
+            ? "Blocked: none"
+            : `Blocked: ${view.run.blockedReason}`,
           `Agents: ${String(view.agents.length)}`,
           `Next: ${plannedActions.length > 0 ? plannedActions.join(", ") : "none"}`,
           attention.length > 0 ? `Attention:\n${attention}` : "Attention: none",
@@ -809,6 +816,8 @@ export function createDiscoveredParentManagementGateway(
     const selectedRuntime = input.runtime;
     const liveCompositionReady =
       options.enableLiveComposition === true && selectedRuntime !== undefined;
+    let launchBaseCommit: string | undefined;
+    let launchBaseBranch: string | undefined;
     if (
       liveCompositionReady &&
       (selectedRuntime.origin === undefined || managementPaneLauncher === null)
@@ -827,6 +836,14 @@ export function createDiscoveredParentManagementGateway(
             notificationType: "error" as const,
           });
         }
+        if (repository.currentBranch === null) {
+          return Object.freeze({
+            text: `Agentworks did not start: ${root} is in detached HEAD state. Check out the branch to use as this run's immutable base, then retry.`,
+            notificationType: "error" as const,
+          });
+        }
+        launchBaseCommit = repository.headCommit;
+        launchBaseBranch = repository.currentBranch;
       } catch (error) {
         return Object.freeze({
           text: `Agentworks did not start: ${root} is not a usable Git checkout (${error instanceof Error ? error.message : String(error)}).`,
@@ -874,7 +891,10 @@ export function createDiscoveredParentManagementGateway(
         complexity: input.mode ?? "NORMAL",
         repositoryRoot: root,
         originalCheckout: root,
-        baseBranch: "main",
+        baseBranch: launchBaseBranch ?? "main",
+        ...(launchBaseCommit === undefined
+          ? {}
+          : { baseCommit: launchBaseCommit }),
         integrationBranch: integrationBranchForRun(runId),
         integrationWorktree: `${runtimeRoot}/worktrees/${runId}/integration-worktree`,
         ...(selectedRuntime?.origin === undefined
@@ -984,15 +1004,48 @@ export function createDiscoveredParentManagementGateway(
             launchedRunId: runId,
           });
         } catch (error) {
-          if (!(
+          if (
             error instanceof ControllerRemoteError &&
             error.code === "not-configured"
-          )) {
-            throw error;
+          ) {
+            return Object.freeze({
+              text: `Agentworks run ${runId} created in planning state for "${task}". Live execution is not configured.${managementPane.text}`,
+              notificationType: "warning" as const,
+              launchedRunId: runId,
+            });
+          }
+          const detail = (
+            error instanceof Error ? error.message : String(error)
+          )
+            .replace(/[\r\n]+/gu, " ")
+            .trim()
+            .slice(0, 400);
+          const reason = `initial orchestration failed: ${detail || "unknown error"}`;
+          try {
+            await client.request({
+              action: "parent.control",
+              idempotencyKey: `orchestration-bootstrap-failure-${createHash(
+                "sha256",
+              )
+                .update(`${runId}\0${reason}`)
+                .digest("hex")
+                .slice(0, 48)}`,
+              payload: { action: "pause", message: reason },
+            });
+          } catch (recordError) {
+            return Object.freeze({
+              text: `Agentworks run ${runId} failed before Pi agents could start, and the management dashboard could not persist that failure: ${detail || "unknown error"}. ${
+                recordError instanceof Error
+                  ? recordError.message
+                  : String(recordError)
+              }.${managementPane.text}`,
+              notificationType: "error" as const,
+              launchedRunId: runId,
+            });
           }
           return Object.freeze({
-            text: `Agentworks run ${runId} created in planning state for "${task}". Live execution is not configured.${managementPane.text}`,
-            notificationType: "warning" as const,
+            text: `Agentworks run ${runId} is blocked before Pi agents could start: ${detail || "unknown error"}.${managementPane.text} Resolve the problem, then resume the run.`,
+            notificationType: "error" as const,
             launchedRunId: runId,
           });
         }

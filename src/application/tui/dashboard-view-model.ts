@@ -103,6 +103,7 @@ export interface RunHeader {
   readonly title: string;
   readonly complexity: RunState["complexity"];
   readonly status: RunState["status"];
+  readonly blockedReason: string | null;
   readonly storyStatusCounts: Readonly<Record<StoryStatus, number>>;
 }
 
@@ -231,6 +232,7 @@ export function buildDashboardViewModel(
       title: snapshot.run.title,
       complexity: snapshot.run.complexity,
       status: snapshot.run.status,
+      blockedReason: snapshot.run.blockedReason,
       storyStatusCounts: countStoryStatuses(snapshot.stories),
     }),
     stories: Object.freeze(snapshot.stories.map(buildStoryRow)),
