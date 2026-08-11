@@ -1,8 +1,10 @@
 import { pathToFileURL } from "node:url";
 import { renderDashboard } from "../application/tui/dashboard-renderer.ts";
+import type { RunStatus } from "../domain/controller-state.ts";
 import {
   createDiscoveredParentClientFactory,
   readControllerDashboard,
+  type ParentControllerClient,
 } from "../infrastructure/controller/parent-management-gateway.ts";
 import { resolveControllerRuntimePaths } from "../infrastructure/controller/controller-runtime.ts";
 import {
@@ -83,6 +85,9 @@ export async function runManagementDashboard(
   let stopped = false;
   let rendering = false;
   let authenticated = false;
+  let currentRunStatus: RunStatus | null = null;
+  let controlInFlight = false;
+  let notice = "";
   const state: { timer?: NodeJS.Timeout } = {};
   const render = async (): Promise<void> => {
     if (rendering || stopped) return;
@@ -90,6 +95,7 @@ export async function runManagementDashboard(
     const client = await createClient(configuration.runId);
     try {
       const dashboard = await readControllerDashboard(client);
+      currentRunStatus = dashboard.view.run.status;
       if (!authenticated) {
         writeManagementDashboardReadyProof(
           configuration.readyPath,
@@ -101,6 +107,7 @@ export async function runManagementDashboard(
         width: process.stdout.columns || 100,
         height: process.stdout.rows || 30,
         plannedActions: dashboard.plannedActions,
+        notice,
         refreshedAt: Date.now(),
       });
       process.stdout.write(`\x1b[2J\x1b[H${lines.map(paint).join("\n")}\x1b[J`);
@@ -117,10 +124,51 @@ export async function runManagementDashboard(
     process.stdin.pause();
     process.stdout.write("\x1b[?25h\x1b[?1049l");
   };
+  const control = async (
+    action: "approve" | "reject" | "pause" | "resume",
+  ): Promise<void> => {
+    if (controlInFlight || stopped) return;
+    controlInFlight = true;
+    let client: ParentControllerClient | undefined;
+    try {
+      client = await createClient(configuration.runId);
+      await client.request({
+        action: "parent.control",
+        idempotencyKey: `management-${action}-${Date.now().toString(36)}`,
+        payload: { action },
+      });
+      if (action === "approve" || action === "resume") {
+        await client.request({ action: "orchestration.execute", payload: {} });
+      }
+      notice = `${action} accepted`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notice = `${action} failed: ${message.replace(/[\r\n]+/gu, " ").slice(0, 240)}`;
+    } finally {
+      client?.close();
+      controlInFlight = false;
+    }
+    await render();
+  };
   const onInput = (data: Buffer): void => {
     const text = data.toString("utf8");
     if (text === "q" || text === "\u0003") stop();
     if (text === "r") void render().catch(showError);
+    if (text === "a") void control("approve").catch(showError);
+    if (text === "x") void control("reject").catch(showError);
+    if (text === "p") {
+      if (currentRunStatus === "blocked") {
+        void control("resume").catch(showError);
+      } else if (
+        currentRunStatus === "ready" ||
+        currentRunStatus === "active"
+      ) {
+        void control("pause").catch(showError);
+      } else {
+        notice = `pause/resume is unavailable while the run is ${currentRunStatus ?? "loading"}`;
+        void render().catch(showError);
+      }
+    }
   };
   const showError = (error: unknown): void => {
     rendering = false;

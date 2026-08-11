@@ -11,6 +11,8 @@ export interface DashboardRenderOptions {
   readonly width: number;
   readonly height: number;
   readonly plannedActions?: readonly string[];
+  /** Brief feedback from a user-initiated management control. */
+  readonly notice?: string;
   readonly refreshedAt?: number;
 }
 
@@ -92,6 +94,9 @@ export function renderDashboard(
     `${sanitizeDashboardText(view.run.title)}${refreshed}`,
     `Stories  ${statusSummary(view)}`,
     `Next     ${next}`,
+    ...(options.notice === undefined || options.notice.length === 0
+      ? []
+      : [`NOTICE   ${sanitizeDashboardText(options.notice)}`]),
     "",
     `STORIES (${String(view.stories.length)})`,
     ...view.stories.map(storyLine),
@@ -102,7 +107,7 @@ export function renderDashboard(
     `ATTENTION (${String(attentionLines.length)})`,
     ...(attentionLines.length === 0 ? ["  none"] : attentionLines),
     "",
-    "q quit  r refresh",
+    "a approve  x reject  p pause/resume  r refresh  q quit",
   ];
   return Object.freeze(lines.slice(0, height).map((line) => fit(line, width)));
 }

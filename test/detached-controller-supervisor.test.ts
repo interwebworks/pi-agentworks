@@ -15,6 +15,7 @@ import {
 import {
   createRunState,
   createStoryState,
+  transitionRun,
 } from "../src/domain/controller-state.ts";
 import type { JsonValue } from "../src/application/ports/controller-repository.ts";
 
@@ -109,17 +110,20 @@ test("detached process serves core read actions and protects shutdown authority"
     });
     await parentClient.connect();
     const now = Date.now();
-    const run = createRunState({
-      id: "run-1",
-      title: "Initialize me",
-      complexity: "NORMAL",
-      repositoryRoot: "/repo",
-      originalCheckout: "/repo",
-      baseBranch: "main",
-      integrationBranch: "agentworks/run-1/integration",
-      integrationWorktree: "/worktree/integration",
-      createdAt: now,
-    });
+    const run = transitionRun(
+      createRunState({
+        id: "run-1",
+        title: "Initialize me",
+        complexity: "HIGH",
+        repositoryRoot: "/repo",
+        originalCheckout: "/repo",
+        baseBranch: "main",
+        integrationBranch: "agentworks/run-1/integration",
+        integrationWorktree: "/worktree/integration",
+        createdAt: now,
+      }),
+      { type: "plan-prepared", at: now },
+    );
     const story = createStoryState({
       id: "story-1",
       runId: "run-1",
@@ -187,6 +191,37 @@ test("detached process serves core read actions and protects shutdown authority"
         payload: {},
       }),
       { runId: "run-1", revision: 1, actions: [] },
+    );
+    assert.deepEqual(
+      await managementClient.request({
+        action: "parent.control",
+        payload: { action: "pause" },
+      }),
+      {
+        accepted: true,
+        action: "pause",
+        revision: 2,
+        runStatus: "blocked",
+        agentId: null,
+        paneId: null,
+      },
+    );
+    await assert.rejects(
+      managementClient.request({
+        action: "parent.control",
+        payload: { action: "close" },
+      }),
+      (error: unknown) =>
+        error instanceof ControllerRemoteError && error.code === "forbidden",
+    );
+    await assert.rejects(
+      managementClient.request({
+        action: "orchestration.execute",
+        payload: {},
+      }),
+      (error: unknown) =>
+        error instanceof ControllerRemoteError &&
+        error.code === "not-configured",
     );
     const managementSnapshot = await managementClient.request({
       action: "snapshot.get",

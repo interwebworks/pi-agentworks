@@ -525,16 +525,22 @@ test("process dependency factory is lazy and can supply the executor", () => {
   assert.equal(called, true);
 });
 
-test("orchestration entrypoint stays fail closed without injection or parent identity", async () => {
+test("orchestration entrypoint permits the authenticated management dashboard but rejects children", async () => {
   await assert.rejects(
     executeInjectedOrchestration("parent", {}, write, undefined),
     /not configured/u,
   );
-  await assert.rejects(
-    executeInjectedOrchestration("management", {}, write, {
+  assert.deepEqual(
+    await executeInjectedOrchestration("management", {}, write, {
       execute: () => Promise.resolve({ accepted: true }),
     }),
-    /Only a parent client/u,
+    { accepted: true },
+  );
+  await assert.rejects(
+    executeInjectedOrchestration("child", {}, write, {
+      execute: () => Promise.resolve({ accepted: true }),
+    }),
+    /Only parent or management clients/u,
   );
   await assert.rejects(
     resumeDeferredInitialOrchestration(

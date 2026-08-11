@@ -77,7 +77,10 @@ test("renders useful run, story, agent, next-action, and attention sections", ()
   assert.match(output, /Waiting for review/u);
   assert.match(output, /Next\s+launch-agent:story-1/u);
   assert.match(output, /agent-1: review required/u);
-  assert.match(output, /q quit {2}r refresh/u);
+  assert.match(
+    output,
+    /a approve {2}x reject {2}p pause\/resume {2}r refresh {2}q quit/u,
+  );
 });
 
 test("renders the durable launch failure that prevented agent panes", () => {

@@ -481,10 +481,10 @@ export async function executeInjectedOrchestration(
   write: FencedWrite,
   executor: ControllerOrchestrationExecutor | undefined,
 ): Promise<JsonValue> {
-  if (clientKind !== "parent") {
+  if (clientKind !== "parent" && clientKind !== "management") {
     throw new ControllerRequestError(
       "forbidden",
-      "Only a parent client can execute orchestration",
+      "Only parent or management clients can execute orchestration",
     );
   }
   if (!isEmptyObject(payload)) {
@@ -1268,27 +1268,35 @@ export async function runControllerProcess(
           "Child clients may only use child.hello and agent.message",
         );
       }
-      if (
-        request.clientKind === "management" &&
-        request.action !== "snapshot.get" &&
-        request.action !== "events.read" &&
-        request.action !== "orchestration.plan"
-      ) {
-        throw new ControllerRequestError(
-          "forbidden",
-          "Management clients may only read snapshots, events, and orchestration plans",
-        );
-      }
-      switch (request.action) {
-        case "parent.control": {
-          if (request.clientKind !== "parent") {
+      if (request.clientKind === "management") {
+        const allowedRead =
+          request.action === "snapshot.get" ||
+          request.action === "events.read" ||
+          request.action === "orchestration.plan" ||
+          request.action === "orchestration.execute";
+        if (request.action === "parent.control") {
+          const control = parseParentControlPayload(request.payload);
+          if (
+            control.action !== "approve" &&
+            control.action !== "reject" &&
+            control.action !== "pause" &&
+            control.action !== "resume"
+          ) {
             throw new ControllerRequestError(
               "forbidden",
-              "Only a parent client can control a run",
+              "Management controls are limited to approve, reject, pause, and resume",
             );
           }
-          return executeParentControl(request, runtime, configuration.runId);
+        } else if (!allowedRead) {
+          throw new ControllerRequestError(
+            "forbidden",
+            "Management clients may only read state or control workflow approval and execution",
+          );
         }
+      }
+      switch (request.action) {
+        case "parent.control":
+          return executeParentControl(request, runtime, configuration.runId);
         case "controller.ping": {
           if (!isEmptyObject(request.payload)) {
             throw new ControllerRequestError(
