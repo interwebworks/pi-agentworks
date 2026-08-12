@@ -96,6 +96,25 @@ function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/**
+ * Git worktrees omit ignored dependency directories. Expose the controller
+ * checkout's already-installed dependencies at the assigned worktree path,
+ * read-only, so package scripts resolve their local binaries without granting
+ * a child access to mutate the canonical checkout.
+ */
+function repositoryDependencyMount(
+  request: PiAgentLaunchRequest,
+):
+  | { readonly sourcePath: string; readonly destinationPath: string }
+  | undefined {
+  const sourcePath = join(request.task.repositoryRoot, "node_modules");
+  if (!existsSync(sourcePath)) return undefined;
+  return Object.freeze({
+    sourcePath: canonicalExisting(sourcePath, "repository dependencies"),
+    destinationPath: join(request.task.worktreePath, "node_modules"),
+  });
+}
+
 function canonicalExisting(path: string, label: string): string {
   if (!isAbsolute(path)) {
     throw new SecurePiAgentLaunchError(`${label} must be absolute`);
@@ -548,6 +567,7 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
       `@${artifacts.task.path}`,
       "Execute this assignment and keep the controller informed.",
     ];
+    const dependencyMount = repositoryDependencyMount(request);
     const plan = this.#sandbox.plan({
       command: nodePath,
       arguments: cliArguments,
@@ -567,6 +587,9 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
         artifacts.capability.path,
         ...request.additionalReadOnlyPaths,
       ],
+      ...(dependencyMount === undefined
+        ? {}
+        : { readOnlyMounts: [dependencyMount] }),
       environment: {
         AGENTWORKS_AGENT_ID: request.task.assignedAgentId,
         AGENTWORKS_CHILD_MODE: "1",

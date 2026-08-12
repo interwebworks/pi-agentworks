@@ -130,6 +130,11 @@ export class BubblewrapSandboxGateway implements SandboxGateway {
       [...request.readOnlyPaths, runtime, command],
       "read-only resource",
     );
+    const readOnlyMounts = this.#canonicalReadOnlyMounts(
+      request.readOnlyMounts ?? [],
+      worktree,
+      session,
+    );
     if (gitMetadata.length === 0) {
       throw new BubblewrapSandboxConfigurationError(
         "at least one Git metadata path is required",
@@ -153,6 +158,17 @@ export class BubblewrapSandboxGateway implements SandboxGateway {
       if (isWithin(worktree, path) || isWithin(session, path)) {
         throw new BubblewrapSandboxConfigurationError(
           "a read-only parent cannot contain a writable boundary",
+        );
+      }
+    }
+    for (const mount of readOnlyMounts) {
+      if (
+        mount.destinationPath === worktree ||
+        mount.destinationPath === session ||
+        isWithin(mount.destinationPath, session)
+      ) {
+        throw new BubblewrapSandboxConfigurationError(
+          "read-only mount cannot replace a writable boundary",
         );
       }
     }
@@ -216,6 +232,9 @@ export class BubblewrapSandboxGateway implements SandboxGateway {
     for (const path of [...gitMetadata, ...readOnly].sort()) {
       arguments_.push("--ro-bind", path, path);
     }
+    for (const mount of readOnlyMounts) {
+      arguments_.push("--ro-bind", mount.sourcePath, mount.destinationPath);
+    }
     arguments_.push("--clearenv");
     for (const [name, value] of Object.entries(childEnvironment).sort(
       ([left], [right]) => left.localeCompare(right),
@@ -250,6 +269,49 @@ export class BubblewrapSandboxGateway implements SandboxGateway {
       canonical.add(canonicalExistingPath(path, `${label} ${String(index)}`));
     }
     return Object.freeze([...canonical]);
+  }
+
+  #canonicalReadOnlyMounts(
+    mounts: readonly {
+      readonly sourcePath: string;
+      readonly destinationPath: string;
+    }[],
+    worktree: string,
+    session: string,
+  ): readonly {
+    readonly sourcePath: string;
+    readonly destinationPath: string;
+  }[] {
+    const destinations = new Set<string>();
+    return Object.freeze(
+      mounts.map((mount, index) => {
+        const sourcePath = canonicalExistingPath(
+          mount.sourcePath,
+          `read-only mount ${String(index)} source`,
+        );
+        if (!isAbsolute(mount.destinationPath)) {
+          throw new BubblewrapSandboxConfigurationError(
+            `read-only mount ${String(index)} destination must be absolute`,
+          );
+        }
+        const destinationPath = resolve(mount.destinationPath);
+        if (
+          !isWithin(destinationPath, worktree) ||
+          isWithin(destinationPath, session)
+        ) {
+          throw new BubblewrapSandboxConfigurationError(
+            `read-only mount ${String(index)} destination must stay in the assigned worktree`,
+          );
+        }
+        if (destinations.has(destinationPath)) {
+          throw new BubblewrapSandboxConfigurationError(
+            "read-only mount destinations must be unique",
+          );
+        }
+        destinations.add(destinationPath);
+        return Object.freeze({ sourcePath, destinationPath });
+      }),
+    );
   }
 
   #environment(

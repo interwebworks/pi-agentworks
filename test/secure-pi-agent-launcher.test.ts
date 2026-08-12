@@ -184,6 +184,7 @@ function fixture() {
   const controllerSocket = join(runtime, "controller.sock");
   const piCli = join(piPackage, "cli.js");
   const childBridge = join(agentworksPackage, "child-bridge.ts");
+  const repositoryDependencies = join(repository, "node_modules");
   const webAccessExtension = join(
     agentworksPackage,
     "node_modules",
@@ -191,6 +192,7 @@ function fixture() {
     "index.ts",
   );
   const nodePath = join(root, "node");
+  mkdirSync(repositoryDependencies);
   writeFileSync(gitMarker, "gitdir: /common/git\n");
   writeFileSync(controllerSocket, "socket-placeholder");
   writeFileSync(piCli, "export {};\n");
@@ -264,6 +266,7 @@ function fixture() {
   ];
   return {
     root,
+    repositoryDependencies,
     request,
     sandbox,
     herdr,
@@ -302,6 +305,15 @@ test("composes one fenced interactive Pi process through Bubblewrap and Herdr", 
     assert.equal(sandbox.environment.OPENAI_API_KEY, undefined);
     assert.deepEqual(current.herdr.commands[0]?.slice(0, 1), ["/bin/sh"]);
     assert.equal(sandbox.readOnlyPaths.includes(evidence.rolePromptPath), true);
+    assert.deepEqual(sandbox.readOnlyMounts, [
+      {
+        sourcePath: current.repositoryDependencies,
+        destinationPath: join(
+          current.request.task.worktreePath,
+          "node_modules",
+        ),
+      },
+    ]);
     assert.equal(sandbox.readOnlyPaths.includes(evidence.taskPromptPath), true);
     assert.equal(
       sandbox.readOnlyPaths.includes(evidence.controllerCapabilityPath),

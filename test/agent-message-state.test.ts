@@ -83,6 +83,21 @@ test("blocked messages preserve the controller's exact blocker detail", () => {
   assert.equal(result.agent.blockedReason, "needs approval");
 });
 
+test("duplicate blocked reports remain idempotent", () => {
+  const blocked = applyAgentMessage(
+    { ...agent(), status: "idle" as const, updatedAt: 2 },
+    agentBlocked("run-1", "agent-1", "blocked", "missing dependencies"),
+    3,
+  ).agent;
+  const repeated = applyAgentMessage(
+    blocked,
+    agentBlocked("run-1", "agent-1", "blocked", "missing dependencies"),
+    4,
+  );
+  assert.equal(repeated.changed, false);
+  assert.equal(repeated.agent, blocked);
+});
+
 test("controller-directed messages cannot mutate child state", () => {
   const message = {
     protocolVersion: 1 as const,

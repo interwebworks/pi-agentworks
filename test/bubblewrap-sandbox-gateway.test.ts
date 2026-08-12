@@ -141,6 +141,51 @@ test(
 );
 
 test(
+  "dependency mounts expose local package tools without write access",
+  { skip: !existsSync("/usr/bin/bwrap") },
+  () => {
+    const paths = fixture();
+    const dependencies = join(paths.root, "dependencies");
+    mkdirSync(dependencies);
+    writeFileSync(join(dependencies, "tool"), "available\n");
+    try {
+      const destination = join(paths.worktree, "node_modules");
+      const plan = gateway().plan({
+        command: "/bin/sh",
+        arguments: [
+          "-c",
+          'test "$(cat "$1/tool")" = available && ! touch "$1/blocked"',
+          "agentworks-dependency-mount",
+          destination,
+        ],
+        assignedWorktreePath: paths.worktree,
+        worktreeAccess: "read-write",
+        gitMetadataPaths: [paths.gitMetadata],
+        sessionPath: paths.session,
+        runtimePath: paths.runtime,
+        readOnlyPaths: [],
+        readOnlyMounts: [
+          { sourcePath: dependencies, destinationPath: destination },
+        ],
+        environment: {},
+        networkPolicy: "isolated",
+      });
+      const result = spawnSync(plan.executablePath, plan.arguments, {
+        encoding: "utf8",
+        timeout: 10_000,
+        maxBuffer: 64 * 1024,
+        shell: false,
+        env: plan.hostEnvironment,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(existsSync(join(dependencies, "blocked")), false);
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "read-only roles cannot mutate their assigned worktree",
   { skip: !existsSync("/usr/bin/bwrap") },
   () => {

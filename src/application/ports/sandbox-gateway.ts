@@ -2,6 +2,13 @@ import type { SandboxEvidence } from "../../domain/execution-policy.ts";
 
 export type SandboxNetworkPolicy = "isolated" | "host";
 
+export interface SandboxReadOnlyMount {
+  /** Existing host path exposed to the child. */
+  readonly sourcePath: string;
+  /** Absolute child path, normally below the assigned worktree. */
+  readonly destinationPath: string;
+}
+
 export interface SandboxLaunchRequest {
   readonly command: string;
   readonly arguments: readonly string[];
@@ -11,6 +18,8 @@ export interface SandboxLaunchRequest {
   readonly sessionPath: string;
   readonly runtimePath: string;
   readonly readOnlyPaths: readonly string[];
+  /** Explicit source-to-destination read-only mounts within the sandbox. */
+  readonly readOnlyMounts?: readonly SandboxReadOnlyMount[];
   readonly environment: Readonly<Record<string, string>>;
   readonly networkPolicy: SandboxNetworkPolicy;
 }

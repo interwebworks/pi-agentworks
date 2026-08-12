@@ -84,6 +84,10 @@ export function applyAgentMessage(
         changed: true,
       });
     case "agent-blocked":
+      // Tool hooks and explicit child status reports can describe the same
+      // blocker. The first report is authoritative; repeats must not turn an
+      // already-visible blocker into a transport failure.
+      if (current.status === "blocked") return unchanged(current);
       return Object.freeze({
         agent: transitionAgent(current, {
           type: "agent-blocked",
