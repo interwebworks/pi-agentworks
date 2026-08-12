@@ -31,6 +31,48 @@ export class InvalidPaneGridSizeError extends Error {
   }
 }
 
+function appendStableSplits(
+  paneCount: number,
+): readonly PaneGridSplit[] | null {
+  // Agent panes materialize one at a time. These first six plans deliberately
+  // share prefixes, so an added agent never turns a prior tiled layout into
+  // narrow slivers. Five panes form two half-height columns plus one full-height
+  // column, maximizing the smallest usable pane rectangle.
+  const splits: readonly PaneGridSplit[] = [
+    Object.freeze({
+      parentSlot: 0,
+      newSlot: 1,
+      direction: "right" as const,
+      ratio: 0.5,
+    }),
+    Object.freeze({
+      parentSlot: 0,
+      newSlot: 2,
+      direction: "down" as const,
+      ratio: 0.5,
+    }),
+    Object.freeze({
+      parentSlot: 1,
+      newSlot: 3,
+      direction: "right" as const,
+      ratio: 0.5,
+    }),
+    Object.freeze({
+      parentSlot: 1,
+      newSlot: 4,
+      direction: "down" as const,
+      ratio: 0.5,
+    }),
+    Object.freeze({
+      parentSlot: 3,
+      newSlot: 5,
+      direction: "down" as const,
+      ratio: 0.5,
+    }),
+  ];
+  return paneCount <= 6 ? splits.slice(0, paneCount - 1) : null;
+}
+
 export function planPaneGrid(paneCount: number): PaneGridPlan {
   if (
     !Number.isSafeInteger(paneCount) ||
@@ -103,6 +145,6 @@ export function planPaneGrid(paneCount: number): PaneGridPlan {
     columnCount,
     cells: Object.freeze(cells),
     rowPaneCounts: Object.freeze(rowPaneCounts),
-    splits: Object.freeze(splits),
+    splits: Object.freeze(appendStableSplits(paneCount) ?? splits),
   });
 }

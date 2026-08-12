@@ -37,6 +37,21 @@ test("plans balanced deterministic grids for every supported pane count", () => 
   }
 });
 
+test("agent-grid plans stay append-stable through a complete six-pane tile", () => {
+  for (let paneCount = 2; paneCount <= 6; paneCount += 1) {
+    assert.deepEqual(
+      planPaneGrid(paneCount).splits.slice(0, -1),
+      planPaneGrid(paneCount - 1).splits,
+    );
+  }
+  assert.deepEqual(planPaneGrid(5).splits, [
+    { parentSlot: 0, newSlot: 1, direction: "right", ratio: 0.5 },
+    { parentSlot: 0, newSlot: 2, direction: "down", ratio: 0.5 },
+    { parentSlot: 1, newSlot: 3, direction: "right", ratio: 0.5 },
+    { parentSlot: 1, newSlot: 4, direction: "down", ratio: 0.5 },
+  ]);
+});
+
 test("uses expected landscape-biased dimensions at representative sizes", () => {
   assert.deepEqual(planPaneGrid(1).rowPaneCounts, [1]);
   assert.deepEqual(planPaneGrid(2).rowPaneCounts, [2]);

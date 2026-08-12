@@ -553,7 +553,7 @@ test("restores missing slots 1 and 3 in a five-agent roster without moving survi
       fixture.herdr.splitRequests.map(
         (request) => request.environment?.AGENTWORKS_PANE_SLOT,
       ),
-      ["3", "1"],
+      ["1", "3"],
     );
     assert.equal(fixture.herdr.createRequests.length, 0);
     assert.equal(fixture.herdr.panes.length, 5);
