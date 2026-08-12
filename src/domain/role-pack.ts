@@ -22,6 +22,10 @@ const IMPLEMENTED_CHILD_TOOLS = new Set([
   "grep",
   "find",
   "ls",
+  "web_search",
+  "fetch_content",
+  "get_search_content",
+  "source_check",
 ]);
 
 const IMPLEMENTED_CHILD_CONTROLLER_ACTIONS = new Set([

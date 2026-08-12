@@ -8,10 +8,19 @@ import type {
 } from "./dashboard-view-model.ts";
 import type { RunStatus } from "../../domain/controller-state.ts";
 
+export type DashboardSection = "stories" | "agents" | "attention";
+
+export interface DashboardSelection {
+  readonly section: DashboardSection;
+  readonly index: number;
+}
+
 export interface DashboardRenderOptions {
   readonly width: number;
   readonly height: number;
   readonly plannedActions?: readonly string[];
+  /** The keyboard-selected row in the live management dashboard. */
+  readonly selection?: DashboardSelection;
   /** Brief feedback from a user-initiated management control. */
   readonly notice?: string;
   readonly refreshedAt?: number;
@@ -65,15 +74,19 @@ function statusSummary(view: DashboardViewModel): string {
   return counts.length === 0 ? "no stories" : counts;
 }
 
-function storyLine(story: StoryRow): string {
-  const owner = sanitizeDashboardText(story.assignedAgentId ?? "unassigned");
-  return `${ATTENTION_MARKER[story.attention]} ${story.status.padEnd(18)} ${owner.padEnd(14)} ${sanitizeDashboardText(story.title)}  [${sanitizeDashboardText(story.branchName)}]`;
+function rowMarker(level: AttentionLevel, selected: boolean): string {
+  return selected ? ">" : ATTENTION_MARKER[level];
 }
 
-function agentLine(agent: AgentRow): string {
+function storyLine(story: StoryRow, selected: boolean): string {
+  const owner = sanitizeDashboardText(story.assignedAgentId ?? "unassigned");
+  return `${rowMarker(story.attention, selected)} ${story.status.padEnd(18)} ${owner.padEnd(14)} ${sanitizeDashboardText(story.title)}  [${sanitizeDashboardText(story.branchName)}]`;
+}
+
+function agentLine(agent: AgentRow, selected: boolean): string {
   const operation = sanitizeDashboardText(agent.currentOperation ?? "idle");
   const pane = sanitizeDashboardText(agent.paneId ?? "no pane");
-  return `${ATTENTION_MARKER[agent.attention]} ${agent.status.padEnd(12)} ${sanitizeDashboardText(agent.id).padEnd(16)} ${sanitizeDashboardText(agent.role)}  ${operation}  [${pane}]`;
+  return `${rowMarker(agent.attention, selected)} ${agent.status.padEnd(12)} ${sanitizeDashboardText(agent.id).padEnd(16)} ${sanitizeDashboardText(agent.role)}  ${operation}  [${pane}]`;
 }
 
 /** Render a bounded, terminal-safe snapshot for the live management pane. */
@@ -104,7 +117,12 @@ export function renderDashboard(
       (item) =>
         `! ${sanitizeDashboardText(item.agentId)}: no meaningful activity for ${formatElapsedDuration(item.staleForMs)}`,
     ),
-  ];
+  ].map((line, index) =>
+    options.selection?.section === "attention" &&
+    options.selection.index === index
+      ? `>${line.slice(1)}`
+      : line,
+  );
   const lines = [
     `AGENTWORKS  ${sanitizeDashboardText(view.run.id)}  ${view.run.complexity}  ${view.run.status}  rev ${String(view.revision)}`,
     `${sanitizeDashboardText(view.run.title)}${refreshed}`,
@@ -115,14 +133,27 @@ export function renderDashboard(
       : [`NOTICE   ${sanitizeDashboardText(options.notice)}`]),
     "",
     `STORIES (${String(view.stories.length)})`,
-    ...view.stories.map(storyLine),
+    ...view.stories.map((story, index) =>
+      storyLine(
+        story,
+        options.selection?.section === "stories" &&
+          options.selection.index === index,
+      ),
+    ),
     "",
     `AGENTS (${String(view.agents.length)})`,
-    ...view.agents.map(agentLine),
+    ...view.agents.map((agent, index) =>
+      agentLine(
+        agent,
+        options.selection?.section === "agents" &&
+          options.selection.index === index,
+      ),
+    ),
     "",
     `ATTENTION (${String(attentionLines.length)})`,
     ...(attentionLines.length === 0 ? ["  none"] : attentionLines),
     "",
+    "↑/k ↓/j row  ←/h →/l section  enter focus agent",
     managementControlHint(view.run.status),
   ];
   return Object.freeze(lines.slice(0, height).map((line) => fit(line, width)));

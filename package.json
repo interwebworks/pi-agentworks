@@ -36,6 +36,7 @@
   "dependencies": {
     "jiti": "2.7.0",
     "pi-subagents": "0.38.0",
+    "pi-web-access": "0.22.0",
     "typebox": "^1.1.38"
   },
   "scripts": {
@@ -51,14 +52,14 @@
     "node": ">=24.0.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.83.0 <0.84.0",
-    "@earendil-works/pi-coding-agent": ">=0.83.0 <0.84.0",
-    "@earendil-works/pi-tui": ">=0.83.0 <0.84.0"
+    "@earendil-works/pi-ai": ">=0.84.0 <0.85.0",
+    "@earendil-works/pi-coding-agent": ">=0.84.0 <0.85.0",
+    "@earendil-works/pi-tui": ">=0.84.0 <0.85.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.83.0",
-    "@earendil-works/pi-coding-agent": "^0.83.0",
-    "@earendil-works/pi-tui": "^0.83.0",
+    "@earendil-works/pi-ai": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-tui": "0.84.1",
     "@eslint/js": "^9.0.0",
     "@types/node": "^24.0.0",
     "eslint": "^9.0.0",
@@ -67,6 +68,11 @@
     "typescript-eslint": "^8.0.0"
   },
   "bundledDependencies": [
-    "pi-subagents"
+    "pi-subagents",
+    "pi-web-access"
+  ],
+  "bundleDependencies": [
+    "pi-subagents",
+    "pi-web-access"
   ]
 }

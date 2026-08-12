@@ -54,7 +54,9 @@ Authentication failure requests Pi shutdown and keeps a tool-call lockdown activ
 Child mode does not register the parent `agentworks` management tool, preventing recursive team creation.
 
 The child runs with Pi extension discovery disabled, so role packs are restricted to the exact built-in Pi tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`.
-A manifest that declares an unavailable extension tool is rejected before launch instead of creating an inert agent.
+Research roles may additionally request the explicitly loaded bundled `pi-web-access` tools: `web_search`, `fetch_content`, `get_search_content`, and `source_check`.
+A manifest that declares any other unavailable extension tool is rejected before launch instead of creating an inert agent.
+The launcher loads `pi-web-access` only when an assigned research task requests one of those tools.
 Every built-in role has `bash` for diagnostics and validation.
 Read-only roles still receive a kernel-enforced read-only worktree and Git metadata boundary.
 

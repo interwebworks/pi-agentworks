@@ -19,7 +19,11 @@ test("detached controller runtime dependencies are production dependencies", () 
   assert.equal(dependencies.typebox, "^1.1.38");
   assert.equal(dependencies.jiti, "2.7.0");
   assert.equal(dependencies["pi-subagents"], "0.38.0");
-  assert.deepEqual(packageManifest.bundledDependencies, ["pi-subagents"]);
+  assert.equal(dependencies["pi-web-access"], "0.22.0");
+  assert.deepEqual(packageManifest.bundledDependencies, [
+    "pi-subagents",
+    "pi-web-access",
+  ]);
   assert.equal(devDependencies.typebox, undefined);
   assert.equal(devDependencies.jiti, undefined);
   assert.equal(devDependencies["pi-subagents"], undefined);

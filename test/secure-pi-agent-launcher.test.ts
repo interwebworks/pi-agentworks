@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import type { HerdrPane } from "../src/application/ports/herdr-gateway.ts";
 import type { PiAgentLaunchRequest } from "../src/application/ports/pi-agent-launcher.ts";
@@ -184,11 +184,19 @@ function fixture() {
   const controllerSocket = join(runtime, "controller.sock");
   const piCli = join(piPackage, "cli.js");
   const childBridge = join(agentworksPackage, "child-bridge.ts");
+  const webAccessExtension = join(
+    agentworksPackage,
+    "node_modules",
+    "pi-web-access",
+    "index.ts",
+  );
   const nodePath = join(root, "node");
   writeFileSync(gitMarker, "gitdir: /common/git\n");
   writeFileSync(controllerSocket, "socket-placeholder");
   writeFileSync(piCli, "export {};\n");
   writeFileSync(childBridge, "export default () => {};\n");
+  mkdirSync(dirname(webAccessExtension), { recursive: true });
+  writeFileSync(webAccessExtension, "export default () => {};\n");
   writeFileSync(nodePath, "#!/bin/sh\n");
   chmodSync(nodePath, 0o755);
   const sandbox = new FakeSandbox();
@@ -410,6 +418,50 @@ test("read-only roles receive a read-only worktree without a writer lease", asyn
     assert.ok(sandboxRequest);
     assert.equal(sandboxRequest.worktreeAccess, "read-only");
     assert.equal(sandboxRequest.networkPolicy, "isolated");
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("research web tools load only the bundled web-access extension", async () => {
+  const current = fixture();
+  try {
+    const webAccessExtension = join(
+      current.request.agentworksPackagePath,
+      "node_modules",
+      "pi-web-access",
+      "index.ts",
+    );
+    current.request = {
+      ...current.request,
+      task: {
+        ...current.request.task,
+        allowedTools: ["read", "web_search", "fetch_content"],
+      },
+      role: {
+        ...current.request.role,
+        tools: ["read", "web_search", "fetch_content"],
+      },
+    };
+    current.herdr.processArgv = current.herdr.processArgv.flatMap(
+      (argument) => {
+        if (
+          argument ===
+          "read,edit,write,bash,agentworks_report_status,agentworks_submit_work"
+        ) {
+          return "read,web_search,fetch_content,agentworks_report_status,agentworks_submit_work";
+        }
+        if (argument === current.request.childBridgePath) {
+          return [argument, "--extension", webAccessExtension];
+        }
+        return argument;
+      },
+    );
+
+    await current.launcher.launch(current.request);
+    const sandbox = current.sandbox.requests[0];
+    assert.ok(sandbox);
+    assert.equal(sandbox.arguments.includes(webAccessExtension), true);
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }

@@ -36,6 +36,12 @@ const SESSION_ID_PATTERN =
 const PROVIDER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
 const CHILD_AUTH_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const RESEARCH_WEB_TOOL_NAMES = new Set([
+  "web_search",
+  "fetch_content",
+  "get_search_content",
+  "source_check",
+]);
 
 function childBridgeToolNames(
   controllerActions: readonly string[],
@@ -460,6 +466,19 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
       request.childBridgePath,
       "Agentworks child bridge path",
     );
+    const webAccessExtensionPath = request.task.allowedTools.some((tool) =>
+      RESEARCH_WEB_TOOL_NAMES.has(tool),
+    )
+      ? canonicalExisting(
+          join(
+            agentworksPackagePath,
+            "node_modules",
+            "pi-web-access",
+            "index.ts",
+          ),
+          "research web access extension",
+        )
+      : null;
     if (!isWithin(piCliPath, piPackagePath)) {
       throw new SecurePiAgentLaunchError(
         "Pi CLI must belong to the approved Pi package",
@@ -468,6 +487,14 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
     if (!isWithin(childBridgePath, agentworksPackagePath)) {
       throw new SecurePiAgentLaunchError(
         "Child bridge must belong to the approved Agentworks package",
+      );
+    }
+    if (
+      webAccessExtensionPath !== null &&
+      !isWithin(webAccessExtensionPath, agentworksPackagePath)
+    ) {
+      throw new SecurePiAgentLaunchError(
+        "Research web access extension must belong to the approved Agentworks package",
       );
     }
     const runtimePath = canonicalExisting(
@@ -505,6 +532,9 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
       "--no-extensions",
       "--extension",
       childBridgePath,
+      ...(webAccessExtensionPath === null
+        ? []
+        : ["--extension", webAccessExtensionPath]),
       "--no-skills",
       "--no-prompt-templates",
       "--no-themes",

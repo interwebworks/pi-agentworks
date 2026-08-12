@@ -82,6 +82,19 @@ test("renders useful run, story, agent, next-action, and attention sections", ()
   assert.doesNotMatch(output, /a approve/u);
 });
 
+test("renders the selected row and keyboard navigation contract", () => {
+  const output = renderDashboard(view, {
+    width: 120,
+    height: 40,
+    selection: { section: "agents", index: 0 },
+  }).join("\n");
+  assert.match(output, /^> blocked\s+agent-1/mu);
+  assert.match(
+    output,
+    /↑\/k ↓\/j row {2}←\/h →\/l section {2}enter focus agent/u,
+  );
+});
+
 test("shows only state-valid workflow controls", () => {
   assert.equal(
     managementControlHint("awaiting-approval"),

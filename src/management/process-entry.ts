@@ -1,5 +1,9 @@
 import { pathToFileURL } from "node:url";
-import { renderDashboard } from "../application/tui/dashboard-renderer.ts";
+import {
+  renderDashboard,
+  type DashboardSection,
+} from "../application/tui/dashboard-renderer.ts";
+import { PaneFocusService } from "../application/herdr/pane-focus-service.ts";
 import { HerdrCliGateway } from "../infrastructure/herdr/herdr-cli-gateway.ts";
 import type { RunStatus } from "../domain/controller-state.ts";
 import {
@@ -88,6 +92,11 @@ export async function runManagementDashboard(
   let authenticated = false;
   let currentRunStatus: RunStatus | null = null;
   let currentAgentPaneIds: readonly string[] = [];
+  let currentDashboard: Awaited<
+    ReturnType<typeof readControllerDashboard>
+  > | null = null;
+  let selectedSection: DashboardSection = "stories";
+  let selectedIndex = 0;
   let controlInFlight = false;
   let notice = "";
   const state: { timer?: NodeJS.Timeout } = {};
@@ -97,7 +106,12 @@ export async function runManagementDashboard(
     const client = await createClient(configuration.runId);
     try {
       const dashboard = await readControllerDashboard(client);
+      currentDashboard = dashboard;
       currentRunStatus = dashboard.view.run.status;
+      selectedIndex = Math.min(
+        selectedIndex,
+        Math.max(0, rowCount(selectedSection) - 1),
+      );
       currentAgentPaneIds = dashboard.view.agents
         .map((agent) => agent.paneId)
         .filter((paneId): paneId is string => paneId !== null);
@@ -112,6 +126,7 @@ export async function runManagementDashboard(
         width: process.stdout.columns || 100,
         height: process.stdout.rows || 30,
         plannedActions: dashboard.plannedActions,
+        selection: { section: selectedSection, index: selectedIndex },
         notice,
         refreshedAt: Date.now(),
       });
@@ -173,6 +188,84 @@ export async function runManagementDashboard(
     }
     await render();
   };
+  const sectionOrder: readonly DashboardSection[] = [
+    "stories",
+    "agents",
+    "attention",
+  ];
+  const rowCount = (section: DashboardSection): number => {
+    const dashboard = currentDashboard;
+    if (dashboard === null) return 0;
+    switch (section) {
+      case "stories":
+        return dashboard.view.stories.length;
+      case "agents":
+        return dashboard.view.agents.length;
+      case "attention":
+        return (
+          (dashboard.view.run.blockedReason === null ? 0 : 1) +
+          dashboard.view.supervisorAttention.length +
+          dashboard.view.staleAgents.length
+        );
+    }
+  };
+  const moveSelection = (delta: number): void => {
+    const count = rowCount(selectedSection);
+    selectedIndex = Math.max(0, Math.min(selectedIndex + delta, count - 1));
+    void render().catch(showError);
+  };
+  const moveSection = (delta: number): void => {
+    const current = sectionOrder.indexOf(selectedSection);
+    selectedSection =
+      sectionOrder[
+        (current + delta + sectionOrder.length) % sectionOrder.length
+      ] ?? "stories";
+    selectedIndex = Math.min(
+      selectedIndex,
+      Math.max(0, rowCount(selectedSection) - 1),
+    );
+    void render().catch(showError);
+  };
+  const selectedAgentPaneId = (): string | null => {
+    const dashboard = currentDashboard;
+    if (dashboard === null) return null;
+    if (selectedSection === "agents") {
+      return dashboard.view.agents[selectedIndex]?.paneId ?? null;
+    }
+    if (selectedSection === "stories") {
+      const agentId = dashboard.view.stories[selectedIndex]?.assignedAgentId;
+      return (
+        dashboard.view.agents.find((agent) => agent.id === agentId)?.paneId ??
+        null
+      );
+    }
+    const attentionAgentIds = [
+      ...(dashboard.view.run.blockedReason === null ? [] : [null]),
+      ...dashboard.view.supervisorAttention.map((item) => item.agentId),
+      ...dashboard.view.staleAgents.map((item) => item.agentId),
+    ];
+    const agentId = attentionAgentIds[selectedIndex];
+    return (
+      dashboard.view.agents.find((agent) => agent.id === agentId)?.paneId ??
+      null
+    );
+  };
+  const focusSelectedAgent = async (): Promise<void> => {
+    const paneId = selectedAgentPaneId();
+    if (paneId === null) {
+      notice = "The selected row does not identify a live Agentworks pane";
+      await render();
+      return;
+    }
+    try {
+      await new PaneFocusService(new HerdrCliGateway()).focus(paneId);
+      notice = `Focused agent pane ${paneId}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notice = `Selected agent pane is unavailable: ${message.replace(/[\r\n]+/gu, " ").slice(0, 240)}`;
+    }
+    await render();
+  };
   const controlUnavailable = (action: "approve" | "reject"): void => {
     notice = `${action} is only available while this run is awaiting approval; it is ${currentRunStatus ?? "still loading"}`;
     void render().catch(showError);
@@ -181,6 +274,12 @@ export async function runManagementDashboard(
     const text = data.toString("utf8");
     if (text === "q" || text === "\u0003") stop();
     if (text === "r") void render().catch(showError);
+    if (text === "\u001b[A" || text === "k") moveSelection(-1);
+    if (text === "\u001b[B" || text === "j") moveSelection(1);
+    if (text === "\u001b[D" || text === "h") moveSection(-1);
+    if (text === "\u001b[C" || text === "l") moveSection(1);
+    if (text === "\r" || text === "\n")
+      void focusSelectedAgent().catch(showError);
     if (text === "f") void focusPiAgents().catch(showError);
     if (text === "a") {
       if (currentRunStatus === "awaiting-approval") {

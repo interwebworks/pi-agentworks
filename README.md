@@ -90,7 +90,7 @@ Unknown manifest fields are rejected outright. Manifest and prompt files cannot 
 ### Safety rules enforced at load time
 
 - **Reviewer roles are always read-only** — a reviewer with `writePolicy: "story-writer"` or a `write`/`edit` tool fails validation.
-- **Only implemented child capabilities can be declared.** Role packs may request only the child Pi built-ins `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`, plus the authenticated controller actions `report-status`, `contact-manager`, `submit-work`, and `submit-review`.
+- **Only implemented child capabilities can be declared.** Role packs may request the child Pi built-ins `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. Research roles may also request the explicitly loaded bundled `pi-web-access` tools `web_search`, `fetch_content`, `get_search_content`, and `source_check`. Authenticated controller actions are limited to `report-status`, `contact-manager`, `submit-work`, and `submit-review`.
 - **Every built-in role can execute diagnostics.** Built-in roles include `bash`, while the kernel-enforced read-only worktree and Git metadata mounts still prevent read-only roles from changing project state.
 - **The controller remains the sole Git mutator regardless of role-pack content.** No role, tool, or controller action can perform a Git write directly — every Git mutation is routed through the controller's own candidate-commit, merge, and cleanup policies.
 

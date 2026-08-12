@@ -21,7 +21,8 @@ Role tools, write policy, network requirements, controller actions, and prompt s
 
 Child Pi extension discovery is disabled.
 Therefore role tools are limited to Pi's built-in `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls` tools.
-A pack declaring an unavailable extension tool is rejected before launch.
+Research roles may additionally use the explicitly loaded bundled `pi-web-access` tools `web_search`, `fetch_content`, `get_search_content`, and `source_check`.
+A pack declaring any other unavailable extension tool is rejected before launch.
 Every built-in role includes `bash` so it can run diagnostic and validation commands.
 Read-only roles remain filesystem read-only even when they can run shell commands.
 
