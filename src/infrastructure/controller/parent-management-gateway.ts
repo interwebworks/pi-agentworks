@@ -78,6 +78,37 @@ export class ParentManagementGatewayError extends Error {
   }
 }
 
+const MAX_EXPLICIT_INITIAL_STORIES = 16;
+
+/**
+ * Extract an explicit numbered initial story list from a launch request.
+ *
+ * A free-form task remains one story. A caller that needs a fan-out must say
+ * `Stories: (1) ..., (2) ...`; this keeps parent-side planning deterministic
+ * instead of asking a child agent to invent controller-owned stories.
+ */
+export function parseInitialStoryTitles(task: string): readonly string[] {
+  const marker = /\bstories\s*:\s*/iu.exec(task);
+  if (marker === null) return Object.freeze([task]);
+  const list = task.slice(marker.index + marker[0].length);
+  const entries = [...list.matchAll(/(?:^|[,;\n]\s*)\(\s*\d+\s*\)\s*/gu)];
+  if (entries.length < 2) return Object.freeze([task]);
+  const titles = entries
+    .map((entry, index) => {
+      const start = entry.index + entry[0].length;
+      const next = entries[index + 1];
+      const end = next === undefined ? list.length : next.index;
+      return list
+        .slice(start, end)
+        .replace(/[,;\s]+$/u, "")
+        .replace(/\.\s+(?:Do not|Each|The purpose|This)\b[\s\S]*$/iu, "")
+        .trim();
+    })
+    .filter((title) => title.length > 0)
+    .slice(0, MAX_EXPLICIT_INITIAL_STORIES);
+  return titles.length < 2 ? Object.freeze([task]) : Object.freeze(titles);
+}
+
 function record(
   value: JsonValue,
   label: string,
@@ -914,32 +945,36 @@ export function createDiscoveredParentManagementGateway(
         type: "plan-prepared",
         at: now,
       });
-      const draftStory = createStoryState({
-        id: `${runId}-story-1`,
-        runId,
-        title: task,
-        branchName: storyBranchForRun(runId, `${runId}-story-1`),
-        worktreePath: `${runtimeRoot}/worktrees/${runId}/story-1-worktree`,
-        planning: {
-          narrative: task,
-          objective: task,
-          taskKinds: ["software-development"],
-          writable: true,
-          scope: { included: ["repository"], excluded: ["secrets"] },
-          technologyChoices: ["existing repository stack"],
-          constraints: ["stay within the requested task scope"],
-          dependencies: [],
-          deliverables: [task],
-          acceptanceCriteria: [task],
-          validation: [{ command: "npm test", expected: "passes" }],
-          escalationConditions: ["blocked by missing information or access"],
-        },
-        createdAt: now,
-      });
-      const story = transitionStory(draftStory, {
-        type: "story-prepared",
-        complexity: run.complexity,
-        at: now,
+      const stories = parseInitialStoryTitles(task).map((title, index) => {
+        const sequence = index + 1;
+        const storyId = `${runId}-story-${String(sequence)}`;
+        const draftStory = createStoryState({
+          id: storyId,
+          runId,
+          title,
+          branchName: storyBranchForRun(runId, storyId),
+          worktreePath: `${runtimeRoot}/worktrees/${runId}/story-${String(sequence)}-worktree`,
+          planning: {
+            narrative: task,
+            objective: title,
+            taskKinds: ["software-development"],
+            writable: true,
+            scope: { included: ["repository"], excluded: ["secrets"] },
+            technologyChoices: ["existing repository stack"],
+            constraints: ["stay within the requested task scope"],
+            dependencies: [],
+            deliverables: [title],
+            acceptanceCriteria: [title],
+            validation: [{ command: "npm test", expected: "passes" }],
+            escalationConditions: ["blocked by missing information or access"],
+          },
+          createdAt: now,
+        });
+        return transitionStory(draftStory, {
+          type: "story-prepared",
+          complexity: run.complexity,
+          at: now,
+        });
       });
       const events: readonly ControllerEventInput[] = [
         {
@@ -954,21 +989,21 @@ export function createDiscoveredParentManagementGateway(
           },
           occurredAt: now,
         },
-        {
+        ...stories.map((story) => ({
           eventId: randomUUID(),
           type: "story-prepared",
-          entityType: "story",
+          entityType: "story" as const,
           entityId: story.id,
-          payload: { title: task, status: story.status },
+          payload: { title: story.title, status: story.status },
           occurredAt: now,
-        },
+        })),
       ];
       await client.request({
         action: "run.initialize",
         idempotencyKey: `run-initialize-${runId}`,
         payload: {
           run,
-          stories: [story],
+          stories,
           agents: [],
           events,
         } as unknown as JsonValue,
