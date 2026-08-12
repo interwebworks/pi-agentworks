@@ -17,7 +17,11 @@ import type {
   RunState,
   StoryState,
 } from "../domain/controller-state.ts";
-import { transitionRun, transitionStory } from "../domain/controller-state.ts";
+import {
+  transitionAgent,
+  transitionRun,
+  transitionStory,
+} from "../domain/controller-state.ts";
 import { assessManagementQuitReadiness } from "../domain/management-quit.ts";
 import {
   decodeAuthenticatedAgentMessage,
@@ -798,6 +802,7 @@ type ParentControlAction =
   | "resume"
   | "focus"
   | "close"
+  | "restart"
   | "dismiss";
 
 interface ParentControlPayload {
@@ -837,6 +842,7 @@ function parseParentControlPayload(payload: JsonValue): ParentControlPayload {
     "resume",
     "focus",
     "close",
+    "restart",
     "dismiss",
   ]);
   if (typeof action !== "string" || !allowed.has(action)) {
@@ -959,6 +965,7 @@ function executeParentControl(
   const now = Date.now();
   let run = snapshot.run;
   let stories = snapshot.stories;
+  let agents = snapshot.agents;
   const events: ControllerEventInput[] = [];
   const targetAgent =
     control.agentId === undefined
@@ -1086,6 +1093,41 @@ function executeParentControl(
         );
       }
       break;
+    case "restart": {
+      if (targetAgent === undefined || control.message !== undefined) {
+        throw new ControllerRequestError(
+          "invalid-payload",
+          "Restart requires an agentId and no message",
+        );
+      }
+      if (
+        ["completed", "failed", "closed", "disconnected"].includes(
+          targetAgent.status,
+        )
+      ) {
+        throw new ControllerRequestError(
+          "invalid-state",
+          `Cannot restart agent in ${targetAgent.status} state`,
+        );
+      }
+      const disconnected = transitionAgent(targetAgent, {
+        type: "pane-lost",
+        at: now,
+      });
+      agents = agents.map((agent) =>
+        agent.id === disconnected.id ? disconnected : agent,
+      );
+      events.push(
+        parentControlEvent(
+          "restart",
+          "agent",
+          targetAgent.id,
+          { paneId: targetAgent.paneId },
+          now,
+        ),
+      );
+      break;
+    }
     case "dismiss": {
       if (targetAgent !== undefined || control.message !== undefined) {
         throw new ControllerRequestError(
@@ -1186,7 +1228,7 @@ function executeParentControl(
       request: request.payload,
       run,
       stories,
-      agents: snapshot.agents,
+      agents,
       events,
     });
     return toJsonValue({
@@ -1361,11 +1403,12 @@ export async function runControllerProcess(
             control.action !== "reject" &&
             control.action !== "pause" &&
             control.action !== "resume" &&
+            control.action !== "restart" &&
             control.action !== "dismiss"
           ) {
             throw new ControllerRequestError(
               "forbidden",
-              "Management controls are limited to approve, reject, pause, resume, and dismiss",
+              "Management controls are limited to approve, reject, pause, resume, restart, and dismiss",
             );
           }
         } else if (!allowedRead) {

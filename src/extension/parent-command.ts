@@ -64,6 +64,7 @@ export const AGENTWORKS_TOOL_ACTIONS = [
   "resume",
   "focus",
   "close",
+  "restart",
 ] as const;
 
 const AgentworksToolActionSchema = Type.Union([
@@ -76,6 +77,7 @@ const AgentworksToolActionSchema = Type.Union([
   Type.Literal("resume"),
   Type.Literal("focus"),
   Type.Literal("close"),
+  Type.Literal("restart"),
 ]);
 
 export const AgentworksToolInputSchema = Type.Object(

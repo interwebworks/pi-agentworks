@@ -87,6 +87,7 @@ test("parseAgentworksToolInput: every declared action validates", () => {
     "resume",
     "focus",
     "close",
+    "restart",
   ]) {
     const input = parseAgentworksToolInput({ action });
     assert.equal(input.action, action);

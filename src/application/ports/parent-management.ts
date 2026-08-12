@@ -7,7 +7,8 @@ export type ParentManagementAction =
   | "pause"
   | "resume"
   | "focus"
-  | "close";
+  | "close"
+  | "restart";
 
 export interface ParentLaunchRuntime {
   readonly workspaceId: string;

@@ -1149,7 +1149,8 @@ export function createDiscoveredParentManagementGateway(
         input.runId !== undefined &&
         (input.action === "focus" ||
           input.action === "steer" ||
-          input.action === "close")
+          input.action === "close" ||
+          input.action === "restart")
       ) {
         const controlClient = await clientFactory(input.runId);
         try {
@@ -1196,6 +1197,17 @@ export function createDiscoveredParentManagementGateway(
             for (const agent of targets) {
               if (agent === undefined) continue;
               await options.agentControl.close({ runId: input.runId, agent });
+            }
+            if (input.action === "restart") {
+              const restoration = await requestAgentPaneRestoration(
+                clientFactory,
+                input.runId,
+              );
+              if (restoration?.restored !== true) {
+                throw new ParentManagementGatewayError(
+                  "agent restart did not produce durable pane restoration evidence",
+                );
+              }
             }
           }
         } finally {
