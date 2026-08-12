@@ -109,9 +109,21 @@ function repositoryDependencyMount(
   | undefined {
   const sourcePath = join(request.task.repositoryRoot, "node_modules");
   if (!existsSync(sourcePath)) return undefined;
+  const destinationPath = join(request.task.worktreePath, "node_modules");
+  if (!existsSync(destinationPath)) {
+    // Bubblewrap cannot create a mount target inside a read-only worktree.
+    // node_modules is ignored by Git, so this does not alter tracked content.
+    mkdirSync(destinationPath, { mode: 0o755 });
+  }
+  const destination = lstatSync(destinationPath);
+  if (destination.isSymbolicLink() || !destination.isDirectory()) {
+    throw new SecurePiAgentLaunchError(
+      "worktree dependency mount target must be a real directory",
+    );
+  }
   return Object.freeze({
     sourcePath: canonicalExisting(sourcePath, "repository dependencies"),
-    destinationPath: join(request.task.worktreePath, "node_modules"),
+    destinationPath,
   });
 }
 

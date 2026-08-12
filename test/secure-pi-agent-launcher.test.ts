@@ -305,6 +305,10 @@ test("composes one fenced interactive Pi process through Bubblewrap and Herdr", 
     assert.equal(sandbox.environment.OPENAI_API_KEY, undefined);
     assert.deepEqual(current.herdr.commands[0]?.slice(0, 1), ["/bin/sh"]);
     assert.equal(sandbox.readOnlyPaths.includes(evidence.rolePromptPath), true);
+    assert.equal(
+      existsSync(join(current.request.task.worktreePath, "node_modules")),
+      true,
+    );
     assert.deepEqual(sandbox.readOnlyMounts, [
       {
         sourcePath: current.repositoryDependencies,
