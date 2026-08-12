@@ -122,17 +122,20 @@ class RosterHerdr {
   constructor(rosterSize = 3, survivingSlots: readonly number[] = [0, 2]) {
     this.rosterSize = rosterSize;
     this.panes = survivingSlots.map((slot) => pane(slot));
-    this.tabs = [
-      {
-        tabId: "w1P:tA",
-        workspaceId: "w1P",
-        number: 1,
-        label: "Pi Agents",
-        focused: false,
-        paneCount: survivingSlots.length,
-        agentStatus: "unknown",
-      },
-    ];
+    this.tabs =
+      survivingSlots.length === 0
+        ? []
+        : [
+            {
+              tabId: "w1P:tA",
+              workspaceId: "w1P",
+              number: 1,
+              label: "Pi Agents",
+              focused: false,
+              paneCount: survivingSlots.length,
+              agentStatus: "unknown",
+            },
+          ];
     for (const slot of survivingSlots) {
       this.processEvidence.environments.set(
         `w1P:p${String(slot)}`,
@@ -154,9 +157,33 @@ class RosterHerdr {
     readonly rootPane: HerdrPane;
   }> {
     this.createRequests.push(request);
-    return Promise.reject(
-      new Error("restoration must not create a second tab"),
+    if (this.panes.length > 0) {
+      return Promise.reject(
+        new Error("restoration must not create a second tab"),
+      );
+    }
+    const rootPane = {
+      ...pane(0, "w1P:pNew0"),
+      cwd: request.cwd,
+      foregroundCwd: request.cwd,
+    };
+    this.panes.push(rootPane);
+    this.processEvidence.environments.set(
+      rootPane.paneId,
+      request.environment ?? {},
     );
+    return Promise.resolve({
+      tab: {
+        tabId: "w1P:tA",
+        workspaceId: "w1P",
+        number: 1,
+        label: request.label,
+        focused: false,
+        paneCount: 1,
+        agentStatus: "unknown",
+      },
+      rootPane,
+    });
   }
 
   splitPane(request: HerdrSplitPaneRequest): Promise<HerdrPane> {
@@ -515,6 +542,26 @@ test("ignores a run-scoped management pane while restoring agent slots", async (
     assert.equal(result.restored, true);
     assert.equal(result.agentId, "agent-1");
     assert.equal(fixture.herdr.splitRequests.length, 1);
+  } finally {
+    fixture.repository.close();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("recreates the dedicated agent tab when every owned pane was restarted", async () => {
+  const fixture = createFixture(3, []);
+  try {
+    const result = await fixture.controller().restoreMissingPane({
+      runId: RUN_ID,
+      workspaceId: "w1P",
+      write: fixture.write,
+      metadataSequence: 1,
+    });
+
+    assert.equal(result.restored, true);
+    assert.equal(result.restorations.length, 3);
+    assert.equal(fixture.herdr.createRequests.length, 1);
+    assert.equal(fixture.herdr.panes.length, 3);
   } finally {
     fixture.repository.close();
     rmSync(fixture.directory, { recursive: true, force: true });

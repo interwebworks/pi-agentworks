@@ -457,14 +457,17 @@ export class AgentPaneRestorationController {
     }
 
     const tabIds = new Set(owned.map((candidate) => candidate.pane.tabId));
-    if (tabIds.size !== 1) {
+    if (tabIds.size > 1) {
       throw new AgentPaneRestorationError(
         "surviving controller panes do not prove one exact Herdr tab",
       );
     }
-    const tabId = [...tabIds][0];
+    // When every owned pane was deliberately restarted, Herdr has already
+    // removed the empty dedicated tab. Creating a fresh exact tab is safe;
+    // only surviving panes need to prove a single tab identity.
+    const tabId = [...tabIds][0] ?? null;
     if (
-      tabId === undefined ||
+      tabId !== null &&
       panes.some(
         (pane) =>
           pane.tabId === tabId &&
