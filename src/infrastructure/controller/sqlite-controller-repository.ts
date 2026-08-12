@@ -2461,9 +2461,13 @@ export class SqliteControllerRepository implements ControllerRepository {
       const agentClosed = agent?.status === "closed";
       const storyCanBeWritten =
         story !== undefined &&
-        ["assigned", "working", "changes-requested", "blocked"].includes(
-          story.status,
-        );
+        [
+          "assigned",
+          "working",
+          "work-complete",
+          "changes-requested",
+          "blocked",
+        ].includes(story.status);
       if (
         assignedAgentId !== lease.owner_agent_id ||
         agentTaskId !== lease.story_id ||

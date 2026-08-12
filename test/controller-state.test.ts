@@ -230,6 +230,11 @@ test("a story follows prepared, assigned, candidate, review, and merge states", 
   });
   current = transitionStory(current, { type: "story-work-started", at: 1_004 });
   current = transitionStory(current, {
+    type: "story-work-completed",
+    at: 1_005,
+  });
+  assert.equal(current.status, "work-complete");
+  current = transitionStory(current, {
     type: "candidate-requested",
     at: 1_005,
     writerLeaseReleased: true,

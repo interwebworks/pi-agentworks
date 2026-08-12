@@ -22,6 +22,7 @@ const view: DashboardViewModel = {
       ready: 0,
       assigned: 0,
       working: 1,
+      "work-complete": 0,
       "awaiting-candidate": 0,
       "awaiting-review": 0,
       "changes-requested": 0,

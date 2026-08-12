@@ -13,6 +13,7 @@ import { join, relative } from "node:path";
 import test from "node:test";
 import {
   candidateReady,
+  operationCompleted,
   operationStarted,
   reviewSubmitted,
   sessionShutdown,
@@ -432,9 +433,22 @@ test("durable child events drive two dependent stories through exact production 
     const completeStory = async (storyId: string, storyPath: string) => {
       const writerId = `writer-${storyId}`;
       await deliver(operationStarted(RUN_ID, writerId, storyId));
+      assert.equal(
+        repository
+          .loadSnapshot(RUN_ID)
+          ?.stories.find((story) => story.id === storyId)?.status,
+        "working",
+      );
       writeFileSync(
         join(storyPath, `${storyId}.txt`),
         `${storyId} delivered\n`,
+      );
+      await deliver(operationCompleted(RUN_ID, writerId, true, null, storyId));
+      assert.equal(
+        repository
+          .loadSnapshot(RUN_ID)
+          ?.stories.find((story) => story.id === storyId)?.status,
+        "work-complete",
       );
       await deliver(candidateReady(RUN_ID, writerId));
       const candidate = repository

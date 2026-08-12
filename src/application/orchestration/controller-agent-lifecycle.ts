@@ -41,6 +41,8 @@ export interface ControllerAgentLifecycleResult {
   readonly action:
     | "none"
     | "writer-lease-renewed"
+    | "story-work-started"
+    | "story-work-completed"
     | "candidate-created"
     | "review-approved"
     | "review-changes-requested"
@@ -113,9 +115,18 @@ export class ControllerAgentLifecycle {
     }
     switch (message.type) {
       case "operation-started":
+        return this.#startWriterWork(snapshot, agent, write, requestId);
       case "operation-progress":
       case "heartbeat":
         return this.#renewWriterLease(snapshot, agent, write);
+      case "operation-completed":
+        return message.success
+          ? this.#completeWriterWork(snapshot, agent, write, requestId)
+          : Object.freeze({
+              accepted: true,
+              action: "none",
+              revision: snapshot.revision,
+            });
       case "candidate-ready":
         return this.#createCandidate(snapshot, agent, write, requestId);
       case "review-submitted":
@@ -297,7 +308,7 @@ export class ControllerAgentLifecycle {
     const story = this.#storyForTask(snapshot, agent);
     if (
       story?.assignedAgentId !== agent.id ||
-      !["assigned", "working"].includes(story.status)
+      !["assigned", "working", "work-complete"].includes(story.status)
     ) {
       return Object.freeze({
         accepted: true,
@@ -325,6 +336,113 @@ export class ControllerAgentLifecycle {
       accepted: true,
       action: "writer-lease-renewed",
       revision: snapshot.revision,
+    });
+  }
+
+  #startWriterWork(
+    snapshot: ControllerSnapshot,
+    agent: AgentState,
+    write: FencedWrite,
+    requestId: string,
+  ): ControllerAgentLifecycleResult {
+    const story = this.#storyForTask(snapshot, agent);
+    if (
+      story?.assignedAgentId !== agent.id ||
+      !["assigned", "work-complete"].includes(story.status)
+    ) {
+      return this.#renewWriterLease(snapshot, agent, write);
+    }
+    this.#renewWriterLease(snapshot, agent, write);
+    const working = transitionStory(story, {
+      type: "story-work-started",
+      at: this.#clock(),
+    });
+    const revision = this.#commit(
+      snapshot,
+      write,
+      requestId,
+      "start-story-work",
+      this.#replaceStory(snapshot, working),
+      snapshot.agents,
+      [
+        this.#event(
+          requestId,
+          "story-work-started",
+          "story",
+          story.id,
+          Object.freeze({ writerAgentId: agent.id }),
+          working.updatedAt,
+        ),
+      ],
+    );
+    return Object.freeze({
+      accepted: true,
+      action: "story-work-started",
+      revision,
+    });
+  }
+
+  #completeWriterWork(
+    snapshot: ControllerSnapshot,
+    agent: AgentState,
+    write: FencedWrite,
+    requestId: string,
+  ): ControllerAgentLifecycleResult {
+    const story = this.#storyForTask(snapshot, agent);
+    if (story?.assignedAgentId !== agent.id) {
+      return Object.freeze({
+        accepted: true,
+        action: "none",
+        revision: snapshot.revision,
+      });
+    }
+    if (story.status === "work-complete") {
+      return Object.freeze({
+        accepted: true,
+        action: "none",
+        revision: snapshot.revision,
+      });
+    }
+    if (!["assigned", "working"].includes(story.status)) {
+      return Object.freeze({
+        accepted: true,
+        action: "none",
+        revision: snapshot.revision,
+      });
+    }
+    const working =
+      story.status === "assigned"
+        ? transitionStory(story, {
+            type: "story-work-started",
+            at: this.#clock(),
+          })
+        : story;
+    const completed = transitionStory(working, {
+      type: "story-work-completed",
+      at: this.#clock(),
+    });
+    const revision = this.#commit(
+      snapshot,
+      write,
+      requestId,
+      "complete-story-work",
+      this.#replaceStory(snapshot, completed),
+      snapshot.agents,
+      [
+        this.#event(
+          requestId,
+          "story-work-completed",
+          "story",
+          story.id,
+          Object.freeze({ writerAgentId: agent.id }),
+          completed.updatedAt,
+        ),
+      ],
+    );
+    return Object.freeze({
+      accepted: true,
+      action: "story-work-completed",
+      revision,
     });
   }
 
@@ -358,7 +476,7 @@ export class ControllerAgentLifecycle {
         at: this.#clock(),
       });
     }
-    if (working.status !== "working") {
+    if (!["working", "work-complete"].includes(working.status)) {
       throw new ControllerAgentLifecycleError(
         `story ${story.id} is not accepting a writer candidate from ${story.status}`,
       );

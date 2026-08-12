@@ -148,6 +148,7 @@ test("attentionForStory maps statuses to attention levels", () => {
   assert.equal(attentionForStory("working"), "info");
   assert.equal(attentionForStory("merging"), "info");
   assert.equal(attentionForStory("merged"), "normal");
+  assert.equal(attentionForStory("work-complete"), "info");
   assert.equal(attentionForStory("planned"), "normal");
 });
 
@@ -178,6 +179,7 @@ test("buildDashboardViewModel projects run header, story rows, and agent rows", 
       ready: 0,
       assigned: 0,
       working: 0,
+      "work-complete": 0,
       "awaiting-candidate": 0,
       "awaiting-review": 0,
       "changes-requested": 1,

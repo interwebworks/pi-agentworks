@@ -20,6 +20,8 @@ export type StoryStatus =
   | "ready"
   | "assigned"
   | "working"
+  /** The writer's turn completed and the controller is awaiting submission. */
+  | "work-complete"
   | "awaiting-candidate"
   | "awaiting-review"
   | "changes-requested"
@@ -189,6 +191,7 @@ const StoryStatusSchema = Type.Union([
   Type.Literal("ready"),
   Type.Literal("assigned"),
   Type.Literal("working"),
+  Type.Literal("work-complete"),
   Type.Literal("awaiting-candidate"),
   Type.Literal("awaiting-review"),
   Type.Literal("changes-requested"),
@@ -204,6 +207,7 @@ const ResumableStoryStatusSchema = Type.Union([
   Type.Literal("ready"),
   Type.Literal("assigned"),
   Type.Literal("working"),
+  Type.Literal("work-complete"),
   Type.Literal("awaiting-candidate"),
   Type.Literal("awaiting-review"),
   Type.Literal("changes-requested"),
@@ -363,6 +367,7 @@ export type StoryTransition =
       readonly agentId: string;
     }
   | { readonly type: "story-work-started"; readonly at: number }
+  | { readonly type: "story-work-completed"; readonly at: number }
   | {
       readonly type: "story-reassignment-requested";
       readonly at: number;
@@ -726,7 +731,11 @@ export function transitionStory(
         updatedAt: transition.at,
       });
     case "story-work-started":
-      assertStoryStatus(current, transition, ["assigned", "changes-requested"]);
+      assertStoryStatus(current, transition, [
+        "assigned",
+        "changes-requested",
+        "work-complete",
+      ]);
       return Object.freeze({
         ...current,
         status: "working",
@@ -735,10 +744,18 @@ export function transitionStory(
         reviewerAgentId: null,
         updatedAt: transition.at,
       });
+    case "story-work-completed":
+      assertStoryStatus(current, transition, ["working"]);
+      return Object.freeze({
+        ...current,
+        status: "work-complete",
+        updatedAt: transition.at,
+      });
     case "story-reassignment-requested":
       assertStoryStatus(current, transition, [
         "assigned",
         "working",
+        "work-complete",
         "awaiting-candidate",
         "changes-requested",
       ]);
@@ -762,7 +779,7 @@ export function transitionStory(
         updatedAt: transition.at,
       });
     case "candidate-requested":
-      assertStoryStatus(current, transition, ["working"]);
+      assertStoryStatus(current, transition, ["working", "work-complete"]);
       if (!transition.writerLeaseReleased) {
         invalid(
           "story",
