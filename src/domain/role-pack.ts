@@ -11,6 +11,25 @@ const ToolName = Type.String({
   maxLength: 160,
   pattern: "^[A-Za-z][A-Za-z0-9_:./-]*$",
 });
+
+// Agentworks launches child Pi with extension discovery disabled. Role packs may
+// request only the core tools that this exact child runtime provides.
+const IMPLEMENTED_CHILD_TOOLS = new Set([
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+]);
+
+const IMPLEMENTED_CHILD_CONTROLLER_ACTIONS = new Set([
+  "report-status",
+  "contact-manager",
+  "submit-work",
+  "submit-review",
+]);
 const NonEmptyString = Type.String({ minLength: 1, maxLength: 4096 });
 const NonEmptyStringArray = Type.Array(NonEmptyString, {
   minItems: 1,
@@ -166,6 +185,22 @@ function domainIssues(manifest: RolePackManifest): string[] {
     ) {
       issues.push(
         `role ${role.id} requests Project Manager controller authority`,
+      );
+    }
+    const unavailableTool = role.tools.find(
+      (tool) => !IMPLEMENTED_CHILD_TOOLS.has(tool),
+    );
+    if (unavailableTool !== undefined) {
+      issues.push(
+        `role ${role.id} requests tool ${unavailableTool} that the isolated child Pi does not provide`,
+      );
+    }
+    const unavailableAction = role.controllerActions.find(
+      (action) => !IMPLEMENTED_CHILD_CONTROLLER_ACTIONS.has(action),
+    );
+    if (unavailableAction !== undefined) {
+      issues.push(
+        `role ${role.id} requests controller action ${unavailableAction} that the child bridge does not implement`,
       );
     }
     if (role.authority === "reviewer" && role.writePolicy !== "read-only") {

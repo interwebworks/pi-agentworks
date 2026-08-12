@@ -138,6 +138,59 @@ test("built-in roles allow Pi to reach their configured model provider", async (
   }
 });
 
+test("built-in roles expose only executable child capabilities", async () => {
+  const packsDirectory = path.join(process.cwd(), "role-packs");
+  const packDirectories = await readdir(packsDirectory, {
+    withFileTypes: true,
+  });
+  for (const directory of packDirectories.filter((entry) =>
+    entry.isDirectory(),
+  )) {
+    const source = await readFile(
+      path.join(packsDirectory, directory.name, "pack.json"),
+      "utf8",
+    );
+    const parsed = parseRolePackManifest(JSON.parse(source) as unknown);
+    for (const role of parsed.roles) {
+      assert.ok(
+        role.tools.includes("bash"),
+        `${parsed.id}/${role.id} must be able to execute its validation and diagnostic commands`,
+      );
+      assert.ok(
+        role.controllerActions.includes("report-status"),
+        `${parsed.id}/${role.id} must be able to report durable status`,
+      );
+    }
+  }
+});
+
+test("rejects declared tools that the isolated child Pi cannot provide", () => {
+  const value = manifest("unsupported-tool");
+  value.roles[0] = {
+    ...onlyItem(value.roles),
+    tools: ["read", "web-search"],
+  };
+
+  assert.throws(
+    () => parseRolePackManifest(value),
+    /isolated child Pi does not provide/u,
+  );
+});
+
+test("rejects controller actions that the child bridge does not implement", () => {
+  const value = manifest("unsupported-action");
+  value.roles[0] = {
+    ...onlyItem(value.roles),
+    authority: "project-manager",
+    controllerActions: ["report-status", "assign-task"],
+  };
+
+  assert.throws(
+    () => parseRolePackManifest(value),
+    /child bridge does not implement/u,
+  );
+});
+
 test("validates a strict data-only role pack manifest", () => {
   const parsed = parseRolePackManifest(manifest("software-development"));
   assert.equal(parsed.id, "software-development");

@@ -290,6 +290,7 @@ export function installChildBridge(
   let sessionId: string | null = null;
   let operationStartedAt: number | null = null;
   let operationFailureReason: string | null = null;
+  let terminalStatusReported = false;
   let messageQueue: Promise<void> = Promise.resolve();
 
   const sendMessage = async (
@@ -350,6 +351,83 @@ export function installChildBridge(
     messageQueue = queued.catch(() => undefined);
     return queued;
   };
+
+  pi.registerTool({
+    name: "agentworks_report_status",
+    label: "Report Status",
+    description:
+      "Durably report progress, completion, or a blocker to the Agentworks controller. A completion report keeps this Pi session open for further instructions.",
+    parameters: Type.Object(
+      {
+        state: StringEnum(["progress", "completed", "blocked"] as const),
+        detail: Type.String({ minLength: 1, maxLength: 4_096 }),
+      },
+      { additionalProperties: false },
+    ),
+    async execute(_toolCallId, parameters) {
+      if (
+        !configuration.controllerActions.includes("report-status") &&
+        !configuration.controllerActions.includes("contact-manager")
+      ) {
+        throw new ChildBridgeUnavailableError(
+          "This child identity has no status-reporting authority",
+        );
+      }
+      const detail = parameters.detail.trim();
+      if (detail.length === 0) {
+        throw new ChildBridgeUnavailableError(
+          "Status detail must not be blank",
+        );
+      }
+      if (parameters.state === "progress") {
+        await reportMessage(
+          operationProgress(configuration.runId, configuration.agentId, detail),
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Agentworks recorded the progress report.",
+            },
+          ],
+          details: undefined,
+        };
+      }
+      if (parameters.state === "completed") {
+        await reportMessage(
+          operationCompleted(configuration.runId, configuration.agentId, true),
+        );
+        terminalStatusReported = true;
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Agentworks recorded completion. This Pi session remains open for further instructions.",
+            },
+          ],
+          details: undefined,
+        };
+      }
+      await reportMessage(
+        agentBlocked(
+          configuration.runId,
+          configuration.agentId,
+          "blocked",
+          detail,
+        ),
+      );
+      terminalStatusReported = true;
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Agentworks recorded the blocker and raised supervisor attention.",
+          },
+        ],
+        details: undefined,
+      };
+    },
+  });
 
   pi.registerTool({
     name: "agentworks_submit_work",
@@ -433,6 +511,7 @@ export function installChildBridge(
   pi.on("session_start", async (_event, context) => {
     operationStartedAt = null;
     operationFailureReason = null;
+    terminalStatusReported = false;
     authenticated = false;
     sessionId = randomUUID();
     messageQueue = Promise.resolve();
@@ -462,12 +541,19 @@ export function installChildBridge(
       );
       authenticated = true;
       const lifecycleTools = new Set([
+        "agentworks_report_status",
         "agentworks_submit_work",
         "agentworks_submit_review",
       ]);
       const activeTools = pi
         .getActiveTools()
         .filter((name) => !lifecycleTools.has(name));
+      if (
+        configuration.controllerActions.includes("report-status") ||
+        configuration.controllerActions.includes("contact-manager")
+      ) {
+        activeTools.push("agentworks_report_status");
+      }
       if (configuration.controllerActions.includes("submit-work")) {
         activeTools.push("agentworks_submit_work");
       }
@@ -499,6 +585,7 @@ export function installChildBridge(
   pi.on("agent_start", () => {
     operationStartedAt = Date.now();
     operationFailureReason = null;
+    terminalStatusReported = false;
     return reportMessage(
       operationStarted(configuration.runId, configuration.agentId),
     );
@@ -542,12 +629,15 @@ export function installChildBridge(
   });
 
   pi.on("agent_settled", async () => {
-    const success = operationFailureReason === null;
-    await reportMessage(
-      operationCompleted(configuration.runId, configuration.agentId, success),
-    );
+    if (!terminalStatusReported) {
+      const success = operationFailureReason === null;
+      await reportMessage(
+        operationCompleted(configuration.runId, configuration.agentId, success),
+      );
+    }
     operationStartedAt = null;
     operationFailureReason = null;
+    terminalStatusReported = false;
   });
 
   pi.on("tool_call", () =>
@@ -565,6 +655,7 @@ export function installChildBridge(
     authenticated = false;
     operationStartedAt = null;
     operationFailureReason = null;
+    terminalStatusReported = false;
     const closingClient = client;
     const closingSessionId = sessionId;
     sessionId = null;

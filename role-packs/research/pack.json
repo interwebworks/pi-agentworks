@@ -18,7 +18,7 @@
         "Flag weak sourcing or unsupported conclusions"
       ],
       "promptFile": "prompts/research-analyst.md",
-      "tools": ["read", "grep", "find", "ls", "web-search", "web-fetch"],
+      "tools": ["read", "grep", "find", "ls", "bash"],
       "controllerActions": ["report-status", "contact-manager"],
       "writePolicy": "read-only",
       "networkAccess": "required",
@@ -37,16 +37,7 @@
         "Escalate when sources conflict or cannot be verified"
       ],
       "promptFile": "prompts/lead-researcher.md",
-      "tools": [
-        "read",
-        "write",
-        "edit",
-        "grep",
-        "find",
-        "ls",
-        "web-search",
-        "web-fetch"
-      ],
+      "tools": ["read", "write", "edit", "grep", "find", "ls", "bash"],
       "controllerActions": ["report-status", "contact-manager", "submit-work"],
       "writePolicy": "story-writer",
       "networkAccess": "required",
@@ -64,7 +55,7 @@
         "Report an explicit approve or reject decision with evidence"
       ],
       "promptFile": "prompts/fact-checker.md",
-      "tools": ["read", "grep", "find", "ls", "web-search", "web-fetch"],
+      "tools": ["read", "grep", "find", "ls", "bash"],
       "controllerActions": [
         "report-status",
         "contact-manager",

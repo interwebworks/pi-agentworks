@@ -18,7 +18,7 @@
         "Flag architectural risk in proposed stories"
       ],
       "promptFile": "prompts/software-architect.md",
-      "tools": ["read", "grep", "find", "ls"],
+      "tools": ["read", "grep", "find", "ls", "bash"],
       "controllerActions": ["report-status", "contact-manager"],
       "writePolicy": "read-only",
       "networkAccess": "required",

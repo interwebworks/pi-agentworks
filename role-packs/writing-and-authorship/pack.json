@@ -18,7 +18,7 @@
         "Flag gaps between the brief and the proposed outline"
       ],
       "promptFile": "prompts/content-strategist.md",
-      "tools": ["read", "grep", "find", "ls"],
+      "tools": ["read", "grep", "find", "ls", "bash"],
       "controllerActions": ["report-status", "contact-manager"],
       "writePolicy": "read-only",
       "networkAccess": "required",
@@ -37,7 +37,7 @@
         "Escalate unclear scope or missing source material"
       ],
       "promptFile": "prompts/author.md",
-      "tools": ["read", "write", "edit", "grep", "find", "ls"],
+      "tools": ["read", "write", "edit", "grep", "find", "ls", "bash"],
       "controllerActions": ["report-status", "contact-manager", "submit-work"],
       "writePolicy": "story-writer",
       "networkAccess": "required",
@@ -55,7 +55,7 @@
         "Report an explicit approve or reject decision with specific edits"
       ],
       "promptFile": "prompts/editor.md",
-      "tools": ["read", "grep", "find", "ls"],
+      "tools": ["read", "grep", "find", "ls", "bash"],
       "controllerActions": [
         "report-status",
         "contact-manager",

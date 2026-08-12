@@ -338,6 +338,70 @@ test("child bridge re-authenticates after the controller closes an idle connecti
   ]);
 });
 
+test("child status tool records a terminal completion without closing the Pi session", async () => {
+  const fake = fakeExtensionApi();
+  const messages: ReturnType<typeof decodeAgentMessage>[] = [];
+  installChildBridge(
+    fake.api,
+    {
+      runId: "run-1",
+      agentId: "agent-1",
+      controllerSocketPath: "/runtime/controller.sock",
+      controllerAuthToken: "A".repeat(43),
+      controllerActions: ["report-status"],
+    },
+    () => ({
+      connect: () => Promise.resolve(),
+      request(input) {
+        if (input.action === "agent.message") {
+          messages.push(decodeAgentMessage(JSON.stringify(input.payload)));
+        }
+        return Promise.resolve({
+          runId: "run-1",
+          agentId: "agent-1",
+          revision: 7,
+          status: "working",
+        });
+      },
+      close: () => undefined,
+    }),
+  );
+
+  await invoke(fake.handlers, "session_start");
+  await invokeEvent(fake.handlers, "agent_start", {});
+  assert.equal(
+    fake.getActiveTools().includes("agentworks_report_status"),
+    true,
+  );
+  const tool = fake.tools.get("agentworks_report_status") as {
+    execute(
+      toolCallId: string,
+      parameters: {
+        state: "progress" | "completed" | "blocked";
+        detail: string;
+      },
+      signal: undefined,
+      onUpdate: undefined,
+      context: { shutdown(): void },
+    ): Promise<unknown>;
+  };
+  let shutdowns = 0;
+  await tool.execute(
+    "status-call",
+    { state: "completed", detail: "sleep 10 completed" },
+    undefined,
+    undefined,
+    { shutdown: () => (shutdowns += 1) },
+  );
+  await invokeEvent(fake.handlers, "agent_settled", {});
+
+  assert.equal(shutdowns, 0);
+  assert.deepEqual(
+    messages.map((message) => message.type),
+    ["session-started", "operation-started", "operation-completed"],
+  );
+});
+
 test("child review tool exposes only granted authority and submits exact heads", async () => {
   const fake = fakeExtensionApi();
   const messages: ReturnType<typeof decodeAgentMessage>[] = [];

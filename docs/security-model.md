@@ -53,10 +53,23 @@ Exact child mode requires that private regular file and a real private Unix sock
 Authentication failure requests Pi shutdown and keeps a tool-call lockdown active, while a capability for one agent cannot authenticate as another.
 Child mode does not register the parent `agentworks` management tool, preventing recursive team creation.
 
+The child runs with Pi extension discovery disabled, so role packs are restricted to the exact built-in Pi tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`.
+A manifest that declares an unavailable extension tool is rejected before launch instead of creating an inert agent.
+Every built-in role has `bash` for diagnostics and validation.
+Read-only roles still receive a kernel-enforced read-only worktree and Git metadata boundary.
+
+The bridge exposes a durable `agentworks_report_status` tool to roles granted `report-status` or `contact-manager`.
+It records progress, completion, or blockers under the authenticated agent identity without granting controller, Git, or parent-session authority.
+Completion leaves the Pi session running for further work.
+`submit-work` and `submit-review` remain distinct constrained lifecycle tools.
+Role packs cannot declare controller actions without a corresponding child-bridge implementation.
+
 ## Git authority
 
 The controller is the sole Git mutator.
-Project Manager and worker agents can request operations but cannot create worktrees, stage, commit, merge, reset, remove worktrees, delete branches, or push.
+Child agents can report status, submit work, or submit a review only through their authenticated role-granted bridge tools.
+Scheduling, candidate creation, merge, and cleanup are controller-owned transitions rather than unimplemented Project Manager child commands.
+No child can create worktrees, stage, commit, merge, reset, remove worktrees, delete branches, or push.
 Read-only Git inspection remains available inside the sandbox because Git metadata is mounted read-only.
 
 Controller-created branches use deterministic run/story names and exact immutable base-commit evidence.

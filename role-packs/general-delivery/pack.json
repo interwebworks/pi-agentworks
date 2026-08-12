@@ -9,29 +9,19 @@
     {
       "id": "project-manager",
       "label": "Project Manager",
-      "description": "Turns the request into precise user stories, assigns work, tracks dependencies, steers stalled agents, coordinates review, and requests controller-executed integration.",
+      "description": "Reviews the controller-managed plan, tracks dependencies and blockers, coordinates review, and reports material delivery concerns.",
       "authority": "project-manager",
       "required": true,
       "taskKinds": ["planning", "coordination", "delivery"],
       "responsibilities": [
-        "Decompose the request into dependency-ordered user stories",
-        "Assign each story a complete task specification",
-        "Monitor progress and unblock stalled agents",
+        "Review task specifications for missing dependencies and unsafe scope",
+        "Monitor progress and report material blockers",
         "Coordinate independent review before integration",
-        "Request controller-executed candidate commits, merges, and cleanup"
+        "Report delivery risks and material decisions through the authenticated controller bridge"
       ],
       "promptFile": "prompts/project-manager.md",
-      "tools": ["read", "grep", "find", "ls"],
-      "controllerActions": [
-        "report-status",
-        "contact-manager",
-        "manage-backlog",
-        "assign-task",
-        "steer-agent",
-        "request-candidate-commit",
-        "request-merge",
-        "request-cleanup"
-      ],
+      "tools": ["read", "grep", "find", "ls", "bash"],
+      "controllerActions": ["report-status", "contact-manager"],
       "writePolicy": "read-only",
       "networkAccess": "required",
       "defaultThinking": "high"
@@ -48,7 +38,7 @@
         "Report an explicit approve or reject decision with evidence"
       ],
       "promptFile": "prompts/reviewer.md",
-      "tools": ["read", "grep", "find", "ls"],
+      "tools": ["read", "grep", "find", "ls", "bash"],
       "controllerActions": [
         "report-status",
         "contact-manager",

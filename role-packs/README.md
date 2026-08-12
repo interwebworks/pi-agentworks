@@ -19,6 +19,13 @@ Prompt paths must remain inside the pack directory.
 Unknown manifest fields are rejected.
 Role tools, write policy, network requirements, controller actions, and prompt sizes are validated before a pack becomes selectable.
 
-Project Manager-only controller actions cannot be granted to ordinary roles.
+Child Pi extension discovery is disabled.
+Therefore role tools are limited to Pi's built-in `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls` tools.
+A pack declaring an unavailable extension tool is rejected before launch.
+Every built-in role includes `bash` so it can run diagnostic and validation commands.
+Read-only roles remain filesystem read-only even when they can run shell commands.
+
+Controller actions are limited to implemented authenticated child-bridge operations: `report-status`, `contact-manager`, `submit-work`, and `submit-review`.
+A role cannot advertise a controller action that the child bridge cannot actually perform.
 Reviewer roles are always read-only.
 The controller remains the sole Git mutator regardless of role-pack content.
