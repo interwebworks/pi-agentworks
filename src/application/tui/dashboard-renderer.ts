@@ -7,6 +7,7 @@ import type {
   StoryRow,
 } from "./dashboard-view-model.ts";
 import type { RunStatus } from "../../domain/controller-state.ts";
+import type { ManagementQuitBlocker } from "../../domain/management-quit.ts";
 
 export type DashboardSection = "stories" | "agents" | "attention";
 
@@ -23,6 +24,8 @@ export interface DashboardRenderOptions {
   readonly selection?: DashboardSelection;
   /** Brief feedback from a user-initiated management control. */
   readonly notice?: string;
+  /** Rows preventing the current management pane from being safely dismissed. */
+  readonly quitBlockers?: readonly ManagementQuitBlocker[];
   readonly refreshedAt?: number;
 }
 
@@ -74,19 +77,32 @@ function statusSummary(view: DashboardViewModel): string {
   return counts.length === 0 ? "no stories" : counts;
 }
 
-function rowMarker(level: AttentionLevel, selected: boolean): string {
+function rowMarker(
+  level: AttentionLevel,
+  selected: boolean,
+  quitBlocked: boolean,
+): string {
+  if (quitBlocked) return selected ? ">×" : "×";
   return selected ? ">" : ATTENTION_MARKER[level];
 }
 
-function storyLine(story: StoryRow, selected: boolean): string {
+function storyLine(
+  story: StoryRow,
+  selected: boolean,
+  quitBlocked: boolean,
+): string {
   const owner = sanitizeDashboardText(story.assignedAgentId ?? "unassigned");
-  return `${rowMarker(story.attention, selected)} ${story.status.padEnd(18)} ${owner.padEnd(14)} ${sanitizeDashboardText(story.title)}  [${sanitizeDashboardText(story.branchName)}]`;
+  return `${rowMarker(story.attention, selected, quitBlocked)} ${story.status.padEnd(18)} ${owner.padEnd(14)} ${sanitizeDashboardText(story.title)}  [${sanitizeDashboardText(story.branchName)}]`;
 }
 
-function agentLine(agent: AgentRow, selected: boolean): string {
+function agentLine(
+  agent: AgentRow,
+  selected: boolean,
+  quitBlocked: boolean,
+): string {
   const operation = sanitizeDashboardText(agent.currentOperation ?? "idle");
   const pane = sanitizeDashboardText(agent.paneId ?? "no pane");
-  return `${rowMarker(agent.attention, selected)} ${agent.status.padEnd(12)} ${sanitizeDashboardText(agent.id).padEnd(16)} ${sanitizeDashboardText(agent.role)}  ${operation}  [${pane}]`;
+  return `${rowMarker(agent.attention, selected, quitBlocked)} ${agent.status.padEnd(12)} ${sanitizeDashboardText(agent.id).padEnd(16)} ${sanitizeDashboardText(agent.role)}  ${operation}  [${pane}]`;
 }
 
 /** Render a bounded, terminal-safe snapshot for the live management pane. */
@@ -105,6 +121,11 @@ export function renderDashboard(
     options.refreshedAt === undefined
       ? ""
       : `  refreshed ${new Date(options.refreshedAt).toISOString()}`;
+  const quitBlockerKeys = new Set(
+    (options.quitBlockers ?? []).map(
+      (blocker) => `${blocker.entityType}:${blocker.entityId}`,
+    ),
+  );
   const attentionLines = [
     ...(view.run.blockedReason === null
       ? []
@@ -138,6 +159,7 @@ export function renderDashboard(
         story,
         options.selection?.section === "stories" &&
           options.selection.index === index,
+        quitBlockerKeys.has(`story:${story.id}`),
       ),
     ),
     "",
@@ -147,6 +169,7 @@ export function renderDashboard(
         agent,
         options.selection?.section === "agents" &&
           options.selection.index === index,
+        quitBlockerKeys.has(`agent:${agent.id}`),
       ),
     ),
     "",

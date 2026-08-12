@@ -216,6 +216,15 @@ test("detached process serves core read actions and protects shutdown authority"
     );
     await assert.rejects(
       managementClient.request({
+        action: "parent.control",
+        payload: { action: "dismiss" },
+      }),
+      (error: unknown) =>
+        error instanceof ControllerRemoteError &&
+        error.code === "run-not-quiescent",
+    );
+    await assert.rejects(
+      managementClient.request({
         action: "orchestration.execute",
         payload: {},
       }),

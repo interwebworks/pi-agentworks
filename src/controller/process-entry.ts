@@ -18,6 +18,7 @@ import type {
   StoryState,
 } from "../domain/controller-state.ts";
 import { transitionRun, transitionStory } from "../domain/controller-state.ts";
+import { assessManagementQuitReadiness } from "../domain/management-quit.ts";
 import {
   decodeAuthenticatedAgentMessage,
   InvalidAgentMessageRouteError,
@@ -790,7 +791,14 @@ function parseRunInitializationPayload(payload: JsonValue): {
 }
 
 type ParentControlAction =
-  "approve" | "reject" | "steer" | "pause" | "resume" | "focus" | "close";
+  | "approve"
+  | "reject"
+  | "steer"
+  | "pause"
+  | "resume"
+  | "focus"
+  | "close"
+  | "dismiss";
 
 interface ParentControlPayload {
   readonly action: ParentControlAction;
@@ -829,6 +837,7 @@ function parseParentControlPayload(payload: JsonValue): ParentControlPayload {
     "resume",
     "focus",
     "close",
+    "dismiss",
   ]);
   if (typeof action !== "string" || !allowed.has(action)) {
     throw new ControllerRequestError(
@@ -1077,6 +1086,43 @@ function executeParentControl(
         );
       }
       break;
+    case "dismiss": {
+      if (targetAgent !== undefined || control.message !== undefined) {
+        throw new ControllerRequestError(
+          "invalid-payload",
+          "Dismiss applies only to the complete management run",
+        );
+      }
+      const readiness = assessManagementQuitReadiness(snapshot);
+      if (!readiness.canQuit) {
+        throw new ControllerRequestError(
+          "run-not-quiescent",
+          `Management quit is blocked by ${readiness.blockers
+            .map(
+              (blocker) =>
+                `${blocker.entityType}:${blocker.entityId} (${blocker.status})`,
+            )
+            .join(", ")}`.slice(0, 512),
+        );
+      }
+      if (!["completed", "cancelled"].includes(run.status)) {
+        run = transitionRun(run, {
+          type: "run-cancelled",
+          at: now,
+          reason: "management dismissed after all agent work completed",
+        });
+        events.push(
+          parentControlEvent(
+            "dismiss",
+            "run",
+            runId,
+            { status: run.status },
+            now,
+          ),
+        );
+      }
+      break;
+    }
     case "close":
       if (targetAgent !== undefined) {
         events.push(
@@ -1314,11 +1360,12 @@ export async function runControllerProcess(
             control.action !== "approve" &&
             control.action !== "reject" &&
             control.action !== "pause" &&
-            control.action !== "resume"
+            control.action !== "resume" &&
+            control.action !== "dismiss"
           ) {
             throw new ControllerRequestError(
               "forbidden",
-              "Management controls are limited to approve, reject, pause, and resume",
+              "Management controls are limited to approve, reject, pause, resume, and dismiss",
             );
           }
         } else if (!allowedRead) {

@@ -260,6 +260,9 @@ export class AgentPaneRestorationController {
     if (snapshot === null) {
       throw new AgentPaneRestorationError("controller run is unavailable");
     }
+    if (["completed", "failed", "cancelled"].includes(snapshot.run.status)) {
+      return emptyResult();
+    }
     const roster = this.#roster(snapshot);
     if (roster.length === 0) return emptyResult();
     const panes = await this.#herdr.listPanes(request.workspaceId);

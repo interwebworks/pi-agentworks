@@ -111,6 +111,19 @@ test("shows only state-valid workflow controls", () => {
   );
 });
 
+test("marks quit-blocking story and agent rows in red-ready form", () => {
+  const output = renderDashboard(view, {
+    width: 120,
+    height: 40,
+    quitBlockers: [
+      { entityType: "story", entityId: "story-1", status: "working" },
+      { entityType: "agent", entityId: "agent-1", status: "blocked" },
+    ],
+  }).join("\n");
+  assert.match(output, /^× working\s+agent-1/mu);
+  assert.match(output, /^× blocked\s+agent-1/mu);
+});
+
 test("renders the durable launch failure that prevented agent panes", () => {
   const output = renderDashboard(
     {

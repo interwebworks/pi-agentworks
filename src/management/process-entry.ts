@@ -5,7 +5,12 @@ import {
 } from "../application/tui/dashboard-renderer.ts";
 import { PaneFocusService } from "../application/herdr/pane-focus-service.ts";
 import { HerdrCliGateway } from "../infrastructure/herdr/herdr-cli-gateway.ts";
+import { LinuxPaneProcessEvidenceGateway } from "../infrastructure/herdr/linux-pane-process-evidence.ts";
 import type { RunStatus } from "../domain/controller-state.ts";
+import {
+  assessManagementQuitReadiness,
+  type ManagementQuitBlocker,
+} from "../domain/management-quit.ts";
 import {
   createDiscoveredParentClientFactory,
   readControllerDashboard,
@@ -70,12 +75,83 @@ export function parseManagementProcessArguments(
 
 function paint(line: string): string {
   if (line.startsWith("AGENTWORKS")) return `\x1b[1;36m${line}\x1b[0m`;
-  if (line.startsWith("!") || line.startsWith("×"))
+  if (line.startsWith("!") || line.startsWith("×") || line.startsWith(">×"))
     return `\x1b[31m${line}\x1b[0m`;
   if (/^(STORIES|AGENTS|ATTENTION)/u.test(line))
     return `\x1b[1;34m${line}\x1b[0m`;
   if (line.startsWith("·")) return `\x1b[36m${line}\x1b[0m`;
   return line;
+}
+
+const OWNERSHIP = Object.freeze({
+  kind: "AGENTWORKS_PANE_KIND",
+  run: "AGENTWORKS_RUN_ID",
+});
+
+function hasRunPaneOwnership(
+  environment: Readonly<Record<string, string>>,
+  runId: string,
+  kind: "agent" | "management",
+): boolean {
+  return (
+    environment[OWNERSHIP.kind] === kind && environment[OWNERSHIP.run] === runId
+  );
+}
+
+/** Close only the exact Agentworks-owned surfaces for this authenticated run. */
+async function closeOwnedRunSurfaces(runId: string): Promise<void> {
+  const herdr = new HerdrCliGateway();
+  const evidence = new LinuxPaneProcessEvidenceGateway(herdr);
+  const panes = await herdr.listPanes();
+  const owned: {
+    readonly paneId: string;
+    readonly tabId: string;
+    readonly kind: "agent" | "management";
+  }[] = [];
+  for (const pane of panes) {
+    const kind = pane.tokens.aw_kind;
+    if (
+      (kind !== "agent" && kind !== "management") ||
+      pane.tokens.aw_run !== runId
+    ) {
+      continue;
+    }
+    const process = await evidence.readShellEnvironment(pane.paneId);
+    if (
+      process !== null &&
+      hasRunPaneOwnership(process.environment, runId, kind)
+    ) {
+      owned.push(
+        Object.freeze({ paneId: pane.paneId, tabId: pane.tabId, kind }),
+      );
+    }
+  }
+  const agentPanes = owned.filter((pane) => pane.kind === "agent");
+  const agentTabs = new Set(agentPanes.map((pane) => pane.tabId));
+  if (agentTabs.size > 1) {
+    throw new Error("Agentworks quit refused: agent panes span multiple tabs");
+  }
+  const agentTabId = agentTabs.values().next().value;
+  if (
+    agentTabId !== undefined &&
+    panes.some(
+      (pane) =>
+        pane.tabId === agentTabId &&
+        !agentPanes.some((ownedPane) => ownedPane.paneId === pane.paneId),
+    )
+  ) {
+    throw new Error(
+      "Agentworks quit refused: Pi Agents tab has an unowned pane",
+    );
+  }
+  const managementPanes = owned.filter((pane) => pane.kind === "management");
+  if (managementPanes.length !== 1) {
+    throw new Error(
+      "Agentworks quit refused: management pane ownership is ambiguous",
+    );
+  }
+  if (agentTabId !== undefined) await herdr.closeTab(agentTabId);
+  await herdr.closePane(managementPanes[0]?.paneId ?? "");
 }
 
 /** Run the polling terminal dashboard until q, Ctrl-C, or termination. */
@@ -98,6 +174,8 @@ export async function runManagementDashboard(
   let selectedSection: DashboardSection = "stories";
   let selectedIndex = 0;
   let controlInFlight = false;
+  let quitInFlight = false;
+  let quitBlockers: readonly ManagementQuitBlocker[] = [];
   let notice = "";
   const state: { timer?: NodeJS.Timeout } = {};
   const render = async (): Promise<void> => {
@@ -115,6 +193,13 @@ export async function runManagementDashboard(
       currentAgentPaneIds = dashboard.view.agents
         .map((agent) => agent.paneId)
         .filter((paneId): paneId is string => paneId !== null);
+      if (quitBlockers.length > 0) {
+        quitBlockers = assessManagementQuitReadiness({
+          run: dashboard.view.run,
+          stories: dashboard.view.stories,
+          agents: dashboard.view.agents,
+        }).blockers;
+      }
       if (!authenticated) {
         writeManagementDashboardReadyProof(
           configuration.readyPath,
@@ -128,6 +213,7 @@ export async function runManagementDashboard(
         plannedActions: dashboard.plannedActions,
         selection: { section: selectedSection, index: selectedIndex },
         notice,
+        quitBlockers,
         refreshedAt: Date.now(),
       });
       process.stdout.write(`\x1b[2J\x1b[H${lines.map(paint).join("\n")}\x1b[J`);
@@ -169,6 +255,47 @@ export async function runManagementDashboard(
       controlInFlight = false;
     }
     await render();
+  };
+  const quit = async (): Promise<void> => {
+    if (quitInFlight || stopped) return;
+    const dashboard = currentDashboard;
+    if (dashboard === null) {
+      notice = "Quit is unavailable until the management state loads";
+      await render();
+      return;
+    }
+    const readiness = assessManagementQuitReadiness({
+      run: dashboard.view.run,
+      stories: dashboard.view.stories,
+      agents: dashboard.view.agents,
+    });
+    if (!readiness.canQuit) {
+      quitBlockers = readiness.blockers;
+      notice = `Quit blocked: ${String(readiness.blockers.length)} unfinished or unhealthy item(s) marked red`;
+      await render();
+      return;
+    }
+    quitInFlight = true;
+    try {
+      const client = await createClient(configuration.runId);
+      try {
+        await client.request({
+          action: "parent.control",
+          idempotencyKey: `management-dismiss-${Date.now().toString(36)}`,
+          payload: { action: "dismiss" },
+        });
+      } finally {
+        client.close();
+      }
+      await closeOwnedRunSurfaces(configuration.runId);
+      stop();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notice = `Quit failed: ${message.replace(/[\r\n]+/gu, " ").slice(0, 240)}`;
+      await render();
+    } finally {
+      quitInFlight = false;
+    }
   };
   const focusPiAgents = async (): Promise<void> => {
     const paneId = currentAgentPaneIds[0];
@@ -272,7 +399,8 @@ export async function runManagementDashboard(
   };
   const onInput = (data: Buffer): void => {
     const text = data.toString("utf8");
-    if (text === "q" || text === "\u0003") stop();
+    if (text === "q") void quit().catch(showError);
+    if (text === "\u0003") stop();
     if (text === "r") void render().catch(showError);
     if (text === "\u001b[A" || text === "k") moveSelection(-1);
     if (text === "\u001b[B" || text === "j") moveSelection(1);
