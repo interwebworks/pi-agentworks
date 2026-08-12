@@ -37,6 +37,25 @@ const PROVIDER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
 const CHILD_AUTH_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
+function childBridgeToolNames(
+  controllerActions: readonly string[],
+): readonly string[] {
+  const names: string[] = [];
+  if (
+    controllerActions.includes("report-status") ||
+    controllerActions.includes("contact-manager")
+  ) {
+    names.push("agentworks_report_status");
+  }
+  if (controllerActions.includes("submit-work")) {
+    names.push("agentworks_submit_work");
+  }
+  if (controllerActions.includes("submit-review")) {
+    names.push("agentworks_submit_review");
+  }
+  return Object.freeze(names);
+}
+
 type LaunchHerdrGateway = Pick<
   HerdrGateway,
   "getPane" | "getPaneProcessInfo" | "runCommand"
@@ -465,6 +484,12 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
       );
     }
 
+    const activeToolNames = [
+      ...new Set([
+        ...request.task.allowedTools,
+        ...childBridgeToolNames(request.role.controllerActions),
+      ]),
+    ];
     const cliArguments = [
       piCliPath,
       "--provider",
@@ -476,7 +501,7 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
       "--system-prompt",
       artifacts.role.path,
       "--tools",
-      request.task.allowedTools.join(","),
+      activeToolNames.join(","),
       "--no-extensions",
       "--extension",
       childBridgePath,
@@ -594,7 +619,14 @@ export class SecurePiAgentLauncher implements PiAgentLauncher {
         "Role identity or write policy does not match the task specification",
       );
     }
-    const roleTools = new Set(request.role.tools);
+    const roleTools: ReadonlySet<string> = new Set(request.role.tools);
+    if (
+      request.task.allowedTools.some((tool) => tool.startsWith("agentworks_"))
+    ) {
+      throw new SecurePiAgentLaunchError(
+        "Task tools cannot request Agentworks bridge authority directly",
+      );
+    }
     if (request.task.allowedTools.some((tool) => !roleTools.has(tool))) {
       throw new SecurePiAgentLaunchError(
         "Task tools exceed the selected role tool authority",

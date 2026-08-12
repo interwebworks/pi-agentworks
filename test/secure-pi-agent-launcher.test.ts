@@ -233,7 +233,11 @@ function fixture() {
     "--system-prompt",
     join(session, "role-system-prompt.md"),
     "--tools",
-    request.task.allowedTools.join(","),
+    [
+      ...request.task.allowedTools,
+      "agentworks_report_status",
+      "agentworks_submit_work",
+    ].join(","),
     "--no-extensions",
     "--extension",
     childBridge,
@@ -392,7 +396,12 @@ test("read-only roles receive a read-only worktree without a writer lease", asyn
       writerLeaseActive: false,
     };
     current.herdr.processArgv = current.herdr.processArgv.map((argument) => {
-      if (argument === "read,edit,write,bash") return "read";
+      if (
+        argument ===
+        "read,edit,write,bash,agentworks_report_status,agentworks_submit_work"
+      ) {
+        return "read,agentworks_report_status,agentworks_submit_review";
+      }
       if (argument === "Builder · story-1") return "Reviewer · story-1";
       return argument;
     });
@@ -443,6 +452,22 @@ test("launch refuses stale authority, pane mismatch, tool widening, and missing 
     );
   } finally {
     rmSync(widened.root, { recursive: true, force: true });
+  }
+
+  const bridgeEscalation = fixture();
+  try {
+    await assert.rejects(
+      bridgeEscalation.launcher.launch({
+        ...bridgeEscalation.request,
+        task: {
+          ...bridgeEscalation.request.task,
+          allowedTools: ["read", "agentworks_report_status"],
+        },
+      }),
+      /cannot request Agentworks bridge authority directly/u,
+    );
+  } finally {
+    rmSync(bridgeEscalation.root, { recursive: true, force: true });
   }
 
   const missing = fixture();
