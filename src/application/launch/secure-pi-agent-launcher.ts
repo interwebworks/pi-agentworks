@@ -333,7 +333,8 @@ function launchScript(
   const directory = join(runtimePath, "launch-scripts");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertPrivateDirectory(directory, "launch script directory");
-  const name = `${agentId}-${sessionId}.sh`;
+  const commandDigest = sha256(command.join("\0")).slice(0, 16);
+  const name = `${agentId}-${sessionId}-${commandDigest}.sh`;
   const script = writeDurableArtifact(
     directory,
     name,
