@@ -72,7 +72,7 @@ test("environment launch resolver returns deterministic runtime settings", async
     agentworksPackagePath: "/agentworks",
     childBridgePath: "/agentworks/bridge.ts",
     nodePath: "/usr/bin/node",
-    gitMetadataPaths: ["/repo/.git", "/worktree/story-1/.git"],
+    gitMetadataPaths: ["/repo/.git"],
     projectManagerGitMetadataPaths: [
       "/repo/.git",
       "/worktree/integration/.git",

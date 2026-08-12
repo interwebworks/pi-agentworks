@@ -533,13 +533,12 @@ export function createProductionOrchestrationProviderFromComposition(
         agentworksPackagePath,
         childBridgePath,
         nodePath,
+        // Per-story Git metadata is added only for the assignment target by
+        // EnvironmentLaunchConfigurationResolver. Future story worktrees do
+        // not exist when the initial team is composed.
         gitMetadataPaths: [
           gitInspection.gitDirectory,
           gitInspection.commonGitDirectory,
-          ...snapshot.stories.map((candidate) =>
-            join(candidate.worktreePath, ".git"),
-          ),
-          join(run.integrationWorktree, ".git"),
         ],
         projectManagerGitMetadataPaths: [
           gitInspection.gitDirectory,

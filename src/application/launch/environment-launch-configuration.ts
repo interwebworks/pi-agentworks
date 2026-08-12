@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type {
   AgentState,
   RunState,
@@ -114,7 +115,12 @@ export class EnvironmentLaunchConfigurationResolver implements AssignmentLaunchC
         kind === "project-manager" &&
         this.#options.projectManagerGitMetadataPaths !== undefined
           ? this.#options.projectManagerGitMetadataPaths
-          : this.#options.gitMetadataPaths,
+          : Object.freeze([
+              ...new Set([
+                ...this.#options.gitMetadataPaths,
+                join(story.worktreePath, ".git"),
+              ]),
+            ]),
       additionalReadOnlyPaths: this.#options.additionalReadOnlyPaths,
       provider: this.#options.provider,
       model: this.#options.model,
