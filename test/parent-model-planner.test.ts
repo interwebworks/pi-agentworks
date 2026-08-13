@@ -9,9 +9,33 @@ interface JsonSchema {
   readonly required?: unknown;
   readonly items?: JsonSchema;
   readonly anyOf?: readonly JsonSchema[];
+  readonly minLength?: unknown;
+  readonly maxLength?: unknown;
+  readonly pattern?: unknown;
+  readonly minimum?: unknown;
+  readonly maximum?: unknown;
+  readonly minItems?: unknown;
+  readonly maxItems?: unknown;
+  readonly uniqueItems?: unknown;
 }
 
-function assertCodexStrictSchema(schema: JsonSchema): void {
+function assertStrictJsonSchema(schema: JsonSchema): void {
+  for (const keyword of [
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minimum",
+    "maximum",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+  ] as const) {
+    assert.equal(
+      schema[keyword],
+      undefined,
+      `${keyword} is unsupported by constrained JSON-schema providers`,
+    );
+  }
   if (schema.type === "object") {
     const properties = schema.properties ?? {};
     assert.deepEqual(
@@ -20,11 +44,11 @@ function assertCodexStrictSchema(schema: JsonSchema): void {
       "every strict object property must be required",
     );
     for (const property of Object.values(properties)) {
-      assertCodexStrictSchema(property);
+      assertStrictJsonSchema(property);
     }
   }
-  if (schema.items !== undefined) assertCodexStrictSchema(schema.items);
-  for (const variant of schema.anyOf ?? []) assertCodexStrictSchema(variant);
+  if (schema.items !== undefined) assertStrictJsonSchema(schema.items);
+  for (const variant of schema.anyOf ?? []) assertStrictJsonSchema(variant);
 }
 
 const submittedPlan = {
@@ -110,7 +134,7 @@ test("uses the active parent model and requires a structured plan tool call", as
       "submit_agentworks_plan",
     ],
   );
-  for (const tool of tools) assertCodexStrictSchema(tool.parameters);
+  for (const tool of tools) assertStrictJsonSchema(tool.parameters);
 
   const listFiles = tools.find((tool) => tool.name === "list_repository_files");
   assert.ok(listFiles);

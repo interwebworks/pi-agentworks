@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import type {
   AssistantMessage,
   Message,
@@ -34,10 +34,10 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
 ]);
 const SENSITIVE_FILE_NAMES = new Set([".env", ".env.local", ".npmrc"]);
 
-// Codex applies OpenAI strict-schema validation to every JSON-schema tool in
-// this request, including tools marked `strict: "prefer"`. Strict schemas
-// require every declared object property to appear in `required`, so defaults
-// are represented as explicit nulls rather than omitted optional properties.
+// Pi forwards JSON-schema tools through provider adapters that may enforce
+// strict schemas. Strict schemas require every declared object property to
+// appear in `required`, so defaults are explicit nulls rather than omitted
+// optional properties.
 const NullablePath = Type.Union([
   Type.String({ minLength: 1, maxLength: 512 }),
   Type.Null(),
@@ -71,33 +71,61 @@ const SearchRepositorySchema = Type.Object(
   { additionalProperties: false },
 );
 
+// JSON-schema constrained sampling does not support every validation keyword
+// emitted by TypeBox. Keep the structural schema required for provider-side
+// output generation, and retain the full TypeBox schema at the runtime trust
+// boundary where parseInitialStoryPlan validates the submitted plan.
+const UNSUPPORTED_CONSTRAINED_SCHEMA_KEYWORDS = new Set([
+  "minLength",
+  "maxLength",
+  "pattern",
+  "minimum",
+  "maximum",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+]);
+
+function constrainedSchema<T extends TSchema>(schema: T): T {
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(visit);
+    if (value === null || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => !UNSUPPORTED_CONSTRAINED_SCHEMA_KEYWORDS.has(key))
+        .map(([key, child]) => [key, visit(child)]),
+    );
+  };
+  return visit(schema) as T;
+}
+
 const PLANNING_TOOLS: readonly Tool[] = Object.freeze([
   {
     name: "list_repository_files",
     description:
       "List safe repository files and directories beneath a relative path. Use this to discover the codebase before planning.",
-    parameters: ListRepositoryFilesSchema,
+    parameters: constrainedSchema(ListRepositoryFilesSchema),
     constrainedSampling: { type: "json_schema", strict: "prefer" },
   },
   {
     name: "read_repository_file",
     description:
       "Read a bounded range from one safe, relative repository file. Use this to understand existing architecture and conventions.",
-    parameters: ReadRepositoryFileSchema,
+    parameters: constrainedSchema(ReadRepositoryFileSchema),
     constrainedSampling: { type: "json_schema", strict: "prefer" },
   },
   {
     name: "search_repository",
     description:
       "Search safe, text-like repository files for a literal query and receive matching paths and line excerpts.",
-    parameters: SearchRepositorySchema,
+    parameters: constrainedSchema(SearchRepositorySchema),
     constrainedSampling: { type: "json_schema", strict: "prefer" },
   },
   {
     name: "submit_agentworks_plan",
     description:
       "Submit the complete implementation-ready initial Agentworks story plan. Call this exactly once after repository inspection. Do not emit the plan as prose.",
-    parameters: InitialStoryPlanSchema,
+    parameters: constrainedSchema(InitialStoryPlanSchema),
     constrainedSampling: { type: "json_schema", strict: "require" },
   },
 ]);
