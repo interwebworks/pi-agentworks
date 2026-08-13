@@ -34,25 +34,39 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
 ]);
 const SENSITIVE_FILE_NAMES = new Set([".env", ".env.local", ".npmrc"]);
 
+// Codex applies OpenAI strict-schema validation to every JSON-schema tool in
+// this request, including tools marked `strict: "prefer"`. Strict schemas
+// require every declared object property to appear in `required`, so defaults
+// are represented as explicit nulls rather than omitted optional properties.
+const NullablePath = Type.Union([
+  Type.String({ minLength: 1, maxLength: 512 }),
+  Type.Null(),
+]);
 const ListRepositoryFilesSchema = Type.Object(
   {
-    path: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
-    depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+    path: NullablePath,
+    depth: Type.Union([Type.Integer({ minimum: 1, maximum: 4 }), Type.Null()]),
   },
   { additionalProperties: false },
 );
 const ReadRepositoryFileSchema = Type.Object(
   {
     path: Type.String({ minLength: 1, maxLength: 512 }),
-    startLine: Type.Optional(Type.Integer({ minimum: 1, maximum: 100_000 })),
-    maxLines: Type.Optional(Type.Integer({ minimum: 1, maximum: 400 })),
+    startLine: Type.Union([
+      Type.Integer({ minimum: 1, maximum: 100_000 }),
+      Type.Null(),
+    ]),
+    maxLines: Type.Union([
+      Type.Integer({ minimum: 1, maximum: 400 }),
+      Type.Null(),
+    ]),
   },
   { additionalProperties: false },
 );
 const SearchRepositorySchema = Type.Object(
   {
     query: Type.String({ minLength: 1, maxLength: 240 }),
-    path: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+    path: NullablePath,
   },
   { additionalProperties: false },
 );
@@ -107,6 +121,7 @@ function plannerSystemPrompt(mode: ComplexityMode): string {
   return `You are Agentworks' sole preflight implementation planner.
 Create the complete execution plan before any Agentworks management pane or child agent exists.
 You may inspect the repository with the supplied read-only tools.
+Every declared tool argument must be present. Use null for an argument whose documented default you want.
 Do not modify files, delegate work, or create a planning story.
 
 Turn the requested outcome into dependency-ordered, independently deliverable implementation stories.

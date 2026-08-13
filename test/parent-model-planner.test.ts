@@ -3,6 +3,30 @@ import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createParentModelPlanner } from "../src/extension/parent-model-planner.ts";
 
+interface JsonSchema {
+  readonly type?: unknown;
+  readonly properties?: Readonly<Record<string, JsonSchema>>;
+  readonly required?: unknown;
+  readonly items?: JsonSchema;
+  readonly anyOf?: readonly JsonSchema[];
+}
+
+function assertCodexStrictSchema(schema: JsonSchema): void {
+  if (schema.type === "object") {
+    const properties = schema.properties ?? {};
+    assert.deepEqual(
+      [...(schema.required as readonly string[])].sort(),
+      Object.keys(properties).sort(),
+      "every strict object property must be required",
+    );
+    for (const property of Object.values(properties)) {
+      assertCodexStrictSchema(property);
+    }
+  }
+  if (schema.items !== undefined) assertCodexStrictSchema(schema.items);
+  for (const variant of schema.anyOf ?? []) assertCodexStrictSchema(variant);
+}
+
 const submittedPlan = {
   stories: [
     {
@@ -32,7 +56,10 @@ const submittedPlan = {
 };
 
 test("uses the active parent model and requires a structured plan tool call", async () => {
-  const calls: unknown[][] = [];
+  const calls: (readonly {
+    readonly name: string;
+    readonly parameters: JsonSchema;
+  }[])[] = [];
   const planner = createParentModelPlanner();
   const context = {
     cwd: process.cwd(),
@@ -42,9 +69,11 @@ test("uses the active parent model and requires a structured plan tool call", as
     modelRegistry: {
       complete(
         _model: unknown,
-        request: { tools?: readonly { name: string }[] },
+        request: {
+          tools?: readonly { name: string; parameters: JsonSchema }[];
+        },
       ) {
-        calls.push(request.tools?.map((tool) => tool.name) ?? []);
+        calls.push(request.tools ?? []);
         return Promise.resolve({
           content: [
             {
@@ -70,12 +99,26 @@ test("uses the active parent model and requires a structured plan tool call", as
     plan.stories.map((story) => story.id),
     ["health-sync"],
   );
-  assert.deepEqual(calls, [
+  const tools = calls[0];
+  assert.ok(tools);
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
     [
       "list_repository_files",
       "read_repository_file",
       "search_repository",
       "submit_agentworks_plan",
     ],
-  ]);
+  );
+  for (const tool of tools) assertCodexStrictSchema(tool.parameters);
+
+  const listFiles = tools.find((tool) => tool.name === "list_repository_files");
+  assert.ok(listFiles);
+  assert.deepEqual(listFiles.parameters.required, ["path", "depth"]);
+  const path = listFiles.parameters.properties?.path;
+  assert.ok(path);
+  assert.deepEqual(
+    path.anyOf?.map((variant) => variant.type),
+    ["string", "null"],
+  );
 });
