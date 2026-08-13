@@ -52,6 +52,10 @@ import {
 import { SqliteControllerRepository } from "./sqlite-controller-repository.ts";
 import { assessStartupRecovery } from "../../domain/recovery.ts";
 import {
+  parseInitialStoryPlan,
+  type InitialStoryPlan,
+} from "../../domain/initial-story-plan.ts";
+import {
   assertCallerRuntimeMatchesComposition,
   environmentFromControllerLaunchComposition,
   verifyControllerLaunchComposition,
@@ -87,6 +91,10 @@ const MAX_EXPLICIT_INITIAL_STORIES = 16;
  * `Stories: (1) ..., (2) ...`; this keeps parent-side planning deterministic
  * instead of asking a child agent to invent controller-owned stories.
  */
+/**
+ * Historical test-only compatibility parser for callers that bypass the parent
+ * extension. Interactive launches always supply a parent-model plan instead.
+ */
 export function parseInitialStoryTitles(task: string): readonly string[] {
   const marker = /\bstories\s*:\s*/iu.exec(task);
   if (marker === null) return Object.freeze([task]);
@@ -107,6 +115,31 @@ export function parseInitialStoryTitles(task: string): readonly string[] {
     .filter((title) => title.length > 0)
     .slice(0, MAX_EXPLICIT_INITIAL_STORIES);
   return titles.length < 2 ? Object.freeze([task]) : Object.freeze(titles);
+}
+
+function initialStoryPlan(
+  input: ParentManagementRequest,
+  task: string,
+): InitialStoryPlan {
+  if (input.plan !== undefined) return parseInitialStoryPlan(input.plan);
+  return parseInitialStoryPlan({
+    stories: parseInitialStoryTitles(task).map((title, index) => ({
+      id: `story-${String(index + 1)}`,
+      title,
+      narrative: task,
+      objective: title,
+      taskKinds: ["software-development"],
+      writable: true,
+      dependencies: [],
+      scope: { included: ["repository"], excluded: ["secrets"] },
+      technologyChoices: ["existing repository stack"],
+      constraints: ["stay within the requested task scope"],
+      deliverables: [title],
+      acceptanceCriteria: [title],
+      validation: [{ command: "npm test", expected: "passes" }],
+      escalationConditions: ["blocked by missing information or access"],
+    })),
+  });
 }
 
 function record(
@@ -945,28 +978,29 @@ export function createDiscoveredParentManagementGateway(
         type: "plan-prepared",
         at: now,
       });
-      const stories = parseInitialStoryTitles(task).map((title, index) => {
+      const plan = initialStoryPlan(input, task);
+      const stories = plan.stories.map((story, index) => {
         const sequence = index + 1;
-        const storyId = `${runId}-story-${String(sequence)}`;
+        const storyId = story.id;
         const draftStory = createStoryState({
           id: storyId,
           runId,
-          title,
+          title: story.title,
           branchName: storyBranchForRun(runId, storyId),
           worktreePath: `${runtimeRoot}/worktrees/${runId}/story-${String(sequence)}-worktree`,
           planning: {
-            narrative: task,
-            objective: title,
-            taskKinds: ["software-development"],
-            writable: true,
-            scope: { included: ["repository"], excluded: ["secrets"] },
-            technologyChoices: ["existing repository stack"],
-            constraints: ["stay within the requested task scope"],
-            dependencies: [],
-            deliverables: [title],
-            acceptanceCriteria: [title],
-            validation: [{ command: "npm test", expected: "passes" }],
-            escalationConditions: ["blocked by missing information or access"],
+            narrative: story.narrative,
+            objective: story.objective,
+            taskKinds: story.taskKinds,
+            writable: story.writable,
+            scope: story.scope,
+            technologyChoices: story.technologyChoices,
+            constraints: story.constraints,
+            dependencies: story.dependencies,
+            deliverables: story.deliverables,
+            acceptanceCriteria: story.acceptanceCriteria,
+            validation: story.validation,
+            escalationConditions: story.escalationConditions,
           },
           createdAt: now,
         });

@@ -1,24 +1,51 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseInitialStoryTitles } from "../src/infrastructure/controller/parent-management-gateway.ts";
+import {
+  InvalidInitialStoryPlanError,
+  parseInitialStoryPlan,
+} from "../src/domain/initial-story-plan.ts";
 
-test("an ordinary launch task remains one controller-owned story", () => {
-  assert.deepEqual(parseInitialStoryTitles("Ship the dashboard"), [
-    "Ship the dashboard",
-  ]);
-});
+function story(id: string, dependencies: string[] = []) {
+  return {
+    id,
+    title: `Deliver ${id}`,
+    narrative:
+      "As a user, I want this delivered so that I receive the requested capability.",
+    objective: `Implement ${id} completely.`,
+    taskKinds: ["software-development"],
+    writable: true as const,
+    dependencies,
+    scope: { included: [id], excluded: ["unrelated changes"] },
+    technologyChoices: ["existing repository stack"],
+    constraints: ["preserve existing behavior outside the story scope"],
+    deliverables: [`implemented ${id}`],
+    acceptanceCriteria: [`${id} behaves as specified`],
+    validation: [{ command: "npm test", expected: "passes" }],
+    escalationConditions: ["required product behavior is ambiguous"],
+  };
+}
 
-test("an explicit numbered Stories list creates independent initial stories", () => {
+test("validates and dependency-orders a parent-model initial plan", () => {
+  const plan = parseInitialStoryPlan({
+    stories: [story("delivery", ["foundation"]), story("foundation")],
+  });
+
   assert.deepEqual(
-    parseInitialStoryTitles(
-      "UI smoke test. Stories: (1) reconnaissance, (2) architecture check, (3) delivery check. Do not edit files.",
-    ),
-    ["reconnaissance", "architecture check", "delivery check"],
+    plan.stories.map((candidate) => candidate.id),
+    ["foundation", "delivery"],
   );
 });
 
-test("a malformed explicit list fails closed to one story", () => {
-  assert.deepEqual(parseInitialStoryTitles("Stories: reconnaissance"), [
-    "Stories: reconnaissance",
-  ]);
+test("rejects an incomplete or non-deliverable parent-model plan", () => {
+  assert.throws(
+    () =>
+      parseInitialStoryPlan({
+        stories: [{ ...story("not-writable"), writable: false }],
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof InvalidInitialStoryPlanError);
+      assert.match(error.message, /writable/u);
+      return true;
+    },
+  );
 });

@@ -70,6 +70,15 @@ export interface AgentBlockedMessage {
   readonly detail: string;
 }
 
+/** A previously reported transient blocker was resolved and work resumed. */
+export interface AgentUnblockedMessage {
+  readonly protocolVersion: 1;
+  readonly type: "agent-unblocked";
+  readonly runId: string;
+  readonly agentId: string;
+  readonly operation: string;
+}
+
 /** A writer asks the controller to inspect and commit its worktree. */
 export interface CandidateReadyMessage {
   readonly protocolVersion: 1;
@@ -130,6 +139,7 @@ export type AgentMessage =
   | OperationMessage
   | HeartbeatMessage
   | AgentBlockedMessage
+  | AgentUnblockedMessage
   | CandidateReadyMessage
   | ReviewSubmittedMessage
   | SupervisorMessage;
@@ -241,6 +251,20 @@ export function agentBlocked(
     agentId,
     reason,
     detail,
+  });
+}
+
+export function agentUnblocked(
+  runId: string,
+  agentId: string,
+  operation: string,
+): AgentUnblockedMessage {
+  return Object.freeze({
+    protocolVersion: AGENT_COMMS_PROTOCOL_VERSION,
+    type: "agent-unblocked",
+    runId,
+    agentId,
+    operation,
   });
 }
 

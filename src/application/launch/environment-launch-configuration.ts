@@ -5,6 +5,7 @@ import type {
   StoryState,
 } from "../../domain/controller-state.ts";
 import type { ControllerSnapshot } from "../ports/controller-repository.ts";
+import type { RoleModelAssociationResolver } from "../ports/model-association-repository.ts";
 import type { RoleCatalogEntry } from "./role-resource-resolver.ts";
 import type { StoryAgentKind } from "./assignment-preparation.ts";
 import type {
@@ -55,6 +56,11 @@ export interface EnvironmentLaunchConfigurationOptions {
     story: StoryState,
     snapshot: ControllerSnapshot,
   ) => string;
+  /**
+   * Optional resolver that maps each role to a provider/model/thinking
+   * override. When omitted, every role receives the runtime default.
+   */
+  readonly modelAssociationResolver?: RoleModelAssociationResolver;
 }
 
 export class EnvironmentLaunchConfigurationError extends Error {
@@ -98,6 +104,12 @@ export class EnvironmentLaunchConfigurationResolver implements AssignmentLaunchC
     required(operationId, "operation id");
     required(sessionId, "session id");
     const endpoint = this.#options.endpoint.resolve(run, story, snapshot);
+
+    const association = this.#options.modelAssociationResolver?.resolve(
+      role.runtimeId,
+      role.authority,
+    );
+
     return Promise.resolve({
       workspaceId: this.#options.workspaceId,
       operationId,
@@ -122,9 +134,9 @@ export class EnvironmentLaunchConfigurationResolver implements AssignmentLaunchC
               ]),
             ]),
       additionalReadOnlyPaths: this.#options.additionalReadOnlyPaths,
-      provider: this.#options.provider,
-      model: this.#options.model,
-      thinking: this.#options.thinking,
+      provider: association?.provider ?? this.#options.provider,
+      model: association?.model ?? this.#options.model,
+      thinking: association?.thinking ?? this.#options.thinking,
     });
   }
 }

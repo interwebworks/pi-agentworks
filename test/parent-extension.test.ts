@@ -6,6 +6,8 @@ import type {
   AgentworksToolInput,
   ParentManagementGateway,
 } from "../src/extension/parent-command.ts";
+import { parseInitialStoryPlan } from "../src/domain/initial-story-plan.ts";
+import type { ParentLaunchPlanner } from "../src/extension/parent-model-planner.ts";
 
 test("parent extension delegates launch commands and tool actions to its gateway", async () => {
   const commands = new Map<
@@ -31,6 +33,31 @@ test("parent extension delegates launch commands and tool actions to its gateway
       return Promise.resolve({ text: `handled ${input.action}` });
     },
   };
+  const expectedPlan = parseInitialStoryPlan({
+    stories: [
+      {
+        id: "ship-it",
+        title: "Ship it",
+        narrative: "As a user, I want the requested work delivered.",
+        objective: "Deliver the requested work.",
+        taskKinds: ["software-development"],
+        writable: true,
+        dependencies: [],
+        scope: { included: ["requested work"], excluded: ["secrets"] },
+        technologyChoices: ["existing stack"],
+        constraints: ["stay in scope"],
+        deliverables: ["requested work"],
+        acceptanceCriteria: ["requested work is complete"],
+        validation: [{ command: "npm test", expected: "passes" }],
+        escalationConditions: ["required information is missing"],
+      },
+    ],
+  });
+  const planner: ParentLaunchPlanner = {
+    plan() {
+      return Promise.resolve(expectedPlan);
+    },
+  };
   const api = {
     on() {
       return undefined;
@@ -52,7 +79,7 @@ test("parent extension delegates launch commands and tool actions to its gateway
     },
   } as unknown as ExtensionAPI;
 
-  installParentExtension(api, gateway);
+  installParentExtension(api, gateway, undefined, planner);
   const ui = {
     notify: (message: string) => notices.push(message),
     setStatus: (_key: string, text: string | undefined) => {
@@ -76,6 +103,7 @@ test("parent extension delegates launch commands and tool actions to its gateway
       baseUrl: "http://127.0.0.1:30000/v1",
     },
     thinkingLevel: "off",
+    modelRegistry: {},
   });
   if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
   else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
@@ -94,6 +122,7 @@ test("parent extension delegates launch commands and tool actions to its gateway
       action: "launch",
       mode: "NORMAL",
       task: "ship it",
+      plan: expectedPlan,
       runtime: {
         workspaceId: "w1P",
         origin: { tabId: "w1P:t2", paneId: "w1P:p1" },

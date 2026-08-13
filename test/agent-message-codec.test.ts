@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   agentBlocked,
+  agentUnblocked,
   candidateReady,
   heartbeat,
   reviewSubmitted,
@@ -80,6 +81,7 @@ const samplesByCategory: Record<string, AgentMessage> = {
     "blocked",
     "waiting on human input",
   ),
+  recovery: agentUnblocked("run-1", "agent-1", "tool:bash"),
   supervisor: supervisorNudge,
 };
 

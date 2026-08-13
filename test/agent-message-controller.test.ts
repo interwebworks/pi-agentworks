@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentBlocked,
+  agentUnblocked,
   heartbeat,
   sessionStarted,
 } from "../src/domain/agent-communication.ts";
@@ -14,6 +16,7 @@ import {
   type AgentState,
   type RunState,
 } from "../src/domain/controller-state.ts";
+import { buildDashboardViewModel } from "../src/application/tui/dashboard-view-model.ts";
 import type {
   CommitResult,
   ControllerEventInput,
@@ -143,6 +146,34 @@ test("agent message controller commits a fenced heartbeat transition", () => {
     now: 3,
   });
   assert.equal(repository.snapshot.agents[0]?.lastHeartbeatAt, 3);
+});
+
+test("a recovered tool failure is shown as working in the management view", () => {
+  const repository = new FakeRepository({
+    ...idleAgent(),
+    status: "working",
+    currentOperation: "task-1",
+  });
+  const controller = new AgentMessageController(repository, () => 3);
+  const write = { ownerId: "controller", fencingToken: 4, now: 3 };
+
+  controller.apply(
+    agentBlocked("run-1", "agent-1", "blocked", "tool bash reported an error"),
+    write,
+    "request-blocked",
+  );
+  controller.apply(
+    agentUnblocked("run-1", "agent-1", "tool:bash"),
+    write,
+    "request-recovered",
+  );
+
+  const view = buildDashboardViewModel(repository.snapshot);
+  const [agent] = view.agents;
+  assert.ok(agent);
+  assert.equal(agent.status, "working");
+  assert.equal(agent.currentOperation, "tool:bash");
+  assert.equal(agent.attention, "info");
 });
 
 test("blocked messages commit a supervisor attention event", () => {

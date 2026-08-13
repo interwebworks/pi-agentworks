@@ -1,3 +1,5 @@
+import type { InitialStoryPlan } from "../../domain/initial-story-plan.ts";
+
 export type ParentManagementAction =
   | "launch"
   | "status"
@@ -27,6 +29,8 @@ export interface ParentManagementRequest {
   readonly action: ParentManagementAction;
   readonly mode?: "LOW" | "NORMAL" | "HIGH";
   readonly task?: string;
+  /** Validated by the parent model before controller initialization. */
+  readonly plan?: InitialStoryPlan;
   readonly runId?: string;
   readonly agentId?: string;
   readonly message?: string;

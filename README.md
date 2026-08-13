@@ -29,6 +29,7 @@ pi install npm:pi-agentworks@VERSION
 ```
 
 **Current status of the installed package:** the package loads and registers the `/agentworks` command and model-callable `agentworks` tool (see `src/extension/index.ts`).
+Every launch first uses the selected parent model to inspect the repository and submit a validated, dependency-ordered story plan before Agentworks creates the controller run or opens its management pane.
 Parent sessions use a private default runtime root under `~/.pi/agent/agentworks/runtime`; `AGENTWORKS_RUNTIME_ROOT` remains available for explicit overrides.
 Status requests use the authenticated controller read gateway and launch creates a durable planning run through the authenticated controller.
 In a Herdr/Pi session, HIGH launches create a fail-closed right-side management dashboard and start the composed Project Manager, advisor, and story writer in one `Pi Agents` tab.

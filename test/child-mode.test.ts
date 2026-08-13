@@ -9,12 +9,14 @@ import agentworks from "../src/extension/index.ts";
 import { decodeAgentMessage } from "../src/domain/agent-message-codec.ts";
 import {
   ChildBridgeConfigurationError,
+  ChildBridgeControllerRejectedError,
   ChildBridgeUnavailableError,
   installChildBridge,
   resolveChildModeConfiguration,
   type ChildModeConfiguration,
 } from "../src/extension/child-mode.ts";
 import {
+  ControllerRemoteError,
   deriveChildAuthToken,
   UnixControllerServer,
 } from "../src/infrastructure/controller/unix-controller-transport.ts";
@@ -402,6 +404,94 @@ test("child status tool records a terminal completion without closing the Pi ses
   );
 });
 
+test("a controller state rejection does not revoke child authentication", async () => {
+  const fake = fakeExtensionApi();
+  const messages: ReturnType<typeof decodeAgentMessage>[] = [];
+  installChildBridge(
+    fake.api,
+    {
+      runId: "run-1",
+      agentId: "agent-1",
+      controllerSocketPath: "/runtime/controller.sock",
+      controllerAuthToken: "A".repeat(43),
+      controllerActions: ["report-status"],
+    },
+    () => ({
+      connect: () => Promise.resolve(),
+      request(input) {
+        if (input.action !== "agent.message") {
+          return Promise.resolve({
+            runId: "run-1",
+            agentId: "agent-1",
+            revision: 7,
+            status: "working",
+          });
+        }
+        const message = decodeAgentMessage(JSON.stringify(input.payload));
+        messages.push(message);
+        return message.type === "operation-completed"
+          ? Promise.reject(
+              new ControllerRemoteError(
+                "invalid-state",
+                "operation is no longer active",
+              ),
+            )
+          : Promise.resolve({
+              runId: "run-1",
+              agentId: "agent-1",
+              revision: 7,
+              status: "working",
+            });
+      },
+      close: () => undefined,
+    }),
+  );
+
+  await invoke(fake.handlers, "session_start");
+  await invokeEvent(fake.handlers, "agent_start", {});
+  const tool = fake.tools.get("agentworks_report_status") as {
+    execute(
+      toolCallId: string,
+      parameters: {
+        state: "progress" | "completed" | "blocked";
+        detail: string;
+      },
+      signal: undefined,
+      onUpdate: undefined,
+      context: { shutdown(): void },
+    ): Promise<unknown>;
+  };
+
+  await assert.rejects(
+    tool.execute(
+      "completion-call",
+      { state: "completed", detail: "done" },
+      undefined,
+      undefined,
+      { shutdown: () => undefined },
+    ),
+    ChildBridgeControllerRejectedError,
+  );
+  await tool.execute(
+    "progress-call",
+    { state: "progress", detail: "still connected" },
+    undefined,
+    undefined,
+    { shutdown: () => undefined },
+  );
+
+  assert.equal(await invoke(fake.handlers, "tool_call"), undefined);
+  assert.deepEqual(
+    messages.map((message) => message.type),
+    [
+      "session-started",
+      "operation-started",
+      "operation-completed",
+      "operation-progress",
+    ],
+  );
+});
+
 test("child review tool exposes only granted authority and submits exact heads", async () => {
   const fake = fakeExtensionApi();
   const messages: ReturnType<typeof decodeAgentMessage>[] = [];
@@ -522,7 +612,64 @@ test("child work tool submits no child-authored Git evidence", async () => {
   });
 });
 
-test("child operation errors emit blocker and failed-result messages", async () => {
+test("a recovered tool failure remains operational progress before the successful turn settles", async () => {
+  const fake = fakeExtensionApi();
+  const messages: ReturnType<typeof decodeAgentMessage>[] = [];
+  installChildBridge(
+    fake.api,
+    {
+      runId: "run-1",
+      agentId: "agent-1",
+      controllerSocketPath: "/runtime/controller.sock",
+      controllerAuthToken: "A".repeat(43),
+      controllerActions: [],
+    },
+    () => ({
+      connect: () => Promise.resolve(),
+      request(input) {
+        if (input.action === "agent.message") {
+          messages.push(decodeAgentMessage(JSON.stringify(input.payload)));
+        }
+        return Promise.resolve({
+          runId: "run-1",
+          agentId: "agent-1",
+          revision: 7,
+          status: "working",
+        });
+      },
+      close: () => undefined,
+    }),
+  );
+
+  await invoke(fake.handlers, "session_start");
+  await invokeEvent(fake.handlers, "agent_start", {});
+  await invokeEvent(fake.handlers, "tool_execution_end", {
+    toolName: "bash",
+    isError: true,
+  });
+  await invokeEvent(fake.handlers, "tool_execution_end", {
+    toolName: "bash",
+    isError: false,
+  });
+  await invokeEvent(fake.handlers, "agent_settled", {});
+
+  assert.deepEqual(
+    messages.map((message) => message.type),
+    [
+      "session-started",
+      "operation-started",
+      "operation-progress",
+      "operation-completed",
+    ],
+  );
+  const completed = messages.find(
+    (message) => message.type === "operation-completed",
+  );
+  assert.ok(completed);
+  assert.equal(completed.success, true);
+});
+
+test("unrecovered tool errors emit progress and failed-result messages", async () => {
   const fake = fakeExtensionApi();
   const messages: ReturnType<typeof decodeAgentMessage>[] = [];
   installChildBridge(
@@ -564,7 +711,7 @@ test("child operation errors emit blocker and failed-result messages", async () 
     [
       "session-started",
       "operation-started",
-      "agent-blocked",
+      "operation-progress",
       "operation-completed",
     ],
   );

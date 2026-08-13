@@ -27,6 +27,7 @@ import {
 } from "../domain/agent-communication.ts";
 import { encodeAgentMessage } from "../domain/agent-message-codec.ts";
 import {
+  ControllerRemoteError,
   UnixControllerClient,
   type ControllerClientRequest,
 } from "../infrastructure/controller/unix-controller-transport.ts";
@@ -74,6 +75,16 @@ export class ChildBridgeUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ChildBridgeUnavailableError";
+  }
+}
+
+export class ChildBridgeControllerRejectedError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(`Agentworks controller rejected message (${code}): ${message}`);
+    this.name = "ChildBridgeControllerRejectedError";
+    this.code = code;
   }
 }
 
@@ -325,7 +336,21 @@ export function installChildBridge(
       try {
         await sendMessage(activeClient, message);
         return;
-      } catch {
+      } catch (error) {
+        // A parsed controller response proves the authenticated connection is
+        // still usable, except an authorization rejection. Retrying an
+        // invalid state transition cannot recover it and must not revoke this
+        // child's capability.
+        if (
+          error instanceof ControllerRemoteError &&
+          error.code !== "unauthorized" &&
+          error.code !== "identity-mismatch"
+        ) {
+          throw new ChildBridgeControllerRejectedError(
+            error.code,
+            error.message,
+          );
+        }
         activeClient.close();
         if (client === activeClient) client = null;
       }
@@ -613,19 +638,23 @@ export function installChildBridge(
   );
 
   pi.on("tool_execution_end", (event) => {
-    if (!event.isError) return;
-    operationFailureReason = `tool ${event.toolName} reported an error`.slice(
-      0,
-      4096,
-    );
-    return reportMessage(
-      agentBlocked(
-        configuration.runId,
-        configuration.agentId,
-        "blocked",
-        operationFailureReason,
-      ),
-    );
+    if (event.isError) {
+      operationFailureReason = `tool ${event.toolName} reported an error`.slice(
+        0,
+        4096,
+      );
+      // Tool results are recoverable by default. A model can retry, choose a
+      // different tool, or continue its task, so retain working state and
+      // report the failure as operational progress rather than a blocker.
+      return reportMessage(
+        operationProgress(
+          configuration.runId,
+          configuration.agentId,
+          operationFailureReason,
+        ),
+      );
+    }
+    operationFailureReason = null;
   });
 
   pi.on("agent_settled", async () => {

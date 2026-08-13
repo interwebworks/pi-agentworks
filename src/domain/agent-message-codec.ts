@@ -123,6 +123,17 @@ const AgentBlockedSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const AgentUnblockedSchema = Type.Object(
+  {
+    protocolVersion: ProtocolVersion,
+    type: Type.Literal("agent-unblocked"),
+    runId: RunId,
+    agentId: AgentId,
+    operation: Type.String({ minLength: 1, maxLength: 4_096 }),
+  },
+  { additionalProperties: false },
+);
+
 const CandidateReadySchema = Type.Object(
   {
     protocolVersion: ProtocolVersion,
@@ -192,6 +203,7 @@ const AgentMessageSchema = Type.Union([
   OperationCompletedSchema,
   HeartbeatSchema,
   AgentBlockedSchema,
+  AgentUnblockedSchema,
   CandidateReadySchema,
   ReviewSubmittedSchema,
   SupervisorNudgeSchema,

@@ -67,7 +67,18 @@ export function applyAgentMessage(
         agent: transitionAgent(current, { type: "heartbeat", at }),
         changed: true,
       });
-    case "operation-completed":
+    case "operation-completed": {
+      if (message.success && current.status === "blocked") {
+        const resumed = transitionAgent(current, {
+          type: "agent-unblocked",
+          at,
+          operation: "agent operation",
+        });
+        return Object.freeze({
+          agent: transitionAgent(resumed, { type: "operation-finished", at }),
+          changed: true,
+        });
+      }
       return Object.freeze({
         agent: message.success
           ? transitionAgent(current, { type: "operation-finished", at })
@@ -78,6 +89,7 @@ export function applyAgentMessage(
             }),
         changed: true,
       });
+    }
     case "heartbeat":
       return Object.freeze({
         agent: transitionAgent(current, { type: "heartbeat", at }),
@@ -93,6 +105,16 @@ export function applyAgentMessage(
           type: "agent-blocked",
           at,
           reason: message.detail,
+        }),
+        changed: true,
+      });
+    case "agent-unblocked":
+      if (current.status !== "blocked") return unchanged(current);
+      return Object.freeze({
+        agent: transitionAgent(current, {
+          type: "agent-unblocked",
+          at,
+          operation: message.operation,
         }),
         changed: true,
       });

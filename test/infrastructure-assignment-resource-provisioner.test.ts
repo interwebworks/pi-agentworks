@@ -129,6 +129,8 @@ test("resource provisioner composes Git, pane, session, and launch evidence", as
   const { run, story, agent, snapshot, git, pane, session, configuration } =
     fixture();
   let rolledBack = false;
+  let cleaned = false;
+  let released = false;
   let expectedLabels: readonly string[] = [];
   const provisioner = new InfrastructureAssignmentResourceProvisioner({
     agents: { create: () => Promise.resolve(agent) },
@@ -140,11 +142,17 @@ test("resource provisioner composes Git, pane, session, and launch evidence", as
         );
         return Promise.resolve(pane as never);
       },
-      release: () => Promise.resolve(),
+      release: () => {
+        released = true;
+        return Promise.resolve();
+      },
     },
     sessions: {
       create: () => Promise.resolve(session),
-      cleanup: () => Promise.resolve(),
+      cleanup: () => {
+        cleaned = true;
+        return Promise.resolve();
+      },
     },
     configuration: { resolve: () => Promise.resolve(configuration) },
     roles: {
@@ -172,6 +180,11 @@ test("resource provisioner composes Git, pane, session, and launch evidence", as
   assert.equal(result.sessionId, configuration.sessionId);
   assert.deepEqual(expectedLabels, ["Canonical API Builder"]);
   assert.equal(rolledBack, false);
+
+  await provisioner.rollback(result, "launch persistence failed");
+  assert.equal(cleaned, true);
+  assert.equal(released, true);
+  assert.equal(rolledBack, true);
 });
 
 test("resource provisioner cleans session, pane, and Git workspace on evidence failure", async () => {

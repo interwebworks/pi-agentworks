@@ -73,6 +73,12 @@ export class PrivateAgentSessionProvider implements PrivateSessionProvider {
     run: { readonly id: string },
     story: { readonly id: string },
     agentId: string,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _modelConfig?: {
+      readonly provider: string;
+      readonly model: string;
+      readonly thinking?: string;
+    },
   ): Promise<PrivateSessionEvidence> {
     try {
       assertSafeWorkspaceId(run.id, "run id");

@@ -31,6 +31,9 @@ import type {
   FencedWrite,
   JsonValue,
 } from "../../application/ports/controller-repository.ts";
+import { FileModelAssociationRepository } from "../persistence/file-model-association-repository.ts";
+import { ConfiguredRoleModelAssociationResolver } from "../../application/launch/role-model-association.ts";
+import type { PrivateSessionModelConfig } from "../../application/launch/herdr-session-evidence-adapter.ts";
 import type { AgentMessage } from "../../domain/agent-communication.ts";
 import type { RunState, StoryState } from "../../domain/controller-state.ts";
 import type { AssignmentRoleSelector } from "../../application/launch/role-resource-resolver.ts";
@@ -481,26 +484,40 @@ export function createProductionOrchestrationProviderFromComposition(
         (runId, _storyId, agentId) =>
           deriveChildAuthToken(runtime.authToken, runId, agentId),
       );
+      const defaultModelAssociation = Object.freeze({
+        provider,
+        model,
+        thinking: launchThinking,
+      });
+      const modelAssociationResolver =
+        new ConfiguredRoleModelAssociationResolver({
+          repository: new FileModelAssociationRepository({
+            fallback: defaultModelAssociation,
+          }),
+          fallback: defaultModelAssociation,
+        });
       const sessions = {
         async create(
           sessionRun: { readonly id: string },
           sessionStory: { readonly id: string },
           agentId: string,
+          modelConfig: PrivateSessionModelConfig = defaultModelAssociation,
         ) {
           const session = await privateSessions.create(
             sessionRun,
             sessionStory,
             agentId,
+            modelConfig,
           );
           installSelectedModelConfiguration(
             session.configPath,
-            provider,
-            model,
+            modelConfig.provider,
+            modelConfig.model,
             join(controllerHomePath, ".pi", "agent", "models.json"),
           );
           installSelectedProviderAuthentication(
             session.configPath,
-            provider,
+            modelConfig.provider,
             join(controllerHomePath, ".pi", "agent", "auth.json"),
           );
           return session;
@@ -549,6 +566,7 @@ export function createProductionOrchestrationProviderFromComposition(
         provider,
         model,
         thinking: launchThinking,
+        modelAssociationResolver,
         endpoint: new ControllerRuntimeLaunchEndpointResolver(runtime),
         operationId: (kind, _role, story, current) =>
           `${kind}-${story.id}-r${String(current.revision)}`,

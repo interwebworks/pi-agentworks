@@ -26,6 +26,10 @@ import {
   installAgentworksBackgroundWork,
   type AgentworksBackgroundWorkOptions,
 } from "./background-work.ts";
+import {
+  createParentModelPlanner,
+  type ParentLaunchPlanner,
+} from "./parent-model-planner.ts";
 
 /**
  * Agentworks package entrypoint.
@@ -147,6 +151,26 @@ function withLaunchRuntime(
   });
 }
 
+async function prepareLaunchRequest(
+  request: ParentManagementRequest,
+  context: ExtensionContext,
+  planner: ParentLaunchPlanner,
+): Promise<ParentManagementRequest> {
+  const withRuntime = withLaunchRuntime(request, context);
+  if (withRuntime.action !== "launch") return withRuntime;
+  // This only accommodates minimal extension test doubles. Pi always supplies
+  // a model registry to a live extension context.
+  if (!("modelRegistry" in context)) return withRuntime;
+  const task = withRuntime.task?.trim();
+  if (task === undefined || task.length === 0) return withRuntime;
+  const plan = await planner.plan({
+    task,
+    mode: withRuntime.mode ?? "NORMAL",
+    context,
+  });
+  return Object.freeze({ ...withRuntime, plan });
+}
+
 function gatewayFailure(error: unknown): ParentManagementResult {
   return {
     text: `Agentworks controller request failed: ${
@@ -176,6 +200,7 @@ export function installParentExtension(
   backgroundWorkOptions: AgentworksBackgroundWorkOptions = {
     isRunActive: () => false,
   },
+  planner: ParentLaunchPlanner = createParentModelPlanner(),
 ): void {
   const backgroundWork = installAgentworksBackgroundWork(
     pi,
@@ -187,18 +212,17 @@ export function installParentExtension(
     handler(args, ctx) {
       const { action, mode, task, runId } = parseAgentworksCommand(args);
       if (gateway !== null) {
-        return gateway
-          .execute(
-            withLaunchRuntime(
-              {
-                action: action ?? "launch",
-                ...(mode === null ? {} : { mode }),
-                ...(task.length === 0 ? {} : { task }),
-                ...(runId === undefined ? {} : { runId }),
-              },
-              ctx,
-            ),
-          )
+        return prepareLaunchRequest(
+          {
+            action: action ?? "launch",
+            ...(mode === null ? {} : { mode }),
+            ...(task.length === 0 ? {} : { task }),
+            ...(runId === undefined ? {} : { runId }),
+          },
+          ctx,
+          planner,
+        )
+          .then((request) => gateway.execute(request))
           .catch(gatewayFailure)
           .then((result) => {
             if (result.launchedRunId !== undefined) {
@@ -235,8 +259,8 @@ export function installParentExtension(
           ? {
               text: `Agentworks action "${input.action}" requires an active controller gateway.`,
             }
-          : await gateway
-              .execute(withLaunchRuntime(input, context))
+          : await prepareLaunchRequest(input, context, planner)
+              .then((request) => gateway.execute(request))
               .catch(gatewayFailure);
       if (result.launchedRunId !== undefined) {
         backgroundWork.recordLaunchedRun(result.launchedRunId, context);

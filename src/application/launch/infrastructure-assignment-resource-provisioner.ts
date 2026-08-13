@@ -111,6 +111,13 @@ type HerdrAssignmentPaneProvisioner = Pick<
   "allocate" | "release"
 >;
 
+interface ProvisioningRollbackContext {
+  readonly kind: StoryAgentKind;
+  readonly git: GitAssignmentEvidence;
+  readonly run: RunState;
+  readonly story: StoryState;
+}
+
 export class InfrastructureAssignmentResourceProvisioner implements AssignmentPrivilegedResourceProvisioner {
   readonly #agents: AssignmentAgentFactory;
   readonly #git: Pick<GitAssignmentEvidenceAdapter, "provisionGit">;
@@ -119,6 +126,7 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
   readonly #configuration: AssignmentLaunchConfigurationResolver;
   readonly #roles: RoleCatalog;
   readonly #gitRollback: GitWorkspaceRollback;
+  readonly #rollbackContexts = new Map<string, ProvisioningRollbackContext>();
 
   constructor(dependencies: {
     readonly agents: AssignmentAgentFactory;
@@ -204,7 +212,11 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
           "allocated pane lacks an exact stable grid slot",
         );
       }
-      session = await this.#sessions.create(run, target, agent.id);
+      session = await this.#sessions.create(run, target, agent.id, {
+        provider: configuration.provider,
+        model: configuration.model,
+        thinking: configuration.thinking,
+      });
       const evidence: AssignmentInfrastructureEvidence = {
         git,
         herdr: { paneId, cwd: pane.cwd ?? "", tokens: pane.tokens },
@@ -215,7 +227,7 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
         expectedRevisionMatches: configuration.expectedRevisionMatches,
       };
       assertAssignmentInfrastructureEvidence(evidence, run, target, agent.id);
-      return Object.freeze({
+      const resources = Object.freeze({
         agent,
         paneId,
         paneSlot,
@@ -239,6 +251,11 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
         controllerFenceCurrent: configuration.controllerFenceCurrent,
         expectedRevisionMatches: configuration.expectedRevisionMatches,
       });
+      this.#rollbackContexts.set(
+        agent.id,
+        Object.freeze({ kind, git, run, story: target }),
+      );
+      return resources;
     } catch (error) {
       if (session !== null) {
         await this.#sessions.cleanup(
@@ -269,14 +286,44 @@ export class InfrastructureAssignmentResourceProvisioner implements AssignmentPr
     resources: ProvisionedAssignmentResources,
     reason: string,
   ): Promise<void> {
-    await this.#sessions.cleanup(
-      {
-        sessionPath: resources.sessionPath,
-        configPath: resources.configPath,
-        controllerChildAuthToken: resources.controllerChildAuthToken,
-      },
-      reason,
+    const context = this.#rollbackContexts.get(resources.agent.id);
+    this.#rollbackContexts.delete(resources.agent.id);
+    let failure: unknown = null;
+    const attempt = async (operation: () => Promise<void>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failure ??= error;
+      }
+    };
+
+    await attempt(() =>
+      this.#sessions.cleanup(
+        {
+          sessionPath: resources.sessionPath,
+          configPath: resources.configPath,
+          controllerChildAuthToken: resources.controllerChildAuthToken,
+        },
+        reason,
+      ),
     );
-    await this.#panes.release(resources.paneId);
+    await attempt(() => this.#panes.release(resources.paneId));
+    if (context !== undefined && context.kind !== "project-manager") {
+      await attempt(() =>
+        this.#gitRollback.rollback(
+          context.git,
+          context.run,
+          context.story,
+          reason,
+        ),
+      );
+    }
+    if (failure !== null) {
+      throw new InfrastructureAssignmentProvisionerError(
+        `rollback failed: ${
+          failure instanceof Error ? failure.message : "unknown cleanup failure"
+        }`,
+      );
+    }
   }
 }

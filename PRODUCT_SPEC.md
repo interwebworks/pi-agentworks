@@ -10,6 +10,7 @@ Every worker receives fresh context, a role-specific system prompt, and a comple
 
 Users can open the workflow with `/agentworks` or invoke `/agentworks LOW|NORMAL|HIGH <task>`.
 The package also registers an `agentworks` tool so the parent Pi model can launch and manage a run when the user requests agent work in natural language.
+Before it creates controller state or opens the management pane, Agentworks invokes the selected parent model as the sole preflight planner with bounded read-only repository inspection tools and requires a validated structured story plan.
 The parent can inspect, tune, steer, pause, resume, approve, reject, focus, detach, and close runs.
 
 ## Complexity modes

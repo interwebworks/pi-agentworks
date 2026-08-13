@@ -449,7 +449,11 @@ export type AgentTransition =
       readonly at: number;
       readonly reason: string;
     }
-  | { readonly type: "agent-unblocked"; readonly at: number }
+  | {
+      readonly type: "agent-unblocked";
+      readonly at: number;
+      readonly operation: string;
+    }
   | {
       readonly type: "review-started";
       readonly at: number;
@@ -1058,7 +1062,8 @@ export function transitionAgent(
       assertAgentStatus(current, transition, ["blocked"]);
       return Object.freeze({
         ...current,
-        status: "idle",
+        status: "working",
+        currentOperation: nonEmpty(transition.operation, "operation"),
         blockedReason: null,
         lastMeaningfulActivityAt: transition.at,
         updatedAt: transition.at,

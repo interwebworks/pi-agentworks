@@ -11,11 +11,18 @@ export interface HerdrPaneProvider {
   getPane(paneId: string): Promise<HerdrPane>;
 }
 
+export interface PrivateSessionModelConfig {
+  readonly provider: string;
+  readonly model: string;
+  readonly thinking?: string;
+}
+
 export interface PrivateSessionProvider {
   create(
     run: RunState,
     story: StoryState,
     agentId: string,
+    modelConfig?: PrivateSessionModelConfig,
   ): Promise<PrivateSessionEvidence>;
   cleanup(session: PrivateSessionEvidence, reason: string): Promise<void>;
 }
@@ -65,6 +72,7 @@ export class HerdrSessionEvidenceAdapter {
     paneId: string,
     git: GitAssignmentEvidence,
     endpoint: ControllerEndpointEvidence,
+    modelConfig?: PrivateSessionModelConfig,
   ): Promise<AssignmentInfrastructureEvidence> {
     const pane = await this.#panes.getPane(paneId);
     if (
@@ -80,7 +88,7 @@ export class HerdrSessionEvidenceAdapter {
     }
     let session: PrivateSessionEvidence | null = null;
     try {
-      session = await this.#sessions.create(run, story, agentId);
+      session = await this.#sessions.create(run, story, agentId, modelConfig);
       const evidence: AssignmentInfrastructureEvidence = {
         git,
         herdr: {

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   agentBlocked,
+  agentUnblocked,
   heartbeat,
+  operationCompleted,
   sessionStarted,
   type AgentMessage,
 } from "../src/domain/agent-communication.ts";
@@ -81,6 +83,41 @@ test("blocked messages preserve the controller's exact blocker detail", () => {
   );
   assert.equal(result.agent.status, "blocked");
   assert.equal(result.agent.blockedReason, "needs approval");
+});
+
+test("a recovered tool failure restores a blocked agent to working", () => {
+  const blocked = applyAgentMessage(
+    { ...agent(), status: "working" as const, currentOperation: "task-1" },
+    agentBlocked("run-1", "agent-1", "blocked", "tool bash reported an error"),
+    3,
+  ).agent;
+  const recovered = applyAgentMessage(
+    blocked,
+    agentUnblocked("run-1", "agent-1", "tool:bash"),
+    4,
+  );
+
+  assert.equal(recovered.changed, true);
+  assert.equal(recovered.agent.status, "working");
+  assert.equal(recovered.agent.currentOperation, "tool:bash");
+  assert.equal(recovered.agent.blockedReason, null);
+});
+
+test("a completed operation resolves an explicit blocker", () => {
+  const blocked = applyAgentMessage(
+    { ...agent(), status: "working" as const, currentOperation: "task-1" },
+    agentBlocked("run-1", "agent-1", "blocked", "waiting for a decision"),
+    3,
+  ).agent;
+  const completed = applyAgentMessage(
+    blocked,
+    operationCompleted("run-1", "agent-1", true),
+    4,
+  );
+
+  assert.equal(completed.changed, true);
+  assert.equal(completed.agent.status, "idle");
+  assert.equal(completed.agent.blockedReason, null);
 });
 
 test("duplicate blocked reports remain idempotent", () => {
