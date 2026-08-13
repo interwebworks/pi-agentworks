@@ -77,7 +77,11 @@ function paint(line: string): string {
   if (line.startsWith("AGENTWORKS")) return `\x1b[1;36m${line}\x1b[0m`;
   if (line.startsWith("!") || line.startsWith("×") || line.startsWith(">×"))
     return `\x1b[31m${line}\x1b[0m`;
-  if (/^(STORIES|AGENTS|ATTENTION)/u.test(line))
+  if (
+    /^(STORIES|AGENTS|ATTENTION|STORY PLAN|USER STORY|OBJECTIVE|SCOPE|DELIVERABLES|ACCEPTANCE CRITERIA|VALIDATION|ESCALATE WHEN|DEPENDENCIES)/u.test(
+      line,
+    )
+  )
     return `\x1b[1;34m${line}\x1b[0m`;
   if (line.startsWith("·")) return `\x1b[36m${line}\x1b[0m`;
   return line;
@@ -231,7 +235,8 @@ export async function runManagementDashboard(
     process.stdout.write("\x1b[?25h\x1b[?1049l");
   };
   const control = async (
-    action: "approve" | "reject" | "pause" | "resume",
+    action: "approve" | "approve-story" | "reject" | "pause" | "resume",
+    storyId?: string,
   ): Promise<void> => {
     if (controlInFlight || stopped) return;
     controlInFlight = true;
@@ -241,9 +246,13 @@ export async function runManagementDashboard(
       await client.request({
         action: "parent.control",
         idempotencyKey: `management-${action}-${Date.now().toString(36)}`,
-        payload: { action },
+        payload: { action, ...(storyId === undefined ? {} : { storyId }) },
       });
-      if (action === "approve" || action === "resume") {
+      if (
+        action === "approve" ||
+        action === "approve-story" ||
+        action === "resume"
+      ) {
         await client.request({ action: "orchestration.execute", payload: {} });
       }
       notice = `${action} accepted`;
@@ -397,6 +406,23 @@ export async function runManagementDashboard(
     notice = `${action} is only available while this run is awaiting approval; it is ${currentRunStatus ?? "still loading"}`;
     void render().catch(showError);
   };
+  const approveSelectedStory = (): void => {
+    const story =
+      selectedSection === "stories"
+        ? currentDashboard?.view.stories[selectedIndex]
+        : undefined;
+    if (currentRunStatus !== "awaiting-approval") {
+      controlUnavailable("approve");
+    } else if (story === undefined) {
+      notice = "Select a proposed story before approving it";
+      void render().catch(showError);
+    } else if (story.status !== "awaiting-approval") {
+      notice = `Story ${story.id} is already ${story.status}`;
+      void render().catch(showError);
+    } else {
+      void control("approve-story", story.id).catch(showError);
+    }
+  };
   const onInput = (data: Buffer): void => {
     const text = data.toString("utf8");
     if (text === "q") void quit().catch(showError);
@@ -409,7 +435,8 @@ export async function runManagementDashboard(
     if (text === "\r" || text === "\n")
       void focusSelectedAgent().catch(showError);
     if (text === "f") void focusPiAgents().catch(showError);
-    if (text === "a") {
+    if (text === "a") approveSelectedStory();
+    if (text === "A") {
       if (currentRunStatus === "awaiting-approval") {
         void control("approve").catch(showError);
       } else {

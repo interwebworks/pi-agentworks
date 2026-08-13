@@ -99,7 +99,7 @@ test("renders the selected row and keyboard navigation contract", () => {
 test("shows only state-valid workflow controls", () => {
   assert.equal(
     managementControlHint("awaiting-approval"),
-    "a approve  x reject  f show Pi Agents  r refresh  q quit",
+    "a approve story  A approve all  x reject  f show Pi Agents  r refresh  q quit",
   );
   assert.equal(
     managementControlHint("blocked"),
@@ -109,6 +109,52 @@ test("shows only state-valid workflow controls", () => {
     managementControlHint("completed"),
     "f show Pi Agents  r refresh  q quit",
   );
+});
+
+test("reserves a bottom review panel for the selected proposed story", () => {
+  const selectedStory = view.stories[0];
+  assert.ok(selectedStory);
+  const output = renderDashboard(
+    {
+      ...view,
+      run: { ...view.run, status: "awaiting-approval" },
+      stories: [
+        {
+          ...selectedStory,
+          status: "awaiting-approval",
+          planning: {
+            narrative:
+              "As a user, I want a reviewed proposal before work starts so that I can make an informed approval decision.",
+            objective:
+              "Deliver an independently verifiable management dashboard.",
+            taskKinds: ["software-development"],
+            writable: true,
+            scope: {
+              included: ["the management dashboard"],
+              excluded: ["unrelated pane behavior"],
+            },
+            technologyChoices: ["TypeScript", "existing terminal renderer"],
+            constraints: ["preserve controller authority"],
+            dependencies: [],
+            deliverables: ["proposal review panel"],
+            acceptanceCriteria: ["the complete story plan is reviewable"],
+            validation: [{ command: "npm test", expected: "passes" }],
+            escalationConditions: ["approval requirements are ambiguous"],
+          },
+        },
+      ],
+    },
+    {
+      width: 100,
+      height: 36,
+      selection: { section: "stories", index: 0 },
+    },
+  ).join("\n");
+  assert.match(output, /STORY PLAN {2}story-1 {2}awaiting-approval/u);
+  assert.match(output, /USER STORY {2}Management dashboard/u);
+  assert.match(output, /reviewed proposal before work starts/u);
+  assert.match(output, /ACCEPTANCE CRITERIA/u);
+  assert.match(output, /a approve story {2}A approve all/u);
 });
 
 test("marks quit-blocking story and agent rows in red-ready form", () => {

@@ -2,6 +2,7 @@ import type {
   AgentState,
   AgentStatus,
   RunState,
+  StoryPlanningMetadata,
   StoryState,
   StoryStatus,
 } from "../../domain/controller-state.ts";
@@ -72,6 +73,8 @@ export interface StoryRow {
   readonly worktreePath: string;
   readonly assignedAgentId: string | null;
   readonly reviewerAgentId: string | null;
+  /** Complete controller-validated plan displayed while reviewing a story. */
+  readonly planning?: StoryPlanningMetadata;
   readonly attention: AttentionLevel;
 }
 
@@ -155,6 +158,7 @@ function buildStoryRow(story: StoryState): StoryRow {
     worktreePath: story.worktreePath,
     assignedAgentId: story.assignedAgentId,
     reviewerAgentId: story.reviewerAgentId,
+    ...(story.planning === undefined ? {} : { planning: story.planning }),
     attention: attentionForStory(story.status),
   });
 }

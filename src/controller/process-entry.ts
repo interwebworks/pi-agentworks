@@ -796,6 +796,7 @@ function parseRunInitializationPayload(payload: JsonValue): {
 
 type ParentControlAction =
   | "approve"
+  | "approve-story"
   | "reject"
   | "steer"
   | "pause"
@@ -808,6 +809,7 @@ type ParentControlAction =
 interface ParentControlPayload {
   readonly action: ParentControlAction;
   readonly agentId?: string;
+  readonly storyId?: string;
   readonly message?: string;
 }
 
@@ -825,7 +827,7 @@ function parseParentControlPayload(payload: JsonValue): ParentControlPayload {
   const record = payload as Readonly<Record<string, JsonValue>>;
   if (
     Object.keys(record).some(
-      (key) => !["action", "agentId", "message"].includes(key),
+      (key) => !["action", "agentId", "storyId", "message"].includes(key),
     )
   ) {
     throw new ControllerRequestError(
@@ -836,6 +838,7 @@ function parseParentControlPayload(payload: JsonValue): ParentControlPayload {
   const action = record.action;
   const allowed = new Set([
     "approve",
+    "approve-story",
     "reject",
     "steer",
     "pause",
@@ -852,6 +855,7 @@ function parseParentControlPayload(payload: JsonValue): ParentControlPayload {
     );
   }
   const agentId = record.agentId;
+  const storyId = record.storyId;
   const message = record.message;
   if (
     agentId !== undefined &&
@@ -862,6 +866,17 @@ function parseParentControlPayload(payload: JsonValue): ParentControlPayload {
     throw new ControllerRequestError(
       "invalid-payload",
       "Parent control agentId is invalid",
+    );
+  }
+  if (
+    storyId !== undefined &&
+    (typeof storyId !== "string" ||
+      storyId.trim().length === 0 ||
+      storyId.length > 128)
+  ) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Parent control storyId is invalid",
     );
   }
   if (
@@ -887,9 +902,16 @@ function parseParentControlPayload(payload: JsonValue): ParentControlPayload {
       "Focus requires an agentId",
     );
   }
+  if (action === "approve-story" && storyId === undefined) {
+    throw new ControllerRequestError(
+      "invalid-payload",
+      "Approve story requires a storyId",
+    );
+  }
   return Object.freeze({
     action: action as ParentControlAction,
     ...(agentId === undefined ? {} : { agentId }),
+    ...(storyId === undefined ? {} : { storyId }),
     ...(message === undefined ? {} : { message }),
   });
 }
@@ -977,6 +999,16 @@ function executeParentControl(
       "Parent control target agent is not registered",
     );
   }
+  const targetStory =
+    control.storyId === undefined
+      ? undefined
+      : snapshot.stories.find((story) => story.id === control.storyId);
+  if (control.storyId !== undefined && targetStory === undefined) {
+    throw new ControllerRequestError(
+      "unknown-story",
+      "Parent control target story is not registered",
+    );
+  }
 
   switch (control.action) {
     case "approve":
@@ -1015,6 +1047,50 @@ function executeParentControl(
         return approved;
       });
       break;
+    case "approve-story": {
+      if (run.status !== "awaiting-approval" || targetStory === undefined) {
+        throw new ControllerRequestError(
+          "invalid-state",
+          "A story can be approved only while the run awaits approval",
+        );
+      }
+      if (targetStory.status !== "awaiting-approval") {
+        throw new ControllerRequestError(
+          "invalid-state",
+          `Story ${targetStory.id} is already ${targetStory.status}`,
+        );
+      }
+      stories = stories.map((story) => {
+        if (story.id !== targetStory.id) return story;
+        const approved = transitionStory(story, {
+          type: "story-plan-approved",
+          at: now,
+        });
+        events.push(
+          parentControlEvent(
+            "approve-story",
+            "story",
+            approved.id,
+            { status: approved.status },
+            now,
+          ),
+        );
+        return approved;
+      });
+      if (stories.every((story) => story.status === "ready")) {
+        run = transitionRun(run, { type: "plan-approved", at: now });
+        events.push(
+          parentControlEvent(
+            "approve-story",
+            "run",
+            runId,
+            { status: run.status },
+            now,
+          ),
+        );
+      }
+      break;
+    }
     case "reject":
       if (run.status === "awaiting-approval") {
         run = transitionRun(run, { type: "plan-revision-requested", at: now });
@@ -1400,6 +1476,7 @@ export async function runControllerProcess(
           const control = parseParentControlPayload(request.payload);
           if (
             control.action !== "approve" &&
+            control.action !== "approve-story" &&
             control.action !== "reject" &&
             control.action !== "pause" &&
             control.action !== "resume" &&

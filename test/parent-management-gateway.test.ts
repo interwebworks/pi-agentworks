@@ -50,6 +50,7 @@ import { SqliteControllerRepository } from "../src/infrastructure/controller/sql
 import { isControllerRunBackgroundWorkActive } from "../src/infrastructure/controller/controller-background-work.ts";
 import { installParentExtension } from "../src/extension/index.ts";
 import type { ParentManagementGateway } from "../src/application/ports/parent-management.ts";
+import { parseInitialStoryPlan } from "../src/domain/initial-story-plan.ts";
 
 function snapshot(): ControllerSnapshot {
   const run = createRunState({
@@ -354,6 +355,79 @@ test("discovered parent launch supports a subsequent status request", async () =
         client.close();
       }
     }
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("selected-story approval waits for the remaining proposed stories", async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "agentworks-story-approval-"));
+  let runId: string | undefined;
+  try {
+    const gateway = createDiscoveredParentManagementGateway(
+      runtimeRoot,
+      process.cwd(),
+    );
+    const plan = parseInitialStoryPlan({
+      stories: ["foundation", "delivery"].map((id, index) => ({
+        id,
+        title: `Implement ${id}`,
+        narrative: `As a user, I want ${id} delivered so that the requested feature is complete.`,
+        objective: `Deliver ${id} as an independently verifiable change.`,
+        taskKinds: ["software-development"],
+        writable: true,
+        dependencies: index === 0 ? [] : ["foundation"],
+        scope: { included: [id], excluded: ["unrelated changes"] },
+        technologyChoices: ["existing repository stack"],
+        constraints: ["stay within the approved story scope"],
+        deliverables: [`implemented ${id}`],
+        acceptanceCriteria: [`${id} meets its objective`],
+        validation: [{ command: "npm test", expected: "passes" }],
+        escalationConditions: ["required behavior is ambiguous"],
+      })),
+    });
+    const launch = await gateway.execute({
+      action: "launch",
+      mode: "NORMAL",
+      task: "Approve two independently planned stories",
+      plan,
+    });
+    runId = launch.launchedRunId;
+    assert.ok(runId);
+    const client =
+      await createDiscoveredParentClientFactory(runtimeRoot)(runId);
+    try {
+      await client.request({
+        action: "parent.control",
+        payload: { action: "approve-story", storyId: "foundation" },
+      });
+      let current = await client.request({
+        action: "snapshot.get",
+        payload: {},
+      });
+      const first = current as unknown as ControllerSnapshot;
+      assert.equal(first.run.status, "awaiting-approval");
+      assert.equal(
+        first.stories.find((story) => story.id === "foundation")?.status,
+        "ready",
+      );
+      assert.equal(
+        first.stories.find((story) => story.id === "delivery")?.status,
+        "awaiting-approval",
+      );
+
+      await client.request({
+        action: "parent.control",
+        payload: { action: "approve-story", storyId: "delivery" },
+      });
+      current = await client.request({ action: "snapshot.get", payload: {} });
+      const complete = current as unknown as ControllerSnapshot;
+      assert.equal(complete.run.status, "ready");
+      assert.ok(complete.stories.every((story) => story.status === "ready"));
+    } finally {
+      client.close();
+    }
+  } finally {
+    if (runId !== undefined) await stopDiscoveredController(runtimeRoot, runId);
     rmSync(runtimeRoot, { recursive: true, force: true });
   }
 });
